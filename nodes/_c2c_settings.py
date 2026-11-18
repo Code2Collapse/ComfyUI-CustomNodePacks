@@ -288,6 +288,10 @@ register(
             tooltip="Live before/after view on the SeedVR2 Video Upscaler. Off also stops wrapping the upscaler for "
                     "new runs (a module wrapped earlier stays wrapped until restart).",
             consumer="nodes.seedvr2_preview:enabled"),
+    Setting("c2c.distributed.enabled", "boolean", True, "C2C Distributed (multi-GPU)", ("Multi-GPU",),
+            env="C2C_DISTRIBUTED", restart=True,
+            tooltip="Split work across several GPUs (C2C Distributed nodes). Off: those nodes run on one GPU and say "
+                    "why.", consumer="c2c_distributed:enabled"),
     Setting("c2c.distributed.idleUnloadS", "number", 0, "Unload idle GPU workers after (s)", ("Multi-GPU",),
             min=0, max=86400, step=1, env="C2C_DISTRIBUTED_IDLE_UNLOAD_S",
             tooltip="C2C Distributed keeps a model loaded on each extra GPU between runs. After this many idle "

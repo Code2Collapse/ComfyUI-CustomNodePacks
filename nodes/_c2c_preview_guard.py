@@ -318,6 +318,12 @@ def _ensure_decoder(latent_format) -> None:
     """
     if os.environ.get("C2C_NO_TAE_DOWNLOAD"):
         return
+    try:  # L3.01: a preview decoder is a model download - the 'Never download models' setting stops it too
+        from ._download_policy import never_download
+        if never_download():
+            return
+    except Exception:  # noqa: BLE001
+        pass
     try:
         name = getattr(latent_format, "taesd_decoder_name", None)
         if not name or _taesd_decoder_present(latent_format):

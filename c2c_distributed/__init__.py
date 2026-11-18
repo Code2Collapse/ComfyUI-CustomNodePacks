@@ -9,11 +9,20 @@ import os
 
 
 def enabled() -> bool:
-    return os.environ.get("C2C_DISTRIBUTED", "").strip().lower() not in ("off", "0", "false", "no")
+    """L3.01: C2C setting 'C2C Distributed (multi-GPU)'; C2C_DISTRIBUTED still wins."""
+    try:
+        try:
+            from ..nodes import _c2c_settings as _S
+        except ImportError:                     # imported as a top-level package (tests, tools)
+            from nodes import _c2c_settings as _S
+        return bool(_S.get("c2c.distributed.enabled"))
+    except Exception:  # noqa: BLE001
+        return os.environ.get("C2C_DISTRIBUTED", "").strip().lower() not in ("off", "0", "false", "no")
 
 
 def kill_switch_reason() -> str:
-    return "C2C Distributed is switched off (environment variable C2C_DISTRIBUTED=off)."
+    return ("C2C Distributed is switched off (Settings > C2C > Multi-GPU > C2C Distributed, or the environment "
+            "variable C2C_DISTRIBUTED=off).")
 
 
 __all__ = ["enabled", "kill_switch_reason"]
