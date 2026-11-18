@@ -233,8 +233,8 @@ function _buildPanel() {
 
   panel.innerHTML = `
     <div style="padding:14px 16px;border-bottom:1px solid rgba(255,255,255,.1);
-                display:flex;align-items:center;gap:8px;flex-wrap:wrap;">
-      <span style="font-weight:600;font-size:14px;">🔎 Model Browser</span>
+                display:flex;align-items:center;gap:8px;flex-wrap:nowrap;">
+      <span style="font-weight:600;font-size:14px;white-space:nowrap;">🔎 Model Browser</span>
       <div style="display:flex;gap:4px;margin-left:4px;" id="c2c-mb-source-tabs"></div>
       <select id="c2c-mb-type" style="background:rgba(255,255,255,.07);border:1px solid rgba(255,255,255,.12);
                 border-radius:5px;padding:3px 6px;color:inherit;font-size:12px;">
@@ -247,10 +247,10 @@ function _buildPanel() {
         <option value="">All</option>
       </select>
       <input id="c2c-mb-search" type="text" placeholder="Search models…"
-        style="flex:1;min-width:160px;background:rgba(255,255,255,.06);border:1px solid rgba(255,255,255,.12);
+        style="flex:1 1 120px;min-width:80px;background:rgba(255,255,255,.06);border:1px solid rgba(255,255,255,.12);
                border-radius:5px;padding:5px 10px;color:inherit;font-size:13px;">
       <button id="c2c-mb-close"
-        style="background:none;border:none;font-size:18px;cursor:pointer;color:var(--c2c-gray300);padding:0 4px;">×</button>
+        style="flex:0 0 auto;background:none;border:none;font-size:18px;cursor:pointer;color:var(--c2c-gray300);padding:0 4px;">×</button>
     </div>
     <div id="c2c-mb-filters" style="display:none;align-items:center;gap:6px;flex-wrap:wrap;padding:8px 16px;
                 border-bottom:1px solid rgba(255,255,255,.08);font-size:11px;">
