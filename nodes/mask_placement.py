@@ -11,10 +11,11 @@ onto a frame, and it follows the video": one node that
 
 Build slices (design doc: MASK_PLACEMENT_NODE_DESIGN.md at workspace root):
   Slice 1 (THIS): static propagation — same homography every frame. Fully
-      usable for stills and locked-off shots. track_mode object_track /
-      landmark_lock fall back to static with a clear note in `info`.
-  Slice 2: Cutie (MIT, third_party/Cutie -> nodes_extras port) object
-      tracking driving a per-frame quad update.
+      usable for stills and locked-off shots.
+  Slice 2 (L7.65 P02, 2026-11-18): object_track - the placement follows the image content inside the quad:
+      Shi-Tomasi corners tracked by pyramidal Lucas-Kanade (forward-backward checked), a RANSAC homography from
+      their anchor positions per frame, re-seeded inside the moving quad; no model weights. A learned tracker
+      (Cutie, MIT) stays a possible later engine: it needs a weights download (owner permission).
   Slice 3 (L9.39 row 7, 2026-11-12): landmark_lock - the placement follows a POSE_KEYPOINT stream (OpenPose
       JSON, e.g. Face Landmarks (Facepoints) or DWPose): per frame an affine fitted to the landmarks nearest the
       quad (local follow), a similarity when few are near; frames without enough shared landmarks hold the last
@@ -168,6 +169,84 @@ def landmark_transforms(frames, anchor: int, quad: np.ndarray) -> Tuple[List[np.
     return mats, status
 
 
+TRACK_MIN_POINTS = 8          # fewer surviving points than this -> the frame holds the last placement
+TRACK_RESEED_BELOW = 40       # re-detect corners inside the current quad when fewer points survive
+TRACK_FB_MAX_PX = 1.0         # forward-backward Lucas-Kanade error above this drops a point
+
+
+def _gray_u8(frame: np.ndarray) -> np.ndarray:
+    return cv2.cvtColor((np.clip(frame, 0.0, 1.0) * 255.0).astype(np.uint8), cv2.COLOR_RGB2GRAY)
+
+
+def _quad_region(quad: np.ndarray, H: int, W: int, grow: float = 0.1) -> np.ndarray:
+    """uint8 mask of the quad grown by `grow` of its size around its centre (corners at its edge track too)."""
+    q = np.asarray(quad, np.float64)
+    c = q.mean(0)
+    q = c + (q - c) * (1.0 + grow)
+    m = np.zeros((H, W), np.uint8)
+    cv2.fillConvexPoly(m, np.round(q).astype(np.int32), 255)
+    return m
+
+
+def _corners_in(gray: np.ndarray, region: np.ndarray) -> Optional[np.ndarray]:
+    pts = cv2.goodFeaturesToTrack(gray, maxCorners=300, qualityLevel=0.01, minDistance=5, mask=region)
+    return None if pts is None else pts.reshape(-1, 2).astype(np.float32)
+
+
+def object_track_transforms(frames: np.ndarray, anchor: int, quad: np.ndarray) -> Tuple[List[np.ndarray], List[str]]:
+    """Per frame a 3x3 matrix taking anchor-frame pixels to that frame's pixels (as landmark_transforms), from the
+    image content inside the quad: Shi-Tomasi corners tracked frame to frame by pyramidal Lucas-Kanade with a
+    forward-backward check, then a RANSAC homography (affine when few points) from their anchor positions. Classic
+    OpenCV, no model weights. Frames where too few points survive hold the last transform and say so."""
+    n, H, W = int(frames.shape[0]), int(frames.shape[1]), int(frames.shape[2])
+    anchor = min(max(int(anchor), 0), n - 1)
+    eye = np.eye(3)
+    mats: List[np.ndarray] = [eye] * n
+    status: List[str] = [""] * n
+    a_gray = _gray_u8(frames[anchor])
+    a_pts = _corners_in(a_gray, _quad_region(quad, H, W))
+    if a_pts is None or len(a_pts) < TRACK_MIN_POINTS:
+        return mats, ["held (no trackable detail inside the quad on the anchor frame)"] * n
+    status[anchor] = "anchor"
+    lk = dict(winSize=(21, 21), maxLevel=3, criteria=(cv2.TERM_CRITERIA_EPS | cv2.TERM_CRITERIA_COUNT, 30, 0.01))
+    q32 = np.asarray(quad, np.float32)[None]
+    for direction in (1, -1):                         # walk out from the anchor both ways, as landmark_lock does
+        prev_mat, prev_gray = eye, a_gray
+        anc, cur = a_pts.copy(), a_pts.copy()          # anchor-frame position of each point / its position now
+        t = anchor + direction
+        while 0 <= t < n:
+            gray = _gray_u8(frames[t])
+            if len(cur):
+                nxt, st, _ = cv2.calcOpticalFlowPyrLK(prev_gray, gray, cur.reshape(-1, 1, 2), None, **lk)
+                back, st2, _ = cv2.calcOpticalFlowPyrLK(gray, prev_gray, nxt, None, **lk)
+                nxt, back = nxt.reshape(-1, 2), back.reshape(-1, 2)
+                ok = (st.ravel() == 1) & (st2.ravel() == 1) & (np.linalg.norm(back - cur, axis=1) < TRACK_FB_MAX_PX)
+                anc, cur = anc[ok], nxt[ok]
+            mat, note = prev_mat, f"held ({len(cur)} tracked points)"
+            if len(cur) >= TRACK_MIN_POINTS:
+                if len(cur) >= 12:
+                    m, inl = cv2.findHomography(anc, cur, cv2.RANSAC, 3.0)
+                    kind = "homography"
+                else:
+                    m, inl = cv2.estimateAffine2D(anc, cur, method=cv2.RANSAC, ransacReprojThreshold=3.0)
+                    m = None if m is None else np.vstack([m, [0.0, 0.0, 1.0]])
+                    kind = "affine"
+                if m is not None and inl is not None and int(inl.sum()) >= TRACK_MIN_POINTS:
+                    keep = inl.ravel().astype(bool)
+                    anc, cur = anc[keep], cur[keep]
+                    mat, note = m, f"tracked ({kind}, {int(keep.sum())} pts)"
+            mats[t], status[t] = mat, note
+            if len(cur) < TRACK_RESEED_BELOW and note.startswith("tracked"):
+                region = _quad_region(cv2.perspectiveTransform(q32, mat)[0], H, W)
+                new = _corners_in(gray, region)
+                if new is not None and len(new):
+                    back_to_anchor = cv2.perspectiveTransform(new[None], np.linalg.inv(mat))[0].astype(np.float32)
+                    anc, cur = np.vstack([anc, back_to_anchor]), np.vstack([cur, new])
+            prev_mat, prev_gray = mat, gray
+            t += direction
+    return mats, status
+
+
 def _tight_bbox(alpha: np.ndarray, thresh: float = 0.02) -> Optional[Tuple[int, int, int, int]]:
     ys, xs = np.where(alpha > thresh)
     if len(ys) == 0:
@@ -181,7 +260,8 @@ class MaskPlacementMEC:
         "prompt + SAM model and it segments the object for you), place it with a "
         "draggable 4-corner perspective quad, and propagate across the video. "
         "track_mode landmark_lock follows wired landmarks (POSE_KEYPOINT, e.g. Face Landmarks (Facepoints) or "
-        "DWPose) frame by frame; object tracking (Cutie) is not built yet and falls back to static, saying so."
+        "DWPose) frame by frame; object_track follows the image content inside the quad (feature tracking, no "
+        "model). How-to: docs/mask-placement.md."
     )
 
     @classmethod
@@ -205,8 +285,9 @@ class MaskPlacementMEC:
                 "track_mode": (["static", "object_track", "landmark_lock", "auto"], {"default": "static",
                     "tooltip": "How the placement follows the video. static: same place every frame. "
                                "landmark_lock: follows the wired `landmarks` (face or body points nearest the "
-                               "quad). auto: landmark_lock when landmarks are wired, else static. object_track "
-                               "(Cutie) is not built yet: static, and `info` says so."}),
+                               "quad). object_track: follows the image content inside the quad (feature tracking, no model; "
+                               "frames with too little detail hold and `info` says so). auto: landmark_lock when "
+                               "landmarks are wired, else static."}),
                 "anchor_frame": ("INT", {"default": 0, "min": 0, "max": 99999,
                     "tooltip": "The frame the quad was placed on (and segmented from, when using prompt "
                                "without ref_image)."}),
@@ -387,12 +468,16 @@ class MaskPlacementMEC:
         elif requested == "landmark_lock" and B > 1:
             note = "track_mode='landmark_lock' needs the `landmarks` input wired - placement propagated statically."
         elif requested == "object_track" and B > 1:
-            note = ("track_mode='object_track' (Cutie) is not built yet - placement propagated statically to all "
-                    "frames. Wire landmarks and use landmark_lock to follow a face or body.")
+            mats, frame_status = object_track_transforms(images_np, int(anchor_frame), corners)
+            effective = "object_track"
+            held = sum(s.startswith("held") for s in frame_status)
+            if held:
+                note = (f"{held} of {B} frame(s) held the last placement (too little trackable detail inside the "
+                        "quad). Place the quad over textured content, or use landmark_lock for a face or body.")
         if note:
             log.info("MaskPlacementMEC: %s", note)
 
-        if effective == "landmark_lock":
+        if effective in ("landmark_lock", "object_track"):
             src_rect3 = np.asarray([[0, 0], [sw, 0], [sw, sh], [0, sh]], dtype=np.float32)
             masks = np.empty((B, H, W), np.float32)
             placed = np.empty((B, H, W, 3), np.float32)

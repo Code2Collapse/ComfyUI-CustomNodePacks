@@ -50,24 +50,6 @@ const COLOR = {
 
 function _clamp(v, lo, hi) { return v < lo ? lo : v > hi ? hi : v; }
 
-/**
- * A28 (owner): "object track" is not offered any more - it runs as static with a note (nodes/mask_placement.py
- * :390-392). The backend still accepts it, so old saves validate, and a node saved on it keeps showing it.
- */
-function filterTrackModes(node) {
-    const w = node.widgets?.find((x) => x.name === "track_mode");
-    const vals = w?.options?.values;
-    if (!Array.isArray(vals)) return;
-    w.__c2cAllTrackModes = w.__c2cAllTrackModes || vals.slice();
-    const all = w.__c2cAllTrackModes;
-    w.options.values = w.value === "object_track" ? all.slice() : all.filter((v) => v !== "object_track");
-    if (!w.__c2cTrackHooked) {
-        w.__c2cTrackHooked = true;
-        const cb = w.callback;
-        w.callback = function (...a) { const r = cb?.apply(this, a); filterTrackModes(node); return r; };
-    }
-}
-
 function installEditor(node) {
     if (node._mpEditor) return;
     ensureC2CKit();
@@ -76,7 +58,6 @@ function installEditor(node) {
     const wFeather = node.widgets?.find((w) => w.name === "feather_px");
     // A28: placement_json (the editor writes it) is hidden by js/_c2c_node_layout.js, the node's one visibility
     // owner (c2c_hidden in nodes/mask_placement.py); its value stays live and saved.
-    filterTrackModes(node);
 
     const root = document.createElement("div");
     root.className = "c2ck-panel";
@@ -434,7 +415,6 @@ if (!(app.extensions || []).some((e) => e?.name === "C2C.MaskPlacementEditor")) 
             const orig = nodeType.prototype.onConfigure;
             nodeType.prototype.onConfigure = function (info) {
                 orig?.apply(this, arguments);
-                filterTrackModes(this);                       // the saved value is restored by now
                 if (this._mpEditor) { this._mpEditor.load(); this._mpEditor.render(); }
             };
         },
