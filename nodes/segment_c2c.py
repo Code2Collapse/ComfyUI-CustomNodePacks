@@ -127,7 +127,7 @@ class SegmentC2C:
         # float frames in 0..1, as the viewer's Find passes them (a uint8 frame broke the decoder's box / click path)
         frames = image[..., :3].detach().float().clamp(0, 1).cpu().numpy()
         terms = [t.strip() for t in text.split(",") if t.strip()]      # "person:3, dog" -> one detection per term
-        with torch.inference_mode():
+        with torch.no_grad():               # never inference_mode: outputs must stay mutable downstream
             for b in range(B):
                 if terms:
                     objs = [{**o, "label": t} for t in terms for o in det.detect(frames[b], t, [], [], [])]
