@@ -923,6 +923,59 @@ _folders_lock = threading.Lock()
 # Folders change mid-session (create folder → press R), so they expire fast;
 # the model/voice catalogs change rarely and keep the long TTL.
 _FOLDERS_TTL_SECONDS = 30
+_FAIL_TTL_SECONDS = 60
+
+
+def _catalog(cache: dict, lock, key: str, fetch, ttl: float, force: bool = False):
+    """One catalog read for a node combo (L9.264). INPUT_TYPES calls these, and /object_info waits for INPUT_TYPES:
+    - fresh cache -> served;
+    - stale cache -> served at once, ONE background thread refreshes it;
+    - a failed fetch is remembered for _FAIL_TTL_SECONDS: inside that window no new network attempt is made (stale data
+      is served when there is any, else the remembered error is raised again), so an outage costs one timeout a minute
+      instead of one per /object_info. Not-signed-in errors are never remembered (they cost no network).
+    `force` always fetches (explicit refresh buttons)."""
+    from .auth import NotSignedInError
+
+    def _store_fail(exc):
+        if not isinstance(exc, NotSignedInError):
+            cache.update(fail_at=time.time(), fail_exc=exc)
+
+    with lock:
+        now = time.time()
+        has = bool(cache["at"])
+        if not force:
+            if has and now - cache["at"] < ttl:
+                return cache[key]
+            if cache.get("fail_at") and now - cache["fail_at"] < _FAIL_TTL_SECONDS:
+                if has:
+                    return cache[key]
+                raise cache["fail_exc"]
+            if has:
+                if not cache.get("refreshing"):
+                    cache["refreshing"] = True
+
+                    def _bg():
+                        try:
+                            val = fetch()
+                        except Exception as exc:  # noqa: BLE001 - remembered; the stale value stays
+                            with lock:
+                                _store_fail(exc)
+                                cache["refreshing"] = False
+                            return
+                        with lock:
+                            cache.update(at=time.time(), fail_at=0.0, refreshing=False)
+                            cache[key] = val
+
+                    threading.Thread(target=_bg, name="magnific-catalog", daemon=True).start()
+                return cache[key]
+        try:
+            val = fetch()
+        except Exception as exc:
+            _store_fail(exc)
+            raise
+        cache.update(at=time.time(), fail_at=0.0)
+        cache[key] = val
+        return val
 _CATALOG_TTL_SECONDS = 120
 # folders_list emits NO child counts, so every folder must be probed for
 # children. Level 1 (folders inside each project — the two-level UX) gets its
@@ -995,15 +1048,8 @@ def _fetch_folder_choices() -> List[dict]:
 
 
 def folder_choices(force: bool = False) -> List[dict]:
-    with _folders_lock:
-        # Freshness by timestamp, not content: an empty catalog is a valid,
-        # cacheable answer (truthiness would re-crawl on every refresh).
-        fresh = _folders_cache["at"] and time.time() - _folders_cache["at"] < _FOLDERS_TTL_SECONDS
-        if not force and fresh:
-            return _folders_cache["choices"]
-        choices = _fetch_folder_choices()
-        _folders_cache.update(at=time.time(), choices=choices)
-        return choices
+    # Freshness by timestamp, not content: an empty catalog is a valid, cacheable answer.
+    return _catalog(_folders_cache, _folders_lock, "choices", _fetch_folder_choices, _FOLDERS_TTL_SECONDS, force)
 
 
 def clear_catalog_caches() -> None:
@@ -1012,18 +1058,18 @@ def clear_catalog_caches() -> None:
     Each reset takes the cache's own lock, so a fetch in flight during the
     switch finishes its write first and is then wiped, never the reverse."""
     with _folders_lock:
-        _folders_cache.update(at=0.0, choices=[])
+        _folders_cache.update(at=0.0, choices=[], fail_at=0.0)
     with _image_models_lock:
-        _image_models_cache.update(at=0.0, models=[])
+        _image_models_cache.update(at=0.0, models=[], fail_at=0.0)
     with _video_models_lock:
-        _video_models_cache.update(at=0.0, models=[])
+        _video_models_cache.update(at=0.0, models=[], fail_at=0.0)
     with _music_models_lock:
-        _music_models_cache.update(at=0.0, models=[])
+        _music_models_cache.update(at=0.0, models=[], fail_at=0.0)
     with _voices_lock:
-        _voices_cache.update(at=0.0, choices=[])
+        _voices_cache.update(at=0.0, choices=[], fail_at=0.0)
     with _library_lock:
         for cache in _library_caches.values():
-            cache.update(at=0.0, choices=[])
+            cache.update(at=0.0, choices=[], fail_at=0.0)
     clear_paid_reuse()      # L9.191: remembered paid creations / uploads belong to the signed-in account
 
 
@@ -1043,12 +1089,8 @@ _image_models_lock = threading.Lock()
 
 
 def image_models() -> List[dict]:
-    with _image_models_lock:
-        if _image_models_cache["at"] and time.time() - _image_models_cache["at"] < _CATALOG_TTL_SECONDS:
-            return _image_models_cache["models"]
-        models = parse_image_models(client().text("images_models_list"))
-        _image_models_cache.update(at=time.time(), models=models)
-        return models
+    return _catalog(_image_models_cache, _image_models_lock, "models",
+                    lambda: parse_image_models(client().text("images_models_list")), _CATALOG_TTL_SECONDS)
 
 
 def model_choices() -> List[str]:
@@ -1117,12 +1159,8 @@ _video_models_lock = threading.Lock()
 
 
 def video_models() -> List[dict]:
-    with _video_models_lock:
-        if _video_models_cache["at"] and time.time() - _video_models_cache["at"] < _CATALOG_TTL_SECONDS:
-            return _video_models_cache["models"]
-        models = parse_video_models(client().text("video_models_list"))
-        _video_models_cache.update(at=time.time(), models=models)
-        return models
+    return _catalog(_video_models_cache, _video_models_lock, "models",
+                    lambda: parse_video_models(client().text("video_models_list")), _CATALOG_TTL_SECONDS)
 
 
 def video_model_choices() -> List[str]:
@@ -1136,9 +1174,7 @@ _music_models_lock = threading.Lock()
 def music_model_choices() -> List[str]:
     """There is no music-models catalog tool; the enum lives in the
     audio_music_generate input schema published by tools/list."""
-    with _music_models_lock:
-        if _music_models_cache["at"] and time.time() - _music_models_cache["at"] < _CATALOG_TTL_SECONDS:
-            return _music_models_cache["models"]
+    def _fetch() -> List[str]:
         tools = {tool.get("name"): tool for tool in client().list_tools()}
         enum = (
             tools.get("audio_music_generate", {})
@@ -1147,9 +1183,9 @@ def music_model_choices() -> List[str]:
             .get("model", {})
             .get("enum")
         )
-        models = [str(value) for value in enum] if isinstance(enum, list) and enum else list(MUSIC_MODELS)
-        _music_models_cache.update(at=time.time(), models=models)
-        return models
+        return [str(value) for value in enum] if isinstance(enum, list) and enum else list(MUSIC_MODELS)
+
+    return _catalog(_music_models_cache, _music_models_lock, "models", _fetch, _CATALOG_TTL_SECONDS)
 
 
 def parse_voices(text: str) -> List[dict]:
@@ -1186,16 +1222,14 @@ _voices_lock = threading.Lock()
 
 def voice_choices() -> List[dict]:
     """[{label, id}] — label is 'Name (gender, language)', uniquified."""
-    with _voices_lock:
-        if _voices_cache["at"] and time.time() - _voices_cache["at"] < _CATALOG_TTL_SECONDS:
-            return _voices_cache["choices"]
+    def _fetch() -> List[dict]:
         choices = []
         for voice in parse_voices(client().text("audio_voices_list")):
             details = ", ".join(part for part in (voice["gender"], voice["language"]) if part)
             choices.append({"label": f"{voice['name']} ({details})" if details else voice["name"], "id": voice["id"]})
-        choices = _uniquify_labels(choices)
-        _voices_cache.update(at=time.time(), choices=choices)
-        return choices
+        return _uniquify_labels(choices)
+
+    return _catalog(_voices_cache, _voices_lock, "choices", _fetch, _CATALOG_TTL_SECONDS)
 
 
 def voice_id_for(label: str) -> Optional[int]:
@@ -1234,18 +1268,14 @@ def library_choices(scope: str = "mine", force: bool = False) -> List[dict]:
     combo. `scope` is a LIBRARY_SCOPES key (`mine` | `public`)."""
     if scope not in LIBRARY_SCOPES:
         scope = "mine"
-    with _library_lock:
-        cache = _library_caches[scope]
-        fresh = cache["at"] and time.time() - cache["at"] < _FOLDERS_TTL_SECONDS
-        if not force and fresh:
-            return cache["choices"]
-        choices = sort_library_choices(
+    def _fetch() -> List[dict]:
+        return sort_library_choices(
             _uniquify_labels(
                 [{"label": library_label(entry), "entry": entry} for entry in _fetch_library_entries(scope) if not entry["status"]]
             )
         )
-        cache.update(at=time.time(), choices=choices)
-        return choices
+
+    return _catalog(_library_caches[scope], _library_lock, "choices", _fetch, _FOLDERS_TTL_SECONDS, force)
 
 
 def library_entry_for(label: str, scope: str = "mine", force: bool = False) -> Optional[dict]:

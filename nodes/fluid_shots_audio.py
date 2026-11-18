@@ -187,17 +187,24 @@ class FluidShotDecoderMEC:
                 "images": ("IMAGE", {"tooltip": "AI-processed frames (the expanded, normalized batch)."}),
                 "time_map": ("TIMEMAP", {"tooltip": "From Fluid Shot Encoder."}),
             },
+            "optional": {
+                # appended (L9.264): saved workflows keep their behaviour (on = the old proportional remap)
+                "allow_approximate": ("BOOLEAN", {"default": True, "tooltip":
+                    "When the processed batch has a different frame count than the encoder made (e.g. a model "
+                    "trimmed it to 4n+1), map the original frames proportionally - their timing is then only "
+                    "approximate and the info output says by how much. Off: stop with an error instead."}),
+            },
         }
 
-    RETURN_TYPES = ("IMAGE",)
-    RETURN_NAMES = ("images",)
+    RETURN_TYPES = ("IMAGE", "STRING")
+    RETURN_NAMES = ("images", "info")
     FUNCTION = "execute"
     CATEGORY = "MEC/Temporal"
     DESCRIPTION = ("Selects exactly the frames that correspond to the ORIGINAL input "
                    "frames using the encoder's TIMEMAP — restores the original frame "
                    "count and slow-to-fast pacing.")
 
-    def execute(self, images, time_map):
+    def execute(self, images, time_map, allow_approximate=True):
         if images.ndim == 3:
             images = images.unsqueeze(0)
         if not (isinstance(time_map, dict) and time_map.get("kind") == "fluid_shot"):
@@ -206,18 +213,26 @@ class FluidShotDecoderMEC:
         B = int(images.shape[0])
         positions = [int(p) for p in time_map.get("original_positions", [])]
         if not positions:
-            return (images,)
+            return (images, "TIMEMAP has no original positions: images passed through unchanged.")
         expected = int(time_map.get("out_count", 0))
+        info = f"exact: {len(positions)} original frames selected from {B}."
         if expected and B != expected:
-            # AI models may trim/pad the batch (e.g. Wan's 4n+1). Scale the map
-            # proportionally, then clamp — degrades gracefully instead of erroring.
-            logger.warning("FluidShotDecoder: batch is %d frames but TIMEMAP expects %d; "
-                           "rescaling map.", B, expected)
+            if not allow_approximate:
+                raise ValueError(
+                    f"FluidShotDecoder: the batch has {B} frames but the encoder made {expected}. The model changed "
+                    f"the frame count, so the original timing cannot be restored exactly. Turn on allow_approximate "
+                    f"to map it proportionally, or keep the frame count unchanged between encoder and decoder.")
+            # AI models may trim/pad the batch (e.g. Wan's 4n+1): scale the map proportionally, then clamp
             ratio = (B - 1) / float(max(1, expected - 1))
-            positions = [int(round(p * ratio)) for p in positions]
+            scaled = [p * ratio for p in positions]
+            positions = [int(round(p)) for p in scaled]
+            worst = max((abs(p - s) for p, s in zip(positions, scaled)), default=0.0)
+            info = (f"APPROXIMATE: batch has {B} frames, the encoder made {expected}; original frames mapped "
+                    f"proportionally (rounding error up to {worst:.2f} frame).")
+            logger.warning("FluidShotDecoder: %s", info)
         idx = torch.tensor([min(max(p, 0), B - 1) for p in positions],
                            dtype=torch.long, device=images.device)
-        return (images.index_select(0, idx),)
+        return (images.index_select(0, idx), info)
 
 
 class AudioReverserMEC:
