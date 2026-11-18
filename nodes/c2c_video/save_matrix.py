@@ -222,8 +222,17 @@ def _pyav_pix(enc: str) -> frozenset[str] | None:
     return _PIX_CACHE[key]
 
 
+def _use_ffmpeg() -> bool:
+    """L3.01: C2C setting 'Encode with FFmpeg'; C2C_SAVE_FFMPEG=0 still wins (PyAV is then used)."""
+    try:
+        from .. import _c2c_settings as _S
+        return bool(_S.get("c2c.video.saveFfmpeg"))
+    except Exception:  # noqa: BLE001
+        return os.environ.get("C2C_SAVE_FFMPEG", "").strip() != "0"
+
+
 def _cli_exe() -> str | None:
-    if os.environ.get("C2C_SAVE_FFMPEG", "").strip() == "0":
+    if not _use_ffmpeg():
         return None
     try:
         from .fast_decode import ffmpeg_version, find_ffmpeg

@@ -79,10 +79,19 @@ def _encoders(exe: str) -> frozenset[str]:
     return _ENCODERS[exe]
 
 
+def _use_ffmpeg() -> bool:
+    """L3.01: C2C setting 'Encode with FFmpeg'; C2C_SAVE_FFMPEG=0 still wins (PyAV is then used)."""
+    try:
+        from .. import _c2c_settings as _S
+        return bool(_S.get("c2c.video.saveFfmpeg"))
+    except Exception:  # noqa: BLE001
+        return os.environ.get("C2C_SAVE_FFMPEG", "").strip() != "0"
+
+
 def ffmpeg_for(spec, pix: str | None = None) -> str | None:
     """The ffmpeg to encode ``spec`` with, or None for the PyAV path. A matrix spec (L9.40) also needs this ffmpeg's
     encoder to take the pixel format ``pix``; otherwise PyAV, which may (save_matrix.backend_for)."""
-    if os.environ.get("C2C_SAVE_FFMPEG", "").strip() == "0":
+    if not _use_ffmpeg():
         return None
     if spec.sequence or spec.codec not in _CLI_CODECS:
         return None

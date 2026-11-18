@@ -235,3 +235,26 @@ register(
             tooltip="Biggest single file Load Video (C2C) / Load Images accept from the upload button.",
             consumer="nodes.c2c_video.media_upload:max_bytes"),
 )
+
+# slice 3 (audit 3b rec S/R): more environment-only switches get a setting; each variable still wins
+register(
+    Setting("c2c.insight.enabled", "boolean", True, "Per-node time and memory (Insight)", ("Diagnostics",),
+            env="C2C_INSIGHT", restart=True,
+            tooltip="Measures each node's run time and memory and shows it under the node. Off: the executor hook "
+                    "is not installed at all.", consumer="nodes.insight:install"),
+    Setting("c2c.matte.viewer", "boolean", True, "Matte viewer", ("Masks",), env="C2C_VIEWER",
+            tooltip="The interactive viewer on Mask + Matting and the SAM nodes. Off: their plain widgets (picks as "
+                    "a text box). A saved selection still applies, so results never change.",
+            consumer="nodes.mask_matting._picks:viewer_enabled"),
+    Setting("c2c.models.fallbacks", "boolean", True, "Model-free fallbacks", ("Models & Downloads",),
+            env="C2C_MODEL_FALLBACK",
+            tooltip="When a mask / matting model is missing, run the labelled model-free method instead of stopping "
+                    "with an error.", consumer="nodes.mask_matting._classic:fallback_allowed"),
+    Setting("c2c.video.saveFfmpeg", "boolean", True, "Encode with FFmpeg", ("Video", "Save"), env="C2C_SAVE_FFMPEG",
+            tooltip="Save Video (C2C) uses an installed FFmpeg for the codecs it supports (NVENC, ProRes, ...). Off: "
+                    "always the built-in PyAV encoder.", consumer="nodes.c2c_video.save_ffmpeg:ffmpeg_for"),
+    Setting("c2c.vault.ttlMinutes", "number", 480, "Unlock lasts (minutes)", ("Vault",), max=100000, step=1,   # no min: 0 or less always meant no expiry
+            env="C2C_VAULT_TTL_MINUTES", restart=True,
+            tooltip="How long an unlocked Vault stays unlocked. 0 = until ComfyUI restarts.",
+            consumer="nodes.vault_node:_ttl_seconds"),
+)

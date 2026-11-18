@@ -40,7 +40,11 @@ _MISSING_RX = re.compile(
 
 def fallback_allowed() -> bool:
     """False when the user switched model-free fallbacks off (env C2C_MODEL_FALLBACK=off|0|false)."""
-    return os.environ.get("C2C_MODEL_FALLBACK", "").strip().lower() not in ("off", "0", "false", "no")
+    try:  # L3.01: C2C setting 'Model-free fallbacks'; C2C_MODEL_FALLBACK still wins
+        from .. import _c2c_settings as _S
+        return bool(_S.get("c2c.models.fallbacks"))
+    except Exception:  # noqa: BLE001
+        return os.environ.get("C2C_MODEL_FALLBACK", "").strip().lower() not in ("off", "0", "false", "no")
 
 
 def is_missing_model_error(exc: BaseException) -> bool:

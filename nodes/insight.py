@@ -100,13 +100,23 @@ def _emit(event: Dict[str, Any]) -> None:
 _INSTALLED = False
 
 
+def _c2c_setting_or(sid, fallback):
+    """L3.01: a declared C2C setting (its environment variable still wins); without the registry the old read."""
+    try:
+        from . import _c2c_settings as _S
+        return _S.get(sid)
+    except Exception:  # noqa: BLE001
+        return fallback()
+
+
+
 def install() -> bool:
     """Idempotent install. Returns True on success."""
     global _INSTALLED
     if _INSTALLED:
         return True
-    if os.environ.get("C2C_INSIGHT", "").strip() == "0":
-        log.info("[insight] off (C2C_INSIGHT=0): the per-node executor hook is not installed")
+    if not _c2c_setting_or("c2c.insight.enabled", lambda: os.environ.get("C2C_INSIGHT", "").strip() != "0"):
+        log.info("[insight] off (setting 'Per-node time and memory' / C2C_INSIGHT=0): the executor hook is not installed")
         return False
 
     try:

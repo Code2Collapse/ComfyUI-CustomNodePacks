@@ -59,10 +59,14 @@ MAX_VAULT_OUTPUTS = 8
 # stop to type. Default is a working day; 0 means "until ComfyUI restarts".
 # Override with C2C_VAULT_TTL_MINUTES (0 = no expiry).
 def _ttl_seconds() -> float:
-    raw = os.environ.get("C2C_VAULT_TTL_MINUTES", "480")
+    try:  # L3.01: C2C setting 'Unlock lasts (minutes)'; C2C_VAULT_TTL_MINUTES still wins
+        from . import _c2c_settings as _S
+        raw = _S.get("c2c.vault.ttlMinutes")
+    except Exception:  # noqa: BLE001
+        raw = os.environ.get("C2C_VAULT_TTL_MINUTES", "480")
     try:
         minutes = float(raw)
-    except ValueError:
+    except (TypeError, ValueError):
         minutes = 480.0
     return float("inf") if minutes <= 0 else minutes * 60.0
 

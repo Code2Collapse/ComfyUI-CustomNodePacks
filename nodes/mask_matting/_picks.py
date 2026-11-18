@@ -40,7 +40,11 @@ _REPICK = "Open the viewer on the Mask + Matting node and pick again, or clear t
 def viewer_enabled() -> bool:
     """Kill switch C2C_VIEWER=0: the node shows its plain widgets (picks as a text box). Execution is the same
     either way - a saved selection still applies, so switching the viewer off never changes a result silently."""
-    return os.environ.get("C2C_VIEWER", "").strip() != "0"
+    try:  # L3.01: C2C setting 'Matte viewer'; C2C_VIEWER=0 still wins
+        from .. import _c2c_settings as _S
+        return bool(_S.get("c2c.matte.viewer"))
+    except Exception:  # noqa: BLE001
+        return os.environ.get("C2C_VIEWER", "").strip() != "0"
 
 
 @dataclass
