@@ -20,14 +20,42 @@ _ALLOWED: contextvars.ContextVar[bool] = contextvars.ContextVar("c2c_downloads_a
 _FOUND: contextvars.ContextVar[Optional[List[str]]] = contextvars.ContextVar("c2c_models_found", default=None)
 
 
+_SAVED_CACHE: dict = {"path": None, "mtime": None, "value": False}
+
+
+def _saved_never_download() -> bool:
+    """The saved value of c2c.models.neverDownload in the user's comfy.settings.json, read directly (cached by mtime).
+    Used where CustomNodePacks' settings registry is not importable (the vendored copies in the other C2C packs,
+    L3.07), so every C2C pack follows the one setting."""
+    try:
+        import folder_paths  # type: ignore
+        path = os.path.join(folder_paths.get_user_directory(), "default", "comfy.settings.json")
+        mtime = os.path.getmtime(path)
+    except Exception:  # noqa: BLE001 - no ComfyUI / no settings file yet
+        return False
+    if _SAVED_CACHE["path"] != path or _SAVED_CACHE["mtime"] != mtime:
+        try:
+            import json
+            with open(path, encoding="utf-8") as fh:
+                val = json.load(fh).get("c2c.models.neverDownload", False)
+        except Exception:  # noqa: BLE001
+            val = False
+        _SAVED_CACHE.update(path=path, mtime=mtime, value=val is True)
+    return bool(_SAVED_CACHE["value"])
+
+
 def never_download() -> bool:
-    """The global switch: C2C setting "Never download models" (c2c.models.neverDownload); C2C_NO_DOWNLOADS=1 still
-    wins and locks it (L3.01). Without the registry (a vendored copy, a bare test) only the environment counts."""
+    """The global switch: C2C setting "Never download models" (c2c.models.neverDownload); C2C_NO_DOWNLOADS still
+    wins and locks it (L3.01). Without CustomNodePacks' registry (a vendored copy in another C2C pack, a bare test)
+    the variable, else the saved setting read directly (L3.07)."""
     try:
         from . import _c2c_settings as _S
         return bool(_S.get("c2c.models.neverDownload"))
     except Exception:  # noqa: BLE001
-        return os.environ.get("C2C_NO_DOWNLOADS") == "1"
+        env = os.environ.get("C2C_NO_DOWNLOADS")
+        if env is not None and env != "":
+            return env == "1"
+        return _saved_never_download()
 
 
 @contextlib.contextmanager

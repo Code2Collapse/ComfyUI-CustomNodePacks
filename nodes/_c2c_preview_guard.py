@@ -375,7 +375,16 @@ def _ensure_decoder(latent_format) -> None:
 # previewer is active, so this works for TAESD, Latent2RGB and the
 # channel-mean net alike - each of them takes "the first frame" of what it is
 # given, and this changes what that is.
-_VIDEO_FRAME_POLICY = os.environ.get("C2C_PREVIEW_VIDEO_FRAME", "sweep").lower()
+def _video_frame_policy() -> str:
+    """L3.01: C2C setting 'Video preview frame' (read once at start-up); C2C_PREVIEW_VIDEO_FRAME still wins."""
+    try:
+        from . import _c2c_settings as _S
+        return str(_S.get("c2c.preview.videoFrame")).lower()
+    except Exception:  # noqa: BLE001
+        return os.environ.get("C2C_PREVIEW_VIDEO_FRAME", "sweep").lower()
+
+
+_VIDEO_FRAME_POLICY = _video_frame_policy()
 
 
 class _FramePickingPreviewer:

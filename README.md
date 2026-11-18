@@ -1693,7 +1693,7 @@ read any file path. Through an SSH tunnel the page still counts as local.
   with its version and node count (and any node ids another pack took over), problems found at start-up, and
   settings fixed by environment variables. "Copy diagnostics report" copies all of it for a bug report, with no
   keys or tokens in it. It answers only on the ComfyUI machine itself (2026-11-18).
-- **New settings:** Settings > C2C > Models & Downloads > **Never download models** (no C2C node downloads weights,
+- **New settings:** Settings > C2C > Models & Downloads > **Never download models** (no CustomNodePacks, WanNodeExperiments, WanAnimatePreprocessV2 or GLM-Image node downloads weights,
   even with its own Allow Download ticked) and Video > Upload > **Largest upload (MB)**. The environment variables
   `C2C_NO_DOWNLOADS` / `C2C_UPLOAD_MAX_MB` still work and take priority (2026-11-18).
 - **Folder Version Incrementer (old Set node):** asking it to reserve more than 999 versions makes only the highest

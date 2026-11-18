@@ -121,9 +121,12 @@ def _coerce(s: Setting, value: Any) -> Any:
         return int(v) if isinstance(s.default, int) and v.is_integer() else v
     if s.type == "combo":
         v = str(value)
-        if v not in s.options:
-            raise ValueError(f"not one of {list(s.options)}")
-        return v
+        if v in s.options:
+            return v
+        for o in s.options:                # environment values were often matched case-insensitively
+            if o.lower() == v.strip().lower():
+                return o
+        raise ValueError(f"not one of {list(s.options)}")
     return "" if value is None else str(value)
 
 
@@ -226,7 +229,8 @@ register(
 register(
     Setting("c2c.models.neverDownload", "boolean", False, "Never download models",
             ("Models & Downloads",), env="C2C_NO_DOWNLOADS",
-            tooltip="On: no C2C node downloads model weights, even with its own 'Allow Download' ticked; nodes use "
+            tooltip="On: no node of CustomNodePacks, WanNodeExperiments, WanAnimatePreprocessV2 or GLM-Image "
+                    "downloads model weights, even with its own 'Allow Download' ticked; nodes use "
                     "installed copies or their labelled model-free method and say which model is missing. Downloads "
                     "you start yourself (Model Browser) are not affected.",
             consumer="nodes._download_policy:never_download"),
@@ -269,4 +273,9 @@ register(
             tooltip="C2C switches ComfyUI's sampler previews on at start-up so long video runs show progress. On: "
                     "leave ComfyUI's own preview setting alone.",
             consumer="nodes._c2c_preview_guard:ensure_previews_enabled"),
+    Setting("c2c.preview.videoFrame", "combo", "sweep", "Video preview frame", ("Previews",),
+            options=("sweep", "middle", "first"), env="C2C_PREVIEW_VIDEO_FRAME", restart=True,
+            tooltip="Which frame of a video latent the sampler preview shows. sweep: the next frame on every preview "
+                    "(motion and temporal problems become visible); middle: one frame from the centre; first: frame "
+                    "0, ComfyUI's own behaviour.", consumer="nodes._c2c_preview_guard:_video_frame_policy"),
 )
