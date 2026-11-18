@@ -1684,6 +1684,14 @@ read any file path. Through an SSH tunnel the page still counts as local.
   (`grow_follow_face`). At the defaults the result is exactly the old grow (2026-11-17).
 - **Image Mask Editor (C2C)** previews round to the nearest code value instead of truncating (they were half a level
   too dark) (2026-11-17).
+- **C2C Control Center:** open it from the C2C OmniPill (Tools) or the command palette ("C2C: Open Control
+  Center"). It shows the ComfyUI, frontend, PyTorch and CUDA versions, free RAM and VRAM, every installed C2C pack
+  with its version and node count (and any node ids another pack took over), problems found at start-up, and
+  settings fixed by environment variables. "Copy diagnostics report" copies all of it for a bug report, with no
+  keys or tokens in it. It answers only on the ComfyUI machine itself (2026-11-18).
+- **New settings:** Settings > C2C > Models & Downloads > **Never download models** (no C2C node downloads weights,
+  even with its own Allow Download ticked) and Video > Upload > **Largest upload (MB)**. The environment variables
+  `C2C_NO_DOWNLOADS` / `C2C_UPLOAD_MAX_MB` still work and take priority (2026-11-18).
 - **Folder Version Incrementer (old Set node):** asking it to reserve more than 999 versions makes only the highest
   folder (since L9.135); its status now says so instead of claiming the whole range (2026-11-18).
 - **Sharper previews:** Video Comparer (wipe / onion / side by side / difference views) and Video Frame Player now
