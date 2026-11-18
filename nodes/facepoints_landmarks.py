@@ -152,6 +152,19 @@ def _yunet_path() -> str:
     return dst
 
 
+def release_detector() -> None:
+    """L9.252 F5: drop the cached landmark detector (about 416 MB of weights). Registered with the C2C memory guard, so
+    ComfyUI's own free-memory call (before it loads a sampling model) releases it like its own models."""
+    _DETECTOR.clear()
+
+
+try:
+    from ._c2c_memguard import register as _c2c_mem_register
+    _c2c_mem_register("cnp.facepoints_detector", release_detector, lambda: bool(_DETECTOR))
+except Exception:  # noqa: BLE001 - outside ComfyUI
+    pass
+
+
 def _detector(device: str):
     from .facepoints_engine import Detector
 
@@ -413,7 +426,9 @@ def _controls_spec() -> dict:
                                "trajectories over a video (adaptive: still points steady, real motion followed). "
                                "Independent of track_video. Raw points stay in the JSON."}))
     c["temporal_strength"] = ("FLOAT", ({"default": 0.5, "min": 0.0, "max": 0.99, "step": 0.01, "tooltip":
-                              "Temporal: smoothing of still points. 0 = none; higher = steadier."}))
+                              "Temporal: smoothing of still points. 0 = none; higher = steadier. A still point is averaged over about "
+                              "1 / (1 - strength) frames (0.5: about 2, 0.8: about 5, 0.95: about 20); a point that "
+                              "moves faster than about (1 + 5 x strength) % of the face per frame follows at once."}))
     c["temporal_confidence_aware"] = ("BOOLEAN", ({"default": True, "tooltip": "Temporal: points the model is "
                                       "less sure of than before move less toward their new position."}))
     c["temporal_max_offset"] = ("FLOAT", ({"default": 0.0, "min": 0.0, "max": 512.0, "step": 0.5, "tooltip":
