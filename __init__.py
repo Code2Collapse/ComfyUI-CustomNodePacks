@@ -996,6 +996,11 @@ try:
         _c2c_settings_routes(_ps)
     except Exception as _se:  # noqa: BLE001 - static JS settings keep working without it
         print(f"[C2C] settings registry routes unavailable: {_se}")
+    try:  # L3.04: C2C Control Center report (local only)
+        from .nodes._c2c_control_center import register_routes as _c2c_control_routes
+        _c2c_control_routes(_ps)
+    except Exception as _ce:  # noqa: BLE001
+        print(f"[C2C] Control Center route unavailable: {_ce}")
     for _hook, _args in ((_register_integrity_routes, (_ps,)), (_start_integrity_scan, ()),
                          (_install_insight_hook, ())):
         if _hook is not None:                    # L9.196: a module that failed to import is skipped, not fatal

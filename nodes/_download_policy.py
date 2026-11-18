@@ -20,9 +20,19 @@ _ALLOWED: contextvars.ContextVar[bool] = contextvars.ContextVar("c2c_downloads_a
 _FOUND: contextvars.ContextVar[Optional[List[str]]] = contextvars.ContextVar("c2c_models_found", default=None)
 
 
+def never_download() -> bool:
+    """The global switch: C2C setting "Never download models" (c2c.models.neverDownload); C2C_NO_DOWNLOADS=1 still
+    wins and locks it (L3.01). Without the registry (a vendored copy, a bare test) only the environment counts."""
+    try:
+        from . import _c2c_settings as _S
+        return bool(_S.get("c2c.models.neverDownload"))
+    except Exception:  # noqa: BLE001
+        return os.environ.get("C2C_NO_DOWNLOADS") == "1"
+
+
 @contextlib.contextmanager
 def allow_downloads(flag: bool) -> Iterator[None]:
-    token = _ALLOWED.set(bool(flag) and os.environ.get("C2C_NO_DOWNLOADS") != "1")
+    token = _ALLOWED.set(bool(flag) and not never_download())
     found = _FOUND.set([])
     try:
         yield
@@ -32,7 +42,7 @@ def allow_downloads(flag: bool) -> Iterator[None]:
 
 
 def downloads_allowed() -> bool:
-    return bool(_ALLOWED.get()) and os.environ.get("C2C_NO_DOWNLOADS") != "1"
+    return bool(_ALLOWED.get()) and not never_download()
 
 
 def note_found(path: str) -> None:

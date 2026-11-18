@@ -44,6 +44,11 @@ class UploadError(Exception):
 
 
 def max_bytes() -> int:
+    try:  # L3.01: C2C setting "Largest upload (MB)"; C2C_UPLOAD_MAX_MB still wins
+        from .. import _c2c_settings as _S
+        return int(float(_S.get("c2c.video.uploadMaxMB")) * 1024 * 1024)
+    except Exception:  # noqa: BLE001 - no registry: the environment as before
+        pass
     try:
         return int(float(os.environ.get("C2C_UPLOAD_MAX_MB", "20000")) * 1024 * 1024)
     except ValueError:

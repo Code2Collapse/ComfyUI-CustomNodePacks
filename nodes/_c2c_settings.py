@@ -221,3 +221,17 @@ register(
     Setting("c2c.video.cm.view", "text", "", "Display view (empty = the config's default)",
             ("Video", "Colour Management"), consumer="nodes.c2c_video.save_ocio:_setting"),
 )
+
+# slice 2: backend environment tunables that had no UI (audit section 3b, rec S); the variable still wins (env-locked)
+register(
+    Setting("c2c.models.neverDownload", "boolean", False, "Never download models",
+            ("Models & Downloads",), env="C2C_NO_DOWNLOADS",
+            tooltip="On: no C2C node downloads model weights, even with its own 'Allow Download' ticked; nodes use "
+                    "installed copies or their labelled model-free method and say which model is missing. Downloads "
+                    "you start yourself (Model Browser) are not affected.",
+            consumer="nodes._download_policy:never_download"),
+    Setting("c2c.video.uploadMaxMB", "number", 20000, "Largest upload (MB)", ("Video", "Upload"),
+            min=0, max=1000000, step=1, env="C2C_UPLOAD_MAX_MB",   # min 0: the variable always took any size
+            tooltip="Biggest single file Load Video (C2C) / Load Images accept from the upload button.",
+            consumer="nodes.c2c_video.media_upload:max_bytes"),
+)
