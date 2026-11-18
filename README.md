@@ -262,21 +262,356 @@ Every node's parameters, modes, and outputs are documented in depth in the `docs
 
 ---
 
-## Node Reference
+## Nodes
 
-### Legend
+CustomNodePacks registers **103 nodes** (counts per family and the startup line: [NODE_REFERENCE.md](NODE_REFERENCE.md)). Every node's parameters, defaults and tooltips are in [NODE_REFERENCE.md](NODE_REFERENCE.md), generated from the code, so it cannot drift. This list is generated from the same registration (the Magnific sign-in nodes are skipped when ComfyUI-OmniScale is installed, which replaces them).
 
-All nodes appear in the Add Node menu under **🐺 C2C / 🧰 Core**. That is the one menu root shared by every Code2Collapse pack: NukeMax, MiniMax H3, Wan Experiments, Wan Animate Preprocess, GLM Image, Wan Animal Preprocess and LTX Enhanced each have their own branch under it.
+### 🐺 C2C/🧰 Core/AI Image
 
-| Symbol | Meaning |
-|--------|---------|
-| ★★★★★ | Best quality (may need optional deps) |
-| ★★★★☆ | Great quality |
-| ★★★☆☆ | Good / fast fallback |
+| Node | id | What it does |
+|---|---|---|
+| Nano Banana · Gemini Image (C2C) | [`NanoBananaC2C`](NODE_REFERENCE.md#nanobananac2c) | Generate or edit images with Google's Nano Banana family (gemini-3-pro-image / gemini-2.5-flash-image). |
 
----
+### 🐺 C2C/🧰 Core/Audio
 
-### Segmentation & SAM
+| Node | id | What it does |
+|---|---|---|
+| Audio Reverser | [`AudioReverserMEC`](NODE_REFERENCE.md#audioreversermec) | Reverses the audio waveform (torch.flip on the sample dim), preserving sample rate and channels. |
+
+### 🐺 C2C/🧰 Core/Color Science
+
+| Node | id | What it does |
+|---|---|---|
+| VAE Decode (C2C) | [`C2CVAEQualityDecode`](NODE_REFERENCE.md#c2cvaequalitydecode) | VAE decode with optional fp32 (<=0.17 dB measured gain), spatial-only tiling for Wan video, optional unclamped output for HDR chains, optional ACES tone mapping, and an optional clean step that measures and corrects colo... |
+
+### 🐺 C2C/🧰 Core/Control
+
+| Node | id | What it does |
+|---|---|---|
+| Control AOV — Multi-Control Fusion (C2C) | [`ControlAOVC2C`](NODE_REFERENCE.md#controlaovc2c) | VFX-AOV control fusion: emit depth/canny/pose/normal/motion/ID as separate passes, a channel-packed image (depth=R/canny=G/pose=B), and a convenience blend. |
+
+### 🐺 C2C/🧰 Core/Diagnostics
+
+| Node | id | What it does |
+|---|---|---|
+| Mask Failure Explainer — Diagnostics | [`MaskFailureExplainerMEC`](NODE_REFERENCE.md#maskfailureexplainermec) | Diagnose why a mask might be failing. |
+| Model Metadata Extractor | [`ModelMetadataExtractorMEC`](NODE_REFERENCE.md#modelmetadataextractormec) | Inspect model file metadata WITHOUT unpickling or loading weights. |
+
+### 🐺 C2C/🧰 Core/Distributed
+
+| Node | id | What it does |
+|---|---|---|
+| C2C GPU Inventory | [`C2CGPUInventory`](NODE_REFERENCE.md#c2cgpuinventory) | Lists the GPUs (architecture Turing to Blackwell, memory, BF16 / FP8 / FP4 support, whether this torch build has kernels for them), how they are linked (P2P, NVLink), Grace / aarch64 hosts, whether NCCL / gloo really wor... |
+| C2C Multi-GPU Split | [`C2CSequenceParallel`](NODE_REFERENCE.md#c2csequenceparallel) | Splits every model call over the GPUs of this machine. |
+
+### 🐺 C2C/🧰 Core/Face
+
+| Node | id | What it does |
+|---|---|---|
+| Face Landmarks (Facepoints, 620 + 68/98) | [`FacepointsLandmarksC2C`](NODE_REFERENCE.md#facepointslandmarksc2c) | Dense face landmarks for any model: 620 points on Google's GNM Head mesh, each with its own error estimate, plus the standard 68-point (iBUG) and 98-point (WFLW) sets and both pupils, from myned-ai/facepoints. |
+
+### 🐺 C2C/🧰 Core/Frequency
+
+| Node | id | What it does |
+|---|---|---|
+| Film Grain (MEC) | [`FilmGrainMEC`](NODE_REFERENCE.md#filmgrainmec) | Lightroom-style film grain with per-frame animation for video batches. |
+| Frequency Combine (MEC) | [`FrequencyCombineMEC`](NODE_REFERENCE.md#frequencycombinemec) | Merge a high-frequency detail layer onto a low-frequency base. |
+| Frequency Separate (MEC) | [`FrequencySeparateMEC`](NODE_REFERENCE.md#frequencyseparatemec) | Split an image into low-frequency base and high-frequency detail. |
+
+### 🐺 C2C/🧰 Core/Helpers
+
+| Node | id | What it does |
+|---|---|---|
+| Batch Range (C2C) | [`ImageBatchSliceMEC`](NODE_REFERENCE.md#imagebatchslicemec) | Pick frames from an IMAGE batch: a start:end:step range (negative values count from the end, step=2 keeps every second frame), a split at a frame index or a fraction, or a single frame (first, middle, last or by index). |
+| Conditional Switch | [`ConditionalSwitchMEC`](NODE_REFERENCE.md#conditionalswitchmec) | Return value_true when condition is True, else value_false. |
+| Execution Timer (C2C) | [`ExecutionTimerMEC`](NODE_REFERENCE.md#executiontimermec) | Stopwatch: returns seconds since the *previous* execution of the same label. |
+| Number Lerp (C2C) | [`NumberLerpMEC`](NODE_REFERENCE.md#numberlerpmec) | Linear / smoothstep / cosine interpolation between two values. |
+| Probe (C2C) | [`ImageStatsProbeMEC`](NODE_REFERENCE.md#imagestatsprobemec) | Pass-through probe for debugging: wire an image, a mask and/or a latent and read their statistics - black or blown-out frames, how much of each frame a mask covers, NaN / Inf or saturated latents. |
+| Seed List Generator (C2C) | [`SeedListMEC`](NODE_REFERENCE.md#seedlistmec) | Generate N deterministic seeds from a base seed. |
+| Size (C2C) | [`AspectPresetMEC`](NODE_REFERENCE.md#aspectpresetmec) | Width and height for a render: a common aspect ratio scaled to a long edge (Wan 480p / 720p presets give Wan's native sizes), or your own width x height - snapped to a multiple of N, because Wan, Flux and SDXL need sizes... |
+| Text Template (C2C) | [`TextTemplateMEC`](NODE_REFERENCE.md#texttemplatemec) | Substitute {a}{b}{c}{d} placeholders in a template string. |
+
+### 🐺 C2C/🧰 Core/Inpaint
+
+| Node | id | What it does |
+|---|---|---|
+| Inpaint Crop Pro | [`InpaintCropProMEC`](NODE_REFERENCE.md#inpaintcroppromec) | Crop around mask for inpainting (lquesada API + Wan 2.2 Animate aware). |
+| Inpaint Stitch Pro | [`InpaintStitchProMEC`](NODE_REFERENCE.md#inpaintstitchpromec) | Stitch the inpainted crop back into the original (lquesada-compatible) with blend overrides + color match; stitch_mode 'paste back', 'smart' (for a smart aspect crop) or 'context blend' (colour correction and lightness r... |
+| ProPainter — Temporal / Remove / Stitch / Refine / Flow | [`ProPainterMEC`](NODE_REFERENCE.md#propaintermec) | Unified ProPainter node. |
+
+### 🐺 C2C/🧰 Core/Layer Effects
+
+| Node | id | What it does |
+|---|---|---|
+| Layer Effects (C2C) | [`LayerEffectsMEC`](NODE_REFERENCE.md#layereffectsmec) | Photoshop-style layer effects in one node: drop shadow, outer glow, gradient map, gradient overlay, colour overlay, inner glow, inner shadow and stroke. |
+
+### 🐺 C2C/🧰 Core/Legacy
+
+| Node | id | What it does |
+|---|---|---|
+| BBox Crop (MEC) (legacy) | [`BBoxCrop`](NODE_REFERENCE.md#bboxcrop) | Deprecated — kept so old workflows load. |
+| BBox From Mask (MEC) (legacy) | [`BBoxFromMask`](NODE_REFERENCE.md#bboxfrommask) | Deprecated — kept so old workflows load. |
+| BBox Pad (MEC) (legacy) | [`BBoxPad`](NODE_REFERENCE.md#bboxpad) | Deprecated — kept so old workflows load. |
+| BBox To Mask (MEC) (legacy) | [`BBoxToMask`](NODE_REFERENCE.md#bboxtomask) | Deprecated — kept so old workflows load. |
+| Mask Composite Advanced (MEC) (legacy) | [`MaskCompositeAdvanced`](NODE_REFERENCE.md#maskcompositeadvanced) | Deprecated — kept so old workflows load. |
+| Mask Math (MEC) (legacy) | [`MaskMath`](NODE_REFERENCE.md#maskmath) | Deprecated — kept so old workflows load. |
+| Mask Preview Overlay (MEC) (legacy) | [`MaskPreviewOverlay`](NODE_REFERENCE.md#maskpreviewoverlay) | Deprecated — kept so old workflows load. |
+
+### 🐺 C2C/🧰 Core/Magnific
+
+| Node | id | What it does |
+|---|---|---|
+| OmniScale Creation Picker | [`MagnificCreationPicker`](NODE_REFERENCE.md#magnificcreationpicker) |  |
+| OmniScale Generate Image | [`MagnificGenerateImage`](NODE_REFERENCE.md#magnificgenerateimage) |  |
+| OmniScale Generate Music | [`MagnificGenerateMusic`](NODE_REFERENCE.md#magnificgeneratemusic) |  |
+| OmniScale Generate Video | [`MagnificGenerateVideo`](NODE_REFERENCE.md#magnificgeneratevideo) |  |
+| OmniScale Library Reference | [`MagnificLibraryReference`](NODE_REFERENCE.md#magnificlibraryreference) |  |
+| OmniScale Metadata (unpack) | [`MagnificMetadata`](NODE_REFERENCE.md#magnificmetadata) |  |
+| OmniScale Remove Background | [`MagnificRemoveBackground`](NODE_REFERENCE.md#magnificremovebackground) |  |
+| OmniScale Retouch (inpaint) | [`MagnificRetouch`](NODE_REFERENCE.md#magnificretouch) |  |
+| OmniScale Save To (project/folder) | [`MagnificSaveTo`](NODE_REFERENCE.md#magnificsaveto) |  |
+| OmniScale Skin Enhancer | [`MagnificSkinEnhancer`](NODE_REFERENCE.md#magnificskinenhancer) |  |
+| OmniScale Stock Picker | [`MagnificStockPicker`](NODE_REFERENCE.md#magnificstockpicker) |  |
+| OmniScale Stock Search | [`MagnificStockSearch`](NODE_REFERENCE.md#magnificstocksearch) |  |
+| OmniScale Upscale Image | [`MagnificUpscaleImage`](NODE_REFERENCE.md#magnificupscaleimage) |  |
+| OmniScale Upscale Video | [`MagnificUpscaleVideo`](NODE_REFERENCE.md#magnificupscalevideo) |  |
+| OmniScale Voiceover (TTS) | [`MagnificVoiceover`](NODE_REFERENCE.md#magnificvoiceover) |  |
+
+### 🐺 C2C/🧰 Core/Mask
+
+| Node | id | What it does |
+|---|---|---|
+| Image Mask Editor (C2C) | [`ImageMaskEditorC2C`](NODE_REFERENCE.md#imagemaskeditorc2c) | Paint a mask over the image that actually reaches this node. |
+| Mask Placement — Prompt/Ref → Place → Track | [`MaskPlacementMEC`](NODE_REFERENCE.md#maskplacementmec) | Universal mask placement: source an alpha (wire a mask, or give a text prompt + SAM model and it segments the object for you), place it with a draggable 4-corner perspective quad, and propagate across the video. |
+| Mask Tools (C2C) | [`MaskToolsMEC`](NODE_REFERENCE.md#masktoolsmec) | Keyers and matte operations in one node: colour, luma and difference keys; grade (gain, gamma, clamp, invert); grow or shrink each side (left / right / up / down) with a feather; combine two mattes; gradient; grain; moti... |
+
+### 🐺 C2C/🧰 Core/Model Analysis
+
+| Node | id | What it does |
+|---|---|---|
+| VAE Inspect | [`VAEBlockInspectorMEC`](NODE_REFERENCE.md#vaeblockinspectormec) | Inspect a VAE's per-block weight statistics and outlier tensors, or compare two VAEs block by block (cosine similarity) - for checking merges and broken checkpoints. |
+
+### 🐺 C2C/🧰 Core/Paint
+
+| Node | id | What it does |
+|---|---|---|
+| Face Fixer | [`MECFaceFixer`](NODE_REFERENCE.md#mecfacefixer) | Auto face detection (YOLO11) + per-face crop + AI pre-upscale + context-aware sampling + smart blend with wildcard per-face prompts. |
+
+### 🐺 C2C/🧰 Core/Pipeline
+
+| Node | id | What it does |
+|---|---|---|
+| Mask + Matting | [`MaskOpsMEC`](NODE_REFERENCE.md#maskopsmec) | Production-grade segmentation + matting + AUTO-QUALITY + diagnostics in one node. |
+| Mask Refiner | [`MaskRefineMEC`](NODE_REFERENCE.md#maskrefinemec) | Unified, training-free mask refinement. |
+
+### 🐺 C2C/🧰 Core/Plate
+
+| Node | id | What it does |
+|---|---|---|
+| PAR Desqueeze (anamorphic → square px) | [`PARDesqueezeMEC`](NODE_REFERENCE.md#pardesqueezemec) | Convert an anamorphic plate to SQUARE pixels before AI processing (Nuke: 4448x3840 @ PAR 1.7266 → 7680x3840 at 2:1). |
+| PAR Resqueeze (back to plate) | [`PARResqueezeMEC`](NODE_REFERENCE.md#parresqueezemec) | Return an AI-processed square-pixel frame to the plate's original pixel dimensions (PAR metadata is reapplied in Nuke). |
+
+### 🐺 C2C/🧰 Core/Preview
+
+| Node | id | What it does |
+|---|---|---|
+| Video Comparer — Player + Wipe/Diff/Scopes | [`VideoComparerC2C`](NODE_REFERENCE.md#videocomparerc2c) | Nuke-grade A/B comparer for image / video / EXR / audio. |
+| Video Frame Player | [`VideoFramePlayerMEC`](NODE_REFERENCE.md#videoframeplayermec) | Video scrubber + drag-crop + integrated resize. |
+
+### 🐺 C2C/🧰 Core/Prompt Relay
+
+| Node | id | What it does |
+|---|---|---|
+| Prompt Relay Advanced Options | [`PromptRelayAdvancedOptionsC2C`](NODE_REFERENCE.md#promptrelayadvancedoptionsc2c) | Optional per-stream tuning for the Prompt Relay encoders. |
+| Prompt Relay Encode | [`PromptRelayEncodeC2C`](NODE_REFERENCE.md#promptrelayencodec2c) | Unified Prompt Relay encoder (native / smart / kijai). |
+| Prompt Relay Restore (Kijai) | [`PromptRelayRestoreKijaiC2C`](NODE_REFERENCE.md#promptrelayrestorekijaic2c) | Undo a Prompt Relay (Kijai) patch — restores the original cross_attn.forward. |
+
+### 🐺 C2C/🧰 Core/Render Farm
+
+| Node | id | What it does |
+|---|---|---|
+| C2C Farm Cluster Status | [`C2C_ClusterStatus`](NODE_REFERENCE.md#c2c_clusterstatus) | Live render-farm capacity (queue depth, VRAM, reachability) as JSON. |
+| C2C Farm Job History (Audit Log) | [`C2C_JobHistory`](NODE_REFERENCE.md#c2c_jobhistory) | Render-farm audit log: per-user/status stats + recent jobs table. |
+| C2C Farm Submit — Remote Render | [`C2C_Submit`](NODE_REFERENCE.md#c2c_submit) | Dispatch a full workflow JSON to a remote ComfyUI render-farm backend. |
+
+### 🐺 C2C/🧰 Core/SAM
+
+| Node | id | What it does |
+|---|---|---|
+| SAM Mask Generator — Points + BBox + Text | [`SAMMaskGeneratorMEC`](NODE_REFERENCE.md#sammaskgeneratormec) | Generate masks using SAM with point + bounding box prompts, iterative refinement, and VRAM offload support. |
+| SAM Model Loader — SAM2.1 / SAM3 | [`SAMModelLoaderMEC`](NODE_REFERENCE.md#sammodelloadermec) | Load SAM 2.1 or SAM 3 model. |
+| SAM Multi-Mask Picker — 3 candidates + scores | [`SamMultiMaskPickerMEC`](NODE_REFERENCE.md#sammultimaskpickermec) | Run SAM inference to get 3 candidate masks with confidence scores. |
+
+### 🐺 C2C/🧰 Core/Sampling
+
+| Node | id | What it does |
+|---|---|---|
+| AsymFlow Sampler Patch (Lakonik signal-shift) | [`AsymFlowSamplerPatch`](NODE_REFERENCE.md#asymflowsamplerpatch) | Replace the model's flow-matching schedule with AsymFlow's shifted-signal-ratio mapping (sigma = r/(shift+r), r=sqrt(t/(1-t))). |
+
+### 🐺 C2C/🧰 Core/Segmentation
+
+| Node | id | What it does |
+|---|---|---|
+| LocateAnything Grounding (MEC) | [`LocateAnythingGroundingMEC`](NODE_REFERENCE.md#locateanythinggroundingmec) | Find things in an image by describing them in words - 'the person on the left', 'red car', 'coffee cup' - and get back bounding boxes. |
+| LocateAnything → SAM Prompt (MEC) | [`LocateAnythingToSAMMEC`](NODE_REFERENCE.md#locateanythingtosammec) | Turn bounding boxes into filled rectangles a SAM node can take as box prompts. |
+| Semantic Segment — Face / Clothes Parsing | [`SemanticSegmentMEC`](NODE_REFERENCE.md#semanticsegmentmec) | Semantic face / clothes parsing using SegFormer. |
+
+### 🐺 C2C/🧰 Core/Stabilization
+
+| Node | id | What it does |
+|---|---|---|
+| Video Stabilizer | [`VideoStabilizerMEC`](NODE_REFERENCE.md#videostabilizermec) | Video stabilizer: classic feature tracking, RAFT optical flow or OpenCV dense flow, with presets. |
+| Video Stabilizer — Auto (deprecated) | [`VideoStabilizerAutoMEC`](NODE_REFERENCE.md#videostabilizerautomec) | DEPRECATED — use VideoStabilizerMEC (method=auto) instead. |
+| Video Stabilizer — Classic (deprecated) | [`VideoStabilizerClassicMEC`](NODE_REFERENCE.md#videostabilizerclassicmec) | DEPRECATED — use VideoStabilizerMEC (method=classic) instead. |
+| Video Stabilizer — Dense Flow (deprecated) | [`VideoStabilizerFlowMEC`](NODE_REFERENCE.md#videostabilizerflowmec) | DEPRECATED — use VideoStabilizerMEC. |
+
+### 🐺 C2C/🧰 Core/Temporal
+
+| Node | id | What it does |
+|---|---|---|
+| Fluid Shot Decoder (Restore Timing) | [`FluidShotDecoderMEC`](NODE_REFERENCE.md#fluidshotdecodermec) | Selects exactly the frames that correspond to the ORIGINAL input frames using the encoder's TIMEMAP — restores the original frame count and slow-to-fast pacing. |
+| Fluid Shot Encoder (Temporal Normalizer) | [`FluidShotEncoderMEC`](NODE_REFERENCE.md#fluidshotencodermec) | Analyzes optical-flow speed and inserts in-between frames on fast sections so motion per frame is constant — safe for Wan-style AI video. |
+
+### 🐺 C2C/🧰 Core/Tiling
+
+| Node | id | What it does |
+|---|---|---|
+| Identity Lock — refine without moving | [`IdentityLockMEC`](NODE_REFERENCE.md#identitylockmec) | Refine every pixel without letting anything move. |
+| Tile Merge | [`TileMergeMEC`](NODE_REFERENCE.md#tilemergemec) | Blend the tiles back into one clip, in float32, with no seam. |
+| Tile Plan | [`TilePlanMEC`](NODE_REFERENCE.md#tileplanmec) | Decide the tiles once for a whole clip. |
+| Tile Split | [`TileSplitMEC`](NODE_REFERENCE.md#tilesplitmec) | Split a clip into overlapping tiles, emitted as a batch so any refiner can process them. |
+
+### 🐺 C2C/🧰 Core/Utils
+
+| Node | id | What it does |
+|---|---|---|
+| Folder Version Check (deprecated) | [`FolderIncrementerReset`](NODE_REFERENCE.md#folderincrementerreset) | Report the current version state for a label/date folder. |
+| Folder Version Control (check / set) | [`FolderVersionControl`](NODE_REFERENCE.md#folderversioncontrol) | Check or set the version counter for a label/date folder. |
+| Folder Version Incrementer | [`FolderIncrementer`](NODE_REFERENCE.md#folderincrementer) | Auto-incrementing per-label / per-date version counter. |
+| Folder Version Set (deprecated) | [`FolderIncrementerSet`](NODE_REFERENCE.md#folderincrementerset) | Reserve version slots by creating empty placeholder directories under <base>/<label>/<MM-DD-YYYY>/. |
+| Folder Version Variant (per output) | [`FolderVersionVariant`](NODE_REFERENCE.md#folderversionvariant) | Give one output its own prefix or suffix while keeping the version the Folder Version Incrementer decided. |
+| Parameter History | [`ParameterHistoryMEC`](NODE_REFERENCE.md#parameterhistorymec) | Query the parameter history database. |
+
+### 🐺 C2C/🧰 Core/VAE
+
+| Node | id | What it does |
+|---|---|---|
+| VAE Merge | [`VAEMergeMEC`](NODE_REFERENCE.md#vaemergemec) | Merge 2 or 3 VAEs with 13 strategies (weighted_sum, sigmoid, geometric, slerp, dare_ties, …). |
+
+### 🐺 C2C/🧰 Core/VFX
+
+| Node | id | What it does |
+|---|---|---|
+| Optical Flow Re-Vector (MEC) | [`OpticalFlowMEC`](NODE_REFERENCE.md#opticalflowmec) | Dense optical flow re-vector. |
+
+### 🐺 C2C/🧰 Core/Vault
+
+| Node | id | What it does |
+|---|---|---|
+| C2C Vault (protected subgraph) | [`C2C_SecureSubgraph`](NODE_REFERENCE.md#c2c_securesubgraph) | A C2C Vault: a subgraph whose inside is encrypted. |
+| C2C Vault (protected subgraph, saves) | [`C2C_SecureSubgraphOutput`](NODE_REFERENCE.md#c2c_securesubgraphoutput) | A C2C Vault: a subgraph whose inside is encrypted. |
+| C2C Vault — Locked (password to run) | [`C2C_VaultLocked`](NODE_REFERENCE.md#c2c_vaultlocked) | Run a password-locked subgraph. |
+| C2C Vault — Sealed (runs without password) | [`C2C_VaultSealed`](NODE_REFERENCE.md#c2c_vaultsealed) | Sealed subgraph - RUNS WITHOUT A PASSWORD, so you can hand a workflow to someone and they just use it. |
+| Vault input (edit view) | [`C2C_VaultEditInput`](NODE_REFERENCE.md#c2c_vaulteditinput) | A vault input in the vault's edit view. |
+| Vault output (edit view) | [`C2C_VaultEditOutput`](NODE_REFERENCE.md#c2c_vaulteditoutput) | A vault output in the vault's edit view. |
+
+### 🐺 C2C/🧰 Core/Video
+
+| Node | id | What it does |
+|---|---|---|
+| AV Handles — Add / Trim | [`AVHandlesMEC`](NODE_REFERENCE.md#avhandlesmec) | Add repeated frames at the head (or tail) to stabilise a video model, then trim exactly those back off afterwards — without retyping the number. |
+| Load Images Path (C2C) | [`LoadImagesPathC2C`](NODE_REFERENCE.md#loadimagespathc2c) |  |
+| Load Video (C2C) | [`LoadVideoC2C`](NODE_REFERENCE.md#loadvideoc2c) |  |
+| Mask Track — Motion/Propagate/Anchor/Consistency/Stabilize | [`MaskTrackerMEC`](NODE_REFERENCE.md#masktrackermec) | Unified video-mask tracker. |
+| Save Video (C2C) | [`SaveVideoC2C`](NODE_REFERENCE.md#savevideoc2c) | Save an IMAGE batch as H.264/H.265/ProRes/DNxHR/FFV1/WebM/GIF/WebP or 16-bit PNG / EXR sequences. |
+| Video Info (C2C) | [`VideoInfoC2C`](NODE_REFERENCE.md#videoinfoc2c) |  |
+
+### 🐺 C2C/🧰 Core/Viewer helpers
+
+| Node | id | What it does |
+|---|---|---|
+| Viewer helper: Detect | [`C2CViewerDetect`](NODE_REFERENCE.md#c2cviewerdetect) | Viewer helper (hidden): finds objects on one frame (text, points or boxes) for the Mask + Matting viewer and writes one mask per object. |
+| Viewer helper: Plate Proxy | [`C2CViewerPlateProxy`](NODE_REFERENCE.md#c2cviewerplateproxy) | Viewer helper (hidden): writes the plate as proxy frames (at most 960 px, at most 240 frames) for the Mask + Matting viewer. |
+| Viewer helper: Result | [`C2CViewerResult`](NODE_REFERENCE.md#c2cviewerresult) | Viewer helper (hidden): writes the rendered alpha and the plate as proxy frames and measures QC for the Mask + Matting viewer. |
+
+## Merged and removed nodes
+
+These ids were folded into the nodes above (or moved to another pack). A saved workflow that uses one loads with the replacement node, its links and values carried over (ComfyUI's node replacement; C2C also migrates API prompts).
+
+| Old id | Now |
+|---|---|
+| `BackgroundRemoverMEC` | `MaskOpsMEC` |
+| `BatchVersionManagerMEC` | `FolderIncrementer` |
+| `BBoxSmooth` | `MaskTrackerMEC` |
+| `C2CACESTonemap` | `NukeMax_HDRToneMap` |
+| `C2CColorSpaceConvert` | `ColorSpaceConvertMEC` |
+| `DimensionsSnapMEC` | `AspectPresetMEC` |
+| `DrawShapeMEC` | `ImageMaskEditorC2C` |
+| `EdgeSpreadMEC` | `MaskToolsMEC` |
+| `ImageBatchSplitMEC` | `ImageBatchSliceMEC` |
+| `InpaintMaskPrepareMEC` | `InpaintCropProMEC` |
+| `InpaintPasteBackMEC` | `InpaintStitchProMEC` |
+| `LayerEffectColorOverlayMEC` | `LayerEffectsMEC` |
+| `LayerEffectDropShadowMEC` | `LayerEffectsMEC` |
+| `LayerEffectGradientMapMEC` | `LayerEffectsMEC` |
+| `LayerEffectGradientOverlayMEC` | `LayerEffectsMEC` |
+| `LayerEffectInnerGlowMEC` | `LayerEffectsMEC` |
+| `LayerEffectInnerShadowMEC` | `LayerEffectsMEC` |
+| `LayerEffectOuterGlowMEC` | `LayerEffectsMEC` |
+| `LayerEffectStrokeMEC` | `LayerEffectsMEC` |
+| `LoadEXRMEC` | `NukeMax_EXRSequenceLoad` |
+| `LoadVideoPathC2C` | `LoadVideoC2C` |
+| `LuminanceKeyerMEC` | `MaskToolsMEC` |
+| `MaskAreaProbeMEC` | `ImageStatsProbeMEC` |
+| `MaskBatchCombineMEC` | `MaskToolsMEC` |
+| `MaskDrawFrame` | `ImageMaskEditorC2C` |
+| `MaskEditMEC` | `MaskToolsMEC` |
+| `MaskFromColorMEC` | `MaskToolsMEC` |
+| `MaskGradientMEC` | `MaskToolsMEC` |
+| `MaskGrainMEC` | `MaskToolsMEC` |
+| `MaskMattingMEC` | `MaskOpsMEC` |
+| `MaskMotionBlurMEC` | `MaskToolsMEC` |
+| `MaskPropagateVideo` | `MaskTrackerMEC` |
+| `MaskTemporalMEC` | `MaskTrackerMEC` |
+| `MaskTransformXY` | `MaskToolsMEC` |
+| `MECAdvancedPaintCanvas` | `ImageMaskEditorC2C` |
+| `MECBuilderSampler` | `KSampler` |
+| `MECContextInpainter` | `InpaintStitchProMEC` |
+| `MECToneRefiner` | `NukeMax_Grade` |
+| `MotionMaskTrackerMEC` | `MaskTrackerMEC` |
+| `PointsMaskEditor` | `ImageMaskEditorC2C` |
+| `PromptRelayEncodeKijaiC2C` | `PromptRelayEncodeC2C` |
+| `PromptRelayEncodeSmartC2C` | `PromptRelayEncodeC2C` |
+| `ProPainterTemporalMEC` | `ProPainterMEC` |
+| `SAMViTMattePipelineMEC` | `MaskOpsMEC` |
+| `SaveEXRMEC` | `NukeMax_EXRSequenceSave` |
+| `SeCMatAnyonePipelineMEC` | `MaskOpsMEC` |
+| `ShuffleMEC` | `MaskToolsMEC` |
+| `SmartImageCropMEC` | `InpaintCropProMEC` |
+| `SmartImageStitcherMEC` | `InpaintStitchProMEC` |
+| `SplineMaskEditorMEC` | `ImageMaskEditorC2C` |
+| `SplineMaskMEC` | `ImageMaskEditorC2C` |
+| `SplineMaskTrackerMEC` | `MaskTrackerMEC` |
+| `SplinePathFlowMaskMEC` | `ImageMaskEditorC2C` |
+| `TclParseMEC` | `NukeMax_NkScriptParse` |
+| `TclSerializeMEC` | `NukeMax_NkScriptSerialize` |
+| `TemporalAnchorMEC` | `MaskTrackerMEC` |
+| `TemporalConsistencyCheckerMEC` | `MaskTrackerMEC` |
+| `VAECleanMEC` | `C2CVAEQualityDecode` |
+| `VAELatentInspectorMEC` | `ImageStatsProbeMEC` |
+| `VAESimilarityAnalyserMEC` | `VAEBlockInspectorMEC` |
+| `VectorRotoMEC` | `ImageMaskEditorC2C` |
+| `VideoFrameExtractorMEC` | `ImageBatchSliceMEC` |
+| `VideoMaskEditorMEC` | `ImageMaskEditorC2C` |
+| `VideoStabilizerAutoMEC` | `VideoStabilizerMEC` |
+| `VideoStabilizerClassicMEC` | `VideoStabilizerMEC` |
+| `VideoStabilizerFlowMEC` | `VideoStabilizerMEC` |
+| `InsightStatusMEC` | removed: per-node time and memory show as the Insight badges under each node. |
+| `IntegrityStatusMEC` | removed: the integrity report is in the Diagnostics sidebar, Integrity tab. |
+
+## Feature notes
+
+In-depth notes on the larger nodes (hand-written; parameters are in NODE_REFERENCE.md).
 
 #### SAM Model Loader (MEC)
 
@@ -337,26 +672,6 @@ Run SAM inference and view **all 3 candidate masks** side-by-side with IoU score
 **Outputs:** `selected_mask`, `all_masks` (3×H×W), `selected_index`, `scores` (JSON), `info` (with `model_status`)
 
 > **Who is it for?** When SAM gives you 3 options and you don't know which is best — see them all at once, pick with one click, and pipe the winner downstream.
-
----
-
-#### Unified Segmentation (MEC)
-
-One-node dispatcher for **SAM 2.1, SAM 3, SeC, VideoMaMa** with automatic image vs. video detection.
-
-> **SeC models currently run on SAM 3 + text prompt.** The SeC reasoning model is not wired into this node yet
-> (ledger L9.152); the ComfyUI log says so (the `info` output does not yet). VideoMaMa is non-commercial (CC BY-NC 4.0) and is
-> not bundled (L9.151).
-
-| Parameter | Default | Description |
-|-----------|---------|-------------|
-| `model_name` | — | Model selector |
-| `points_json` / `bbox_json` | `""` | Point and box prompts |
-| `precision` | `fp16` | `fp16` / `bf16` / `fp32` |
-| `attention_mode` | `auto` | `sdpa` / `flash_attn` / `sage_attn` / `xformers` |
-| `text_prompt` | — | (optional) Text prompt for grounding models |
-
-**Outputs:** `masks`, `best_score`, `info`
 
 ---
 
@@ -447,8 +762,6 @@ Face / body / clothes semantic parsing using SegFormer. Select classes by name t
 
 ---
 
-### Alpha Matting
-
 #### Remove background (a backend of Mask + Matting)
 
 One-click background removal using RMBG-2.0 or BiRefNet. Since L7.65 P05 this is Mask + Matting (`MaskOpsMEC`) with
@@ -476,62 +789,6 @@ other Mask + Matting outputs.
 
 ---
 
-#### Matting Node (MEC)
-
-Unified alpha matting with **7 backends**. Takes a coarse mask and returns compositing-grade alpha.
-
-| Backend | Quality | Requires | Best for |
-|---------|---------|----------|----------|
-| `vitmatte_small` / `vitmatte_base` | ★★★★★ | `transformers` | Hair, fur, glass, transparency |
-| `matanyone2` | ★★★★★ | Model download | Video matting, temporal consistency |
-| `rvm_mobilenetv3` / `rvm_resnet50` | ★★★★☆ | Model download | Real-time video matting |
-| `cutie` | ★★★★☆ | Model download | Video object cutout |
-| `sam_hq` | ★★★☆☆ | Model download | Quick high-quality mask |
-
-| Parameter | Default | Description |
-|-----------|---------|-------------|
-| `backend` | `auto` | Backend selection (auto picks best available) |
-| `edge_radius` | `15` | Trimap unknown-band width |
-| `erode_dilate` | `0` | Pre-process mask morphology (−50 to +50) |
-| `n_warmup` | `5` | Warmup frames for video backends |
-
-**Outputs:** `rgb` (premultiplied), `alpha_mask`
-
----
-
-#### ViTMatte Edge Refiner (MEC)
-
-Standalone edge refinement — feed any coarse mask and get clean edges.
-
-| Method | Quality | Requires | Best for |
-|--------|---------|----------|----------|
-| `vitmatte` | ★★★★★ | `transformers` | Hair, fur, glass, complex edges |
-| `multi_scale_guided` | ★★★★☆ | `opencv-python` | General high-quality |
-| `color_aware` | ★★★★☆ | `opencv-python` | Challenging lighting |
-| `guided_filter` | ★★★☆☆ | `opencv-python` | Fast good-quality |
-| `laplacian_blend` | ★★★☆☆ | `opencv-python` | Smooth blending |
-| `gaussian_blur` | ★★☆☆☆ | (none) | Simple fallback |
-
----
-
-#### Trimap Generator (MEC)
-
-Generates a 3-region trimap (white = foreground, black = background, gray = unknown) for ViTMatte input.
-
-| Parameter | Default | Description |
-|-----------|---------|-------------|
-| `edge_radius` | `15` | Width of the unknown boundary in pixels |
-| `inner_erosion` | `1.0` | Foreground erosion scale (<1 tighter, >1 wider) |
-| `outer_dilation` | `1.5` | Background dilation scale |
-| `smooth` | `0.0` | Gaussian smoothing of boundaries |
-| `threshold` | `0.5` | Binarization threshold |
-
-**Outputs:** `trimap`, `foreground`, `unknown`
-
----
-
-### Keying
-
 #### Luma key — Mask Tools (C2C)
 
 In **Mask Tools (C2C)** with `mode` = `key: luma` (this was the Luminance Keyer node; saved workflows migrate automatically). Its controls carry the prefix `luma_key_`, e.g. `luma_key_mode`, `luma_key_low`.
@@ -553,62 +810,6 @@ Professional luminance keyer inspired by Nuke's LumaKeyer. Extracts a matte base
 **Outputs:** `mask`, `info` (mode, thresholds, luminance stats, per-frame coverage)
 
 > **Who is it for?** VFX artists pulling luminance keys (sky replacement, highlight isolation, shadow grading), colorists building luminance-driven masks for selective color grading, anyone who needs brightness-based masking without a model.
-
----
-
-### Mask Editing & Transform
-
-#### Mask Transform XY (MEC)
-
-Independent per-axis mask manipulation: erode/expand, directional blur, offset, feather, threshold, invert.
-
-| Parameter | Default | Description |
-|-----------|---------|-------------|
-| `expand_x` / `expand_y` | `0` | Per-axis morphological expand (negative = erode) |
-| `blur_x` / `blur_y` | `0.0` | Per-axis directional Gaussian blur |
-| `offset_x` / `offset_y` | `0` | Translate mask in pixels |
-| `feather` | `0.0` | Isotropic edge feathering |
-| `threshold` | `0.0` | Binarization threshold (0 = disabled) |
-| `invert` | `false` | Invert the mask |
-
----
-
-#### Mask Draw Frame (MEC)
-
-Low-level shape drawing. Accepts a `shape` + JSON `shape_params_json`. Supports all 12 shapes (circle, rectangle, ellipse, polygon, line, triangle, star, diamond, cross, rounded_rectangle, heart, arrow) with SDF rendering, feathering, rotation, and blend operations.
-
-> **Prefer Draw Shape (MEC)** for new workflows — it exposes all parameters as named inputs instead of raw JSON.
-
----
-
-#### Draw Shape (MEC) ★ New
-
-Unified 12-shape drawing node with a single dropdown. All parameters are visible as named inputs with tooltips — irrelevant ones are ignored per shape. Replaces the 5 legacy per-shape wrapper nodes.
-
-| Parameter | Default | Description |
-|-----------|---------|-------------|
-| `shape` | `circle` | Dropdown: circle, rectangle, ellipse, polygon, line, triangle, star, diamond, cross, rounded_rectangle, heart, arrow |
-| `cx` / `cy` | `256` | Center position (center-based shapes) |
-| `radius` | `50` | Circle radius, triangle/heart size |
-| `size_w` / `size_h` | `200` / `100` | Rectangle, rounded rect, diamond, arrow width/height |
-| `rx` / `ry` | `100` / `50` | Ellipse radii |
-| `top_left_x` / `top_left_y` | `100` | Rectangle/line start position |
-| `x2` / `y2` | `400` | Line end position |
-| `thickness` | `5` | Line, cross thickness |
-| `outer_r` / `inner_r` | `100` / `40` | Star radii |
-| `num_points` | `5` | Star/polygon point count |
-| `corner_radius` | `20` | Rounded rectangle corners |
-| `arrow_length` / `head_length` / `head_width` | — | Arrow dimensions |
-| `points_json` | — | Polygon vertices: `[[x1,y1], ...]` |
-| `value` | `1.0` | Fill intensity |
-| `feather` | `0.0` | Edge softness |
-| `rotation` | `0.0` | Rotation in degrees |
-| `operation` | `set` | `set` / `add` / `subtract` / `max` / `min` |
-| `batch_size` | `1` | Number of mask frames |
-
-**Optional:** `coords_json` (per-frame position override), `existing_mask`, `reference_image`
-
-**Output:** `mask` (MASK)
 
 ---
 
@@ -785,25 +986,6 @@ nodes give those nodes' results bit for bit (`tests/test_consolidation_inpaint.p
 d97cc13).
 
 ---
-
-#### Image Comparer (MEC)
-
-Interactive before/after comparison widget with 3 modes: drag-slider split, overlay blend, and difference heatmap.
-
-| Parameter | Default | Description |
-|-----------|---------|-------------|
-| `image_a` | — | Left / "before" image |
-| `image_b` | — | Right / "after" image |
-| `label_a` | `"Before"` | (optional) Label for image A |
-| `label_b` | `"After"` | (optional) Label for image B |
-
-**Modes:** ◧ Compare (drag slider) · ⊕ Overlay (alpha blend) · ≠ Diff (heatmap)
-
-> **Who is it for?** Quick visual comparison of before/after results — inpainting QA, model comparison, parameter tuning.
-
----
-
-### Batch & Video
 
 #### Load Video (C2C): images, EXRs and sequences (2026-10-31)
 
@@ -1198,93 +1380,6 @@ node.
   touched. Setting: *C2C › Graph › Repair mistyped wires* (on by default). Checked on frontends 1.53.10 and 1.57.0, in
   both renderers.
 
-#### Video Mask Editor (MEC)
-
-Since L7.65 P01 this is the **Image Mask Editor's `video` mode** (its controls are `video_*`; saved workflows migrate on
-load); everything below works there the same way.
-
-Paint masks on the frames of a video. Run the workflow once so the editor has frames, then click *Open Video Mask
-Editor* on the node.
-
-- **Frame by frame.** A frame you paint becomes a keyframe, and its mask is used on that frame only. Unpainted frames
-  follow two choices, made in the editor (or on the node):
-  - *Between two painted frames:* morph the shape, blend, hold the previous one, or none (frame by frame).
-  - *Before the first / after the last:* empty (default) or hold the nearest painted frame.
-  - With `input_mask` connected (for example a tracked mask), every frame these rules leave empty keeps its own frame
-    of the input mask.
-- **What you see is what the node outputs.** Every frame shows its real mask, with a label: painted, interpolated
-  (frames 2-6), held, input mask, or no mask. Painting on an unpainted frame starts from the mask shown and turns that
-  frame into a keyframe. The timeline marks keyframes and shades the interpolated and held spans.
-- **Full resolution.** Frames are shown at the clip's own size (the *frame size* setting caps it, 4096 px by default),
-  and the mask is painted at the clip's resolution.
-- **Tools:** brush, eraser, fill, lasso, rectangle, ellipse, polygon, star, line, roto spline; add / subtract (X, or
-  Alt while painting); undo / redo; copy the nearest keyframe; clear, fill, invert the frame.
-- **Views:** overlay (5 colours, opacity), mask (white on black), matte (the frame cut out by the mask). Onion skin
-  shows the neighbouring keyframes.
-- **Saved as you go.** Keyframes are written to `input/c2c_video_masks/<session>/`, so they survive a restart of
-  ComfyUI. *Revert* undoes every change made since the editor opened; *Done* closes it.
-- **Keys:** B E G L R C P T N Y tools, [ ] size, Left / Right frame, Shift+Left / Right previous / next keyframe,
-  Home / End, / play, K make keyframe, Delete clear, I invert, V view, O onion skin, Shift+F fit, Ctrl+Z /
-  Ctrl+Shift+Z undo / redo, wheel zoom, Space or middle-drag pan.
-- Works in both renderers and inside subgraphs.
-
-Until 2026-10-23 the first / last painted frame was held over the whole clip, so one painted frame masked every
-frame, and a connected `input_mask` was reduced to its first frame. Saved workflows now get *empty* outside the
-painted frames; choose *hold* on `outside_keys` for the old result.
-
-#### Mask Batch Manager (MEC)
-
-Manipulate mask batches for video workflows.
-
-| Operation | Description |
-|-----------|-------------|
-| `slice` | Extract frame range `[start:end]` |
-| `pick_frames` | Select specific frames by index |
-| `repeat` | Repeat mask N times |
-| `reverse` | Reverse frame order |
-| `concat` | Join two mask batches |
-| `interleave` | Alternate frames from two batches |
-| `insert` | Insert mask_b at position |
-| `remove` | Remove frame at index |
-
----
-
-#### Mask Propagate Video (MEC)
-
-Draw mask on frame 1 → propagate across all frames.
-
-| Mode | Description |
-|------|-------------|
-| `static` | Same mask on every frame |
-| `fade` | Linear fade to zero |
-| `scale_linear` | Linear scale over time |
-| `optical_flow` | Track mask using optical flow |
-| `sam2_video` | Use SAM2 video predictor for tracking |
-
----
-
-#### Temporal Anchor System (MEC)
-
-Mask interpolation over time using Signed Distance Fields (SDF). Define masks on a few key frames and let the node smoothly morph between them across the full video.
-
-**How it works:** Computes an SDF for each anchor mask (distance from boundary, negative inside, positive outside), then interpolates the SDF fields between anchor frames using configurable easing. The zero-crossing of the blended SDF produces the interpolated mask boundary. Optional optical flow refinement (Farneback or FFT phase correlation) warps the SDF to follow motion.
-
-| Parameter | Default | Description |
-|-----------|---------|-------------|
-| `anchor_masks` | — | One mask per anchor frame (A, H, W) |
-| `anchor_frames` | `"0"` | Comma-separated frame indices (e.g. `"0,10,30"`) |
-| `total_frames` | `30` | Total output frames |
-| `easing` | `smooth_step` | `linear` / `ease_in` / `ease_out` / `smooth_step` |
-| `sdf_iterations` | `64` | SDF diffusion iterations (more = more accurate) |
-| `flow_refinement` | `false` | Enable optical flow refinement |
-| `images` | (optional) | Video frames for optical flow estimation |
-
-**Outputs:** `full_masks` (total_frames × H × W), `confidence` (per-frame float list), `info`
-
-> **Who is it for?** Video editors who need smooth mask morphing between keyframes — rotoscoping helpers, animated mask transitions, temporal mask interpolation where SAM tracking is overkill.
-
----
-
 #### Batch Range (C2C) — single frame
 
 Extract a single frame from a video batch with **Batch Range (C2C)** (`ImageBatchSliceMEC`, C2C/Helpers).
@@ -1315,8 +1410,6 @@ All BBox nodes clamp outputs to valid canvas bounds — no negative dimensions, 
 
 ---
 
-### Diagnostics
-
 #### Mask Failure Explainer (MEC)
 
 Diagnose why a mask failed and get actionable fix suggestions. Pure tensor analysis — no models, no VRAM.
@@ -1346,8 +1439,6 @@ Each metric contributes up to 20 points to a severity score (0–100). The node 
 > **Who is it for?** Anyone whose mask looks wrong and doesn't know why. Plug in your image + bad mask, read the diagnosis, follow the suggestion. Especially useful for beginners learning which segmentation method works for which scenario.
 
 ---
-
-### Interactive Editor
 
 #### Image Mask Editor (C2C)
 
@@ -1382,75 +1473,6 @@ image) come after `mask` / `preview` / `info`, so saved links keep their slots.
 
 **Outputs:** `mask` (MASK), `preview` (IMAGE, mask tinted over the input) and `info` (STRING: frames, stored masks, notes).
 
-#### Points Mask Editor (MEC)
-
-Full-featured interactive canvas editor for placing points and bounding boxes directly on your image.
-
-| Action | Effect |
-|--------|--------|
-| **Left click** | Add positive point (foreground) |
-| **Right click** | Add negative point (background) |
-| **CTRL + Left drag** | Draw positive bounding box (green) |
-| **CTRL + Right drag** | Draw negative bounding box (red) |
-| **Shift + Click** | Delete element under cursor |
-| **Scroll wheel** | Adjust point radius |
-| **CTRL + Scroll** | Zoom in/out |
-| **Middle mouse drag** | Pan canvas |
-| **Delete / Backspace** | Delete hovered element |
-| **CTRL + Z / CTRL + Shift + Z** | Undo / Redo |
-| **R** | Reset view |
-
-**Toolbar:** Pill counters for +pts / −pts / bbox count / radius. Buttons for **✕ Pts**, **✕ BBox**, **✕ All**, **↶ Undo / Redo ↷**, **▣ Fit**.
-
-**Outputs (8):**
-
-| Output | Type | Description |
-|--------|------|-------------|
-| `mask` | MASK | Rendered points/bboxes mask |
-| `positive_coords` | STRING | `[{"x":int,"y":int}, ...]` for SAM |
-| `negative_coords` | STRING | `[{"x":int,"y":int}, ...]` for SAM |
-| `bboxes` | BBOX | Positive bounding boxes |
-| `neg_bboxes` | BBOX | Negative bounding boxes (SAM3) |
-| `points_json` | STRING | Full point data for SAM Mask Generator |
-| `bbox_json` | STRING | Primary bbox for SAM Mask Generator |
-| `primary_bbox` | BBOX | `[x,y,w,h]` for BBox pipeline |
-
-Connect a `reference_image` to see it as the editor background for precise placement.
-
----
-
-#### Spline Mask Editor (MEC) ★ New
-
-Since L7.65 P01 this is the **Image Mask Editor's `spline` mode** (controls `spline_*`; `spline_fill` = `flow pattern`
-is the former flow path) and Mask Track's `spline_track` (the former track mode); saved workflows migrate on load.
-
-Interactive canvas for drawing spline-based masks directly on your image. Supports Catmull-Rom (smooth curves through points), Bezier (with tangent handles), and polyline (straight segments) modes.
-
-| Action | Effect |
-|--------|--------|
-| **Left click** | Add control point (or close path by clicking first point) |
-| **Shift + click** | Delete point under cursor |
-| **Ctrl + click** | Insert point on nearest curve segment |
-| **Right-click** | Context menu (Delete Point, Open/Close, Smooth/Sharp) |
-| **S key** | Toggle smooth / sharp interpolation for current path |
-| **Scroll wheel** | Zoom in/out |
-| **Middle mouse drag** | Pan canvas |
-
-**Key improvements:** Normalized [0,1] coordinates (resolution-independent), zoom-relative point sizes, segment insertion, close-by-clicking-first-point affordance (highlighted orange), property-based persistence.
-
-| Parameter | Default | Description |
-|-----------|---------|-------------|
-| `spline_type` | `catmull_rom` | `catmull_rom` / `bezier` / `polyline` |
-| `closed` | `true` | Close the spline loop for filled region |
-| `smoothing` | `true` | Enable spline smoothing |
-| `samples_per_segment` | `20` | Curve resolution (higher = smoother) |
-| `feather_radius` | `0.0` | Gaussian edge softness |
-| `invert` | `false` | Fill outside spline instead of inside |
-
-**Outputs:** `mask` (MASK), `coords_json` (SAM-compatible points), `spline_data_out` (for Motion Mask Tracker)
-
----
-
 #### Mask Track: spline keyframes and box smoothing
 
 **Mask Track** has two more modes (L7.65 P01; the controls of each mode are prefixed and shown only in that mode):
@@ -1463,34 +1485,6 @@ Interactive canvas for drawing spline-based masks directly on your image. Suppor
 The three new outputs (`bboxes`, `primary_bbox`, `spline_data_out`) come after the old ones, so saved links keep their
 slots. Mask Tools gained `transform` the same way: grow, blur and offset per axis, feather, threshold and invert (Mask
 Edit's `transform`, the same Mask Transform XY code).
-
-#### Motion Mask Tracker (MEC) ★ New
-
-Per-frame motion detection with 4 independent methods and camera stabilization. Feed a video batch — get a motion mask highlighting what moved between frames.
-
-| Method | Description |
-|--------|-------------|
-| `pixel_diff` | Absolute per-pixel brightness change |
-| `optical_flow` | Farneback dense flow or phase correlation |
-| `background_sub` | Static background model from first N frames |
-| `histogram_diff` | Per-region color histogram distance |
-
-| Parameter | Default | Description |
-|-----------|---------|-------------|
-| `camera_compensation` | `true` | Subtract global camera motion (homography/affine/translation) |
-| `detection_mode` | `combined` | `combined` / individual method |
-| `combine_method` | `union` | `union` (any triggers) / `intersection` (all agree) |
-| `grow_pixels` | `4.0` | Expand detected regions |
-| `min_region_size` | `100` | Remove noise regions < N pixels |
-| `temporal_smooth` | `true` | Gaussian smoothing across frames |
-
-**Outputs:** `motion_mask` (MASK), `motion_intensity` (FLOAT), `info` (STRING)
-
-> **Who is it for?** Video editors who need automatic motion masks for selective effects, stabilization-aware change detection, or motion-triggered workflows.
-
----
-
-### Preview
 
 #### Video Frame Player (MEC)
 
@@ -1529,12 +1523,6 @@ Visualize masks with 5 display modes:
 Handles batch size mismatches automatically (expands or repeats to match).
 
 ---
-
-### Utilities
-
-#### Universal Reroute / Dot (MEC)
-
-Nuke-style reroute dot that accepts **any** connection type (IMAGE, MASK, LATENT, STRING, INT, FLOAT, etc.). Use it to keep your workflow wires clean and organized.
 
 #### Parameter History (MEC)
 
@@ -1771,85 +1759,6 @@ on-node preview.
 | `subfolder_path` | `photo/v001` | For Save Image subfolder |
 | `filename_prefix` | `photo/v001/photo` | Without extension |
 | `output_filename` | `photo/v001/photo.png` | Full output path |
-
----
-
-## Node Quick-Reference Table
-
-Nodes at a glance (a selection - NODE_REFERENCE.md lists every node):
-
-| # | Node | Category | VRAM Tier | What it does |
-|---|------|----------|-----------|-------------|
-| 1 | SAM Model Loader | SAM | 2 | Load SAM 2.1 / SAM 3 checkpoints |
-| 2 | SAM Mask Generator | SAM | 2 | SAM inference with point + bbox prompts |
-| 3 | SAM Multi-Mask Picker | SAM | 2 | View all 3 SAM candidates, pick interactively |
-| 4 | Unified Segmentation | SAM | 2 | One-node dispatcher for all segmentation backends |
-| 5 | Mask + Matting, backend SAM + ViTMatte | SAM / Matting | 2 | SAM → refinement → ViTMatte end-to-end |
-| 6 | Mask + Matting, backend SeC + MatAnyone2 | SAM / Matting | 3 | SeC → MatAnyone2 temporal video pipeline |
-| 7 | Semantic Segment | Segmentation | 2 | SegFormer face/body/clothes parsing |
-| 8 | Mask + Matting, backend remove background | Matting | 2 | One-click RMBG / BiRefNet removal |
-| 9 | Matting Node | Matting | 2 | Unified 7-backend alpha matting |
-| 10 | ViTMatte Edge Refiner | Matting | 2 | Standalone edge refinement (7 methods) |
-| 11 | Trimap Generator | Matting | 1 | Generate trimap for ViTMatte input |
-| 12 | Mask Tools (C2C) | Keying / matte ops | 1 | colour, luma (BT.709, smoothstep) and difference keys; grade; directional grow / shrink; combine; gradient; grain; motion blur; edge spread; shuffle; transform (per-axis grow, blur, offset) |
-| 13 | Mask Transform XY | Editing | 1 | Since L7.65 P01: Mask Tools, `mode` transform (per-axis erode/expand/blur/offset) |
-| 14 | Mask Draw Frame | Editing | 1 | Since L7.65 P01: Image Mask Editor, `mode` shape, `shape_input` JSON |
-| 15 | Draw Shape | Editing | 1 | Since L7.65 P01: Image Mask Editor, `mode` shape (12 shapes) |
-| 16 | Mask Composite Advanced | Editing | 1 | Boolean/blend two masks (8 operations) |
-| 17 | Mask Math | Editing | 1 | Mathematical mask operations (11 ops) |
-| 18 | Spline Mask Editor | Interactive | 1 | Since L7.65 P01: Image Mask Editor, `mode` spline (Catmull-Rom / Bezier / polyline on the canvas) |
-| 19 | Inpaint Crop Pro | Inpaint | 1 | Crop around mask for inpainting |
-| 20 | Inpaint Stitch Pro | Inpaint | 1 | Blend the inpainted crop back at the window it came from |
-| 21 | Inpaint Paste Back | Inpaint | 1 | Since L7.65 P08: Inpaint Stitch Pro, `stitch_mode` paste back |
-| 22 | Inpaint Mask Prepare | Inpaint | 1 | Since L7.65 P08: Inpaint Crop Pro, `crop_mode` mask prepare |
-| 23 | Image Comparer | Preview | 1 | Interactive before/after comparison (3 modes) |
-| 24 | Mask Batch Manager | Video | 1 | Slice/concat/interleave mask batches |
-| 25 | Mask Propagate Video | Video | 1–2 | Propagate mask across video frames |
-| 26 | Temporal Anchor System | Video | 2 | SDF-based mask interpolation between keyframes |
-| 27 | Motion Mask Tracker | Video | 1 | Per-frame motion detection (4 methods, camera stabilization) |
-| 28 | Batch Range (C2C) | Helpers | 1 | Extract single frame (`first frame` / `last` / `middle` / `frame at index`) |
-| 29 | BBox Create | BBox | 1 | Manual bbox entry |
-| 30 | BBox From Mask | BBox | 1 | Extract bbox from mask |
-| 31 | BBox To Mask | BBox | 1 | Convert bbox to mask |
-| 32 | BBox Pad | BBox | 1 | Asymmetric bbox padding |
-| 33 | BBox Crop | BBox | 1 | Crop image + mask to bbox |
-| 34 | BBox Smooth Temporal | BBox | 1 | Smooth bbox sequences across video frames |
-| 35 | Mask Failure Explainer | Diagnostics | 1 | Diagnose bad masks, suggest fixes |
-| 36 | Points Mask Editor | Interactive | 1 | Canvas editor for points/bboxes |
-| 37 | Mask Preview Overlay | Preview | 1 | 5-mode mask visualization |
-| 38 | Universal Reroute / Dot | Utility | 1 | Any-type wire reroute |
-| 39 | Parameter History | Utility | 1 | Track parameter changes over runs |
-| 40 | Folder Version Incrementer | Output | 1 | Auto-versioned file output |
-| 41 | Folder Version Check | Output | 1 | Check existing versions |
-| 42 | Folder Version Set | Output | 1 | Reserve version slots |
-| 43–47 | Draw Circle / Rectangle / Ellipse / Polygon / Line | Editing | 1 | *(Deprecated)* Legacy per-shape wrappers — use Draw Shape instead |
-| 48 | VAE Merge | VAE | 1 | Merge 2/3 VAEs (8 algorithms, per-block alpha) |
-| 49 | Probe (C2C) | Helpers | 1 | Latent stats, NaN/Inf checks, health verdict (wire `latent`) |
-| 50 | VAE Inspect | Model analysis | 1 | Compare two VAEs (`mode` compare, `vae` + `vae_b`) |
-| 51 | VAE Inspect | Model analysis | 1 | Per-block weight stats for a single VAE (`mode` inspect) |
-| 52 | Color Space Convert | Color | 1 | sRGB ↔ linear ↔ Rec.709 ↔ ACEScg |
-| 53 | LUT Apply (.cube) | Color | 1 | Adobe `.cube` 1D/3D LUT with strength blend |
-| 54 | Exposure Grade | Color | 1 | Stops + WB temp/tint + contrast pivot |
-| 55 | Load EXR | I/O | 1 | OpenEXR → imageio → TIFF fallback |
-| 56 | Save EXR | I/O | 1 | Half-float by default, TIFF fallback |
-| 57 | EXR Metadata Reader | I/O | 1 | Pure-python header parser (no OpenEXR needed) |
-| 58 | Merge Render Passes | Render | 1 | Beauty + diffuse/spec/emission/AO compositing |
-| 59 | Depth-of-Field Mask | Render | 1 | Depth pass → CoC alpha mask |
-| 60 | Depth Warp | Geometry | 1 | Horizontal parallax warp from depth |
-| 61 | Normal → Curvature | Geometry | 1 | Curvature mask from a tangent-space normal pass |
-| 62 | Position Pass Splitter | Geometry | 1 | Split position pass into X/Y/Z masks |
-| 63 | Grain Match | Plate | 1 | Extract grain from reference plate, re-apply to target |
-| 64 | Plate Stabilizer | Plate | 1 | ORB+RANSAC affine (cv2) → FFT translation fallback |
-| 65 | Clean Plate Extractor | Plate | 1 | Median across batch with optional mask exclusion |
-| 66 | Difference Matte | Plate | 1 | L1/L2 image diff → MASK with threshold + softness |
-| 67 | Metadata Writer | Metadata | 1 | Write/merge JSON sidecars next to outputs |
-| 68 | Frame Range Router | Metadata | 1 | Slice IMAGE/MASK batches `[start:end:step]` |
-| 69 | Shot Metadata Reader | Metadata | 1 | Read shot.json (show / shot / task / frame in/out / fps) |
-| 70 | Folder Version Incrementer (layout show / shot / task / version) | Output | 1 | `<root>/<show>/<shot>/<task>/v###/` with atomic reservation (was Batch Version Manager) |
-| 71 | Temporal Consistency Checker | Diagnostics | 1 | Flicker score (mask_iou / pixel_diff / Farneback flow) |
-| 72 | Model Metadata Extractor | Diagnostics | 1 | Inspect safetensors/checkpoints **without unpickling** |
-
-**VRAM Tiers:** 1 = pure tensor math (CPU/GPU, no models), 2 = loads a model (~1–4 GB), 3 = loads multiple models
 
 ---
 
