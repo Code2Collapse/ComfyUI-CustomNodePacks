@@ -1314,12 +1314,6 @@ _FV_CONTROL_LAYOUT = {"value": {"c2c_show_if": {"action": ["set"]}},       # rea
 
 
 class FolderIncrementerReset:
-    # DEPRECATED: merged into FolderVersionControl, which does both jobs
-    # behind one `action` combo. Kept registered so saved workflows still
-    # load - deleting it would break a graph silently, which is worse than
-    # one hidden class - but hidden from the menu.
-    DEPRECATED = True
-
     """
     Report the current version state for a folder (today's date).
 
@@ -1327,6 +1321,13 @@ class FolderIncrementerReset:
     reports how many exist.  To truly "reset", delete the version
     directories from disk.
     """
+    # (docstring first so it is the class's __doc__ - it came after DEPRECATED and was lost, audit P4)
+    # DEPRECATED: merged into FolderVersionControl, which does both jobs
+    # behind one `action` combo. Kept registered so saved workflows still
+    # load - deleting it would break a graph silently, which is worse than
+    # one hidden class - but hidden from the menu.
+    DEPRECATED = True
+
 
     @classmethod
     def INPUT_TYPES(cls):
@@ -1396,19 +1397,20 @@ def _versions_to_create(value) -> range:
 
 
 class FolderIncrementerSet:
+    """
+    Reserve version slots by creating empty directories (inside today's
+    date folder).
+
+    Creates ``<output>/<label>/<MM-DD-YYYY>/v001`` … ``v{value}`` so that
+    the next FolderIncrementer run will output v{value+1}. Above 999 only
+    ``v{value}`` itself is created (L9.135).
+    """
     # DEPRECATED: merged into FolderVersionControl, which does both jobs
     # behind one `action` combo. Kept registered so saved workflows still
     # load - deleting it would break a graph silently, which is worse than
     # one hidden class - but hidden from the menu.
     DEPRECATED = True
 
-    """
-    Reserve version slots by creating empty directories (inside today's
-    date folder).
-
-    Creates ``<output>/<label>/<MM-DD-YYYY>/v001`` … ``v{value}`` so that
-    the next FolderIncrementer run will output v{value+1}.
-    """
 
     @classmethod
     def INPUT_TYPES(cls):
@@ -1469,8 +1471,11 @@ class FolderIncrementerSet:
             ver_dir = folder / f"{prefix}{str(i).zfill(padding)}"
             ver_dir.mkdir(parents=True, exist_ok=True)
         next_ver = value + 1
-        return (f"Reserved v001–v{str(value).zfill(padding)} for '{safe_label}/{today_date}'. "
-                f"Next = v{str(next_ver).zfill(padding)}",
+        top = f"{prefix}{str(value).zfill(padding)}"
+        # audit P4: above _MAX_SET_FOLDERS only the highest folder is made - the status says so instead of claiming all
+        made = (f"Reserved {prefix}{'1'.zfill(padding)}–{top}" if int(value) <= _MAX_SET_FOLDERS
+                else f"Created {top} only (more than {_MAX_SET_FOLDERS} folders are not made one by one)")
+        return (f"{made} for '{safe_label}/{today_date}'. Next = {prefix}{str(next_ver).zfill(padding)}",
                 next_ver)
 
 
