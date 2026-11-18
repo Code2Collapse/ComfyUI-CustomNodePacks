@@ -46,7 +46,12 @@ _ROUTES = False
 
 
 def enabled() -> bool:
-    return os.environ.get("C2C_SEEDVR2_PREVIEW", "1").strip() not in ("0", "false", "off", "no")
+    """L3.01: the same switch as the front end's "SeedVR2 preview" setting; C2C_SEEDVR2_PREVIEW still wins."""
+    try:
+        from . import _c2c_settings as _S
+        return bool(_S.get("c2c.seedvr2.preview"))
+    except Exception:  # noqa: BLE001
+        return os.environ.get("C2C_SEEDVR2_PREVIEW", "1").strip() not in ("0", "false", "off", "no")
 
 
 # ── finding and wrapping their module ─────────────────────────────────────────────────────────────────────────────

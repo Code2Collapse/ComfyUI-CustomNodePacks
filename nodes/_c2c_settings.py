@@ -278,4 +278,14 @@ register(
             tooltip="Which frame of a video latent the sampler preview shows. sweep: the next frame on every preview "
                     "(motion and temporal problems become visible); middle: one frame from the centre; first: frame "
                     "0, ComfyUI's own behaviour.", consumer="nodes._c2c_preview_guard:_video_frame_policy"),
+    # the backend half of two switches the front end already declares (same id: one switch per feature)
+    Setting("c2c.tensor_inspector.enabled", "boolean", True, "Tensor Inspector: enabled", ("Diagnostics",),
+            env="C2C_TENSOR_INSPECTOR", restart=True,
+            tooltip="Right-click a node -> 'Inspect tensor outputs'. Off also skips the executor hook that measures "
+                    "every node's outputs (from the next start).", consumer="nodes.tensor_inspector:install"),
+    Setting("c2c.seedvr2.preview", "boolean", True, "SeedVR2 preview", ("Video", "SeedVR2 preview"),
+            env="C2C_SEEDVR2_PREVIEW",
+            tooltip="Live before/after view on the SeedVR2 Video Upscaler. Off also stops wrapping the upscaler for "
+                    "new runs (a module wrapped earlier stays wrapped until restart).",
+            consumer="nodes.seedvr2_preview:enabled"),
 )

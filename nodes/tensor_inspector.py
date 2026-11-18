@@ -328,8 +328,13 @@ def install() -> bool:
     global _INSTALLED
     if _INSTALLED:
         return True
-    if os.environ.get("C2C_TENSOR_INSPECTOR", "").strip() == "0":
-        log.info("[tensor_inspector] disabled by C2C_TENSOR_INSPECTOR=0")
+    try:  # L3.01: the same switch as the front end's "Tensor Inspector: enabled"; C2C_TENSOR_INSPECTOR=0 still wins
+        from . import _c2c_settings as _S
+        _on = bool(_S.get("c2c.tensor_inspector.enabled"))
+    except Exception:  # noqa: BLE001
+        _on = os.environ.get("C2C_TENSOR_INSPECTOR", "").strip() != "0"
+    if not _on:
+        log.info("[tensor_inspector] off (setting 'Tensor Inspector: enabled' / C2C_TENSOR_INSPECTOR=0): hook not installed")
         return False
 
     try:
