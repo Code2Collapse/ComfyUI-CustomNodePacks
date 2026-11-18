@@ -1684,6 +1684,9 @@ read any file path. Through an SSH tunnel the page still counts as local.
   (`grow_follow_face`). At the defaults the result is exactly the old grow (2026-11-17).
 - **Image Mask Editor (C2C)** previews round to the nearest code value instead of truncating (they were half a level
   too dark) (2026-11-17).
+- **Sharper previews:** Video Comparer (wipe / onion / side by side / difference views) and Video Frame Player now
+  draw at your screen's pixel density and at the canvas zoom, so they stay sharp on high-DPI screens and when you
+  zoom in; nothing else about them changes (2026-11-18).
 - **Security:** the model browser sent your Civitai / Hugging Face token to any address that merely *contained*
   "civitai" or "huggingface" (for example `civitai.example.net`); now only to civitai.com, huggingface.co and their
   own subdomains (or the base you configured). Keys are also removed from C2C log lines, error records and AI
