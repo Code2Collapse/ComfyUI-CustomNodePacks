@@ -193,7 +193,11 @@ def plan_decoder(h: C2CVideo, decoder: str, *, cuda: bool = False) -> DecoderPla
         want_nv12 = cuda and os.environ.get("C2C_VIDEO_FAST", "").strip().lower() != "rgb48" and _nv12_ok(h)
         return DecoderPlan(asked, "nv12" if want_nv12 else "rgb48")
     # auto (see the module notes: measured, the exact reader is as fast on the CPU; the GPU path is not identical)
-    allow = os.environ.get("C2C_VIDEO_AUTO", "").strip().lower()
+    try:  # L3.01: C2C setting 'Automatic decoder may use'; C2C_VIDEO_AUTO still wins
+        from .. import _c2c_settings as _S
+        allow = str(_S.get("c2c.video.autoDecoder")).lower()
+    except Exception:  # noqa: BLE001
+        allow = os.environ.get("C2C_VIDEO_AUTO", "").strip().lower()
     if allow not in ("fast", "gpu"):
         return DecoderPlan(asked, "exact", "auto: the exact reader measured as fast as ffmpeg here")
     if len(h) * int(h.width) * int(h.height) < AUTO_MIN_PIXELS:

@@ -308,6 +308,14 @@ def install_unload_hook() -> bool:
 
 
 def idle_unload_seconds() -> float:
+    try:  # L3.01: C2C setting 'Unload idle GPU workers after (s)'; C2C_DISTRIBUTED_IDLE_UNLOAD_S still wins
+        try:
+            from ..nodes import _c2c_settings as _S
+        except ImportError:                     # c2c_distributed imported as a top-level package (tests, tools)
+            from nodes import _c2c_settings as _S
+        return max(0.0, float(_S.get("c2c.distributed.idleUnloadS")))
+    except Exception:  # noqa: BLE001
+        pass
     try:
         return max(0.0, float(os.environ.get("C2C_DISTRIBUTED_IDLE_UNLOAD_S", "0") or 0))
     except ValueError:

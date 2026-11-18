@@ -288,4 +288,14 @@ register(
             tooltip="Live before/after view on the SeedVR2 Video Upscaler. Off also stops wrapping the upscaler for "
                     "new runs (a module wrapped earlier stays wrapped until restart).",
             consumer="nodes.seedvr2_preview:enabled"),
+    Setting("c2c.distributed.idleUnloadS", "number", 0, "Unload idle GPU workers after (s)", ("Multi-GPU",),
+            min=0, max=86400, step=1, env="C2C_DISTRIBUTED_IDLE_UNLOAD_S",
+            tooltip="C2C Distributed keeps a model loaded on each extra GPU between runs. After this many idle "
+                    "seconds it is unloaded to free VRAM; 0 = keep it loaded.",
+            consumer="c2c_distributed.procmodel:idle_unload_seconds"),
+    Setting("c2c.video.autoDecoder", "combo", "exact", "Automatic decoder may use", ("Video", "Load"),
+            options=("exact", "fast", "gpu"), env="C2C_VIDEO_AUTO",
+            tooltip="Load Video (C2C) with decoder 'auto': exact = always the exact reader (measured as fast on the "
+                    "CPU); fast / gpu = allow the ffmpeg fast path (gpu: NVDEC) for large loads after a self-check.",
+            consumer="nodes.c2c_video.fast_decode:plan_decoder"),
 )
