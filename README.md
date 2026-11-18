@@ -1684,6 +1684,9 @@ read any file path. Through an SSH tunnel the page still counts as local.
   (`grow_follow_face`). At the defaults the result is exactly the old grow (2026-11-17).
 - **Image Mask Editor (C2C)** previews round to the nearest code value instead of truncating (they were half a level
   too dark) (2026-11-17).
+- **Multi-GPU on/off and preview decoders:** Settings > C2C > Multi-GPU > **C2C Distributed (multi-GPU)** switches
+  multi-GPU splitting on or off (after a restart). With **Never download models** on, C2C also no longer downloads the
+  small preview decoders (TAESD) for sampler previews (2026-11-18).
 - **Two more settings:** Multi-GPU > **Unload idle GPU workers after (s)** (0 keeps the extra GPUs' model loaded) and
   Video > Load > **Automatic decoder may use** (exact / fast / gpu, for Load Video's decoder "auto"). The environment
   variables still work and take priority (2026-11-18).
