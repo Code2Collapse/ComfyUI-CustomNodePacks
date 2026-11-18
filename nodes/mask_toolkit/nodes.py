@@ -479,6 +479,25 @@ _MODE_KEY = {label: key for label, key, _p in MASK_TOOL_MODES}
 GROW_UNITS = ("px", "% of the matte size")
 
 
+def _grade_extra_inputs() -> dict:
+    """L7.48 (owner 2026-10-08, Nuke-style matte grade): Nuke Grade's black point, white point, lift and offset for the
+    grade mode, appended LAST (after the L9.281 grow extras) so saved widget positions never shift. Defaults = the old
+    grade, bit for bit. Nuke Grade: A = (gain - lift) / (whitepoint - blackpoint), B = offset + lift - A * blackpoint,
+    out = (A * in + B) ** (1 / gamma)."""
+    return {
+        "grade_blackpoint": ("FLOAT", {"default": 0.0, "min": -1.0, "max": 1.0, "step": 0.001,
+                                       "tooltip": "grade: this matte value becomes black (0) - raise it to crush "
+                                                  "faint spill."}),
+        "grade_whitepoint": ("FLOAT", {"default": 1.0, "min": 0.0, "max": 2.0, "step": 0.001,
+                                       "tooltip": "grade: this matte value becomes white (1) - lower it to make a "
+                                                  "weak core solid."}),
+        "grade_lift": ("FLOAT", {"default": 0.0, "min": -1.0, "max": 1.0, "step": 0.001,
+                                 "tooltip": "grade: raise (or lower) the blacks while white stays put."}),
+        "grade_offset": ("FLOAT", {"default": 0.0, "min": -1.0, "max": 1.0, "step": 0.001,
+                                   "tooltip": "grade: add this to every value (before gamma)."}),
+    }
+
+
 def _grow_extra_inputs() -> dict:
     """L9.281 (owner 2026-11-17): grow / shrink at any angle, in px or % of the matte, with a soft fall-off, and
     optionally along a face's tilt (POSE_KEYPOINT from Face Landmarks). Defaults = the old grow, bit for bit."""
@@ -624,6 +643,7 @@ class MaskToolsMEC:
                 "size_as": ("IMAGE", {"tooltip": "gradient: take the size from this image."}),
                 **appended,
                 **_grow_extra_inputs(),          # L9.281: appended LAST so saved widget positions never shift
+                **_grade_extra_inputs(),         # L7.48: appended after them, same reason
             },
         }
 
@@ -638,7 +658,8 @@ class MaskToolsMEC:
     CATEGORY = _CATEGORY
     DESCRIPTION = (
         "Keyers and matte operations in one node: colour, luma and difference keys; grade (gain, gamma, clamp, "
-        "invert); grow or shrink each side (left / right / up / down) with a feather; combine two mattes; gradient; "
+        "invert, black / white point, lift, offset - as Nuke Grade); grow or shrink each side (left / right / up / "
+        "down) with a feather; combine two mattes; gradient; "
         "grain; motion blur; edge spread; channel shuffle; transform (grow, blur and offset per axis, feather, "
         "threshold, invert)."
     )
@@ -668,6 +689,7 @@ class MaskToolsMEC:
                     args[p] = optional[w][1].get("default")
         # L9.281: the grow extras (appended inputs) reach _run through the instance, its signature stays
         self._grow_extra = {k: kw.get(k, v[1].get("default")) for k, v in _grow_extra_inputs().items()}
+        self._grade_extra = {k: kw.get(k, v[1].get("default")) for k, v in _grade_extra_inputs().items()}
         with torch.no_grad():
             out_mask, out_image, report = self._run(key, mode, args, image, mask, mask_b, plate, size_as)
         if out_image is None and out_mask is not None:
@@ -726,7 +748,7 @@ class MaskToolsMEC:
             if a["invert"]:
                 m = 1.0 - m
             return clone_output(m), None, build_report("Mask Tools: difference key", img.shape[0], notes,
-                                                     coverage=float(m.mean()))
+                                                     coverage=float(m.mean()) * 100.0)
         if key == "transform":
             (m,) = _engine(key)().transform(
                 mask=self._need(mask, "a mask", mode), expand_x=int(a["expand_x"]), expand_y=int(a["expand_y"]),
@@ -734,16 +756,27 @@ class MaskToolsMEC:
                 offset_y=int(a["offset_y"]), feather=float(a["feather"]), threshold=float(a["threshold"]),
                 invert=bool(a["invert"]))
             return m, None, build_report("Mask Tools: transform", m.shape[0] if m.dim() == 3 else 1, [],
-                                         coverage=float(m.float().mean()))
+                                         coverage=float(m.float().mean()) * 100.0)
         m = ensure_bhw_mask(self._need(mask, "a mask", mode), "Mask Tools")
         if key == "grade":
-            g = m * float(a["gain"])
+            ge = getattr(self, "_grade_extra", None) or {k: v[1].get("default") for k, v in _grade_extra_inputs().items()}
+            bp, wp = float(ge["grade_blackpoint"]), float(ge["grade_whitepoint"])
+            lift, off = float(ge["grade_lift"]), float(ge["grade_offset"])
+            if (bp, wp, lift, off) == (0.0, 1.0, 0.0, 0.0):
+                g = m * float(a["gain"])                    # the old grade, bit for bit
+            else:
+                if abs(wp - bp) < 1e-6:
+                    raise ValueError("Mask Tools grade: white point and black point are the same value - move one "
+                                     "of them apart (white point is usually above black point).")
+                A = (float(a["gain"]) - lift) / (wp - bp)
+                g = m * A + (off + lift - A * bp)
             g = g.clamp(min=0.0) ** (1.0 / float(a["gamma"]))
             if a["clamp"]:
                 g = g.clamp(0.0, 1.0)
             if a["invert"]:
                 g = 1.0 - g
-            return clone_output(g), None, build_report("Mask Tools: grade", m.shape[0], [], coverage=float(g.mean()))
+            return clone_output(g), None, build_report("Mask Tools: grade", m.shape[0], [],
+                                                       coverage=float(g.mean()) * 100.0)
         if key == "grow":
             notes = []
             extra = getattr(self, "_grow_extra", None) or {k: v[1].get("default")
@@ -761,7 +794,7 @@ class MaskToolsMEC:
                 from ..layer_effects._ops import blur_mask
                 g = blur_mask(g, int(a["feather"]), notes)
             return clone_output(g.clamp(0.0, 1.0)), None, build_report("Mask Tools: grow / shrink", m.shape[0], notes,
-                                                                        coverage=float(g.mean()))
+                                                                        coverage=float(g.mean()) * 100.0)
         raise ValueError(f"Mask Tools: mode {mode!r} is not implemented.")
 
 
