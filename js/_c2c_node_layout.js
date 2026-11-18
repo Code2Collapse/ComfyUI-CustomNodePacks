@@ -332,6 +332,10 @@ function hookWidgets(node, spec) {
 function attach(node) {
     const spec = managed(node);
     if (!spec) return;
+    // L9.01 bug-zero leak: onNodeCreated defers attach to a microtask; a node removed before it runs (paste then
+    // undo, a script that adds and removes) was put into LIVE after its onRemoved and kept forever (Mask Track
+    // ~185 KB per node, measured). A node without a graph is not live; onAdded attaches it if it comes back.
+    if (!node.graph) return;
     LIVE.add(node);
     hookWidgets(node, spec);
     schedule(node);
