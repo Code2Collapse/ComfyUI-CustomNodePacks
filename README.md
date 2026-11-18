@@ -1684,6 +1684,9 @@ read any file path. Through an SSH tunnel the page still counts as local.
   (`grow_follow_face`). At the defaults the result is exactly the old grow (2026-11-17).
 - **Image Mask Editor (C2C)** previews round to the nearest code value instead of truncating (they were half a level
   too dark) (2026-11-17).
+- **More switches in Settings > C2C:** Diagnostics > Per-node time and memory, Masks > Matte viewer, Models &
+  Downloads > Model-free fallbacks, Video > Save > Encode with FFmpeg, and Vault > Unlock lasts (minutes). Each was
+  only an environment variable before; the variables still work and take priority (2026-11-18).
 - **C2C Control Center:** open it from the C2C OmniPill (Tools) or the command palette ("C2C: Open Control
   Center"). It shows the ComfyUI, frontend, PyTorch and CUDA versions, free RAM and VRAM, every installed C2C pack
   with its version and node count (and any node ids another pack took over), problems found at start-up, and
