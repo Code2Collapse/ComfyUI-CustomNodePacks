@@ -631,6 +631,7 @@ class FacepointsLandmarksC2C:
         status = ""
         tracks: List = []
         next_ident = 0
+        largest_ident = None             # L9.252 F2: the identity "largest face" is locked to
         prev_bgr = None
         index_missing: List[int] = []
         smoothing = bool(c["temporal_smoothing"])
@@ -823,8 +824,15 @@ class FacepointsLandmarksC2C:
                             if pal["kinds_on_lm"]:
                                 col = pal["overlay"] or (pal["set98"] if landmark_set == SETS[1] else pal["set68"])
                             FC.draw_points(lm, lm_pts, col, r, lm_alpha)
-                    picked = FC.mask_face_selection([gg["face_size_px"] for gg in outs], c["mask_faces"],
-                                                    int(c["mask_face_index"]))
+                    if cut:
+                        largest_ident = None
+                    idents = [gg.get("identity") for gg in outs]
+                    if c["mask_faces"] == "largest face" and outs and all(x is not None for x in idents):
+                        picked, largest_ident = FC.sticky_largest([gg["face_size_px"] for gg in outs], idents,
+                                                                  largest_ident)
+                    else:
+                        picked = FC.mask_face_selection([gg["face_size_px"] for gg in outs], c["mask_faces"],
+                                                        int(c["mask_face_index"]))
                     if c["mask_faces"] == "face index" and outs and not picked:
                         index_missing.append(i)          # L9.252 F3: said in the JSON, never a silent empty mask
                     if not parts_mode:
@@ -1071,6 +1079,7 @@ def _temporal(FC, c, shown, tracks, next_ident, prev_bgr, bgr, mesh, classes, sm
             if c["temporal_reset_on_loss"]:
                 for flt in t.filters.values():
                     flt.reset()
+    tracks = FC.prune_tracks(tracks)                   # L9.252 F4
     if c["temporal_stable_order"]:
         shown.sort(key=lambda f: f["identity"])
     return tracks, next_ident, cut

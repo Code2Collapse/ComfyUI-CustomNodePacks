@@ -376,6 +376,28 @@ def draw_lines(canvas: np.ndarray, pts: np.ndarray, runs, colour, width: int, al
         cv2.addWeighted(target, float(alpha), canvas, 1.0 - float(alpha), 0.0, dst=canvas)
 
 
+# L9.252 F4: a track not seen for this many frames is dropped (5 s at 24 fps - far beyond any normal occlusion), so a
+# long crowded clip keeps a bounded track list and a new face entering an old face's spot gets a new identity.
+MAX_MISSED_FRAMES = 120
+
+
+def prune_tracks(tracks: List["FaceTrack"], max_missed: int = MAX_MISSED_FRAMES) -> List["FaceTrack"]:
+    return [t for t in tracks if t.missed <= max_missed]
+
+
+def sticky_largest(sizes: List[float], identities: List[Optional[int]], locked: Optional[int]
+                   ) -> Tuple[List[int], Optional[int]]:
+    """L9.252 F2: "largest face" on video with identity tracking. The face that is largest when the choice is made is
+    kept while it stays in view (it does not jump to another person who is momentarily bigger); a new choice is made
+    when it is gone (or after a scene cut, where the caller passes locked=None). Returns (picked, locked identity)."""
+    if not sizes:
+        return [], locked
+    if locked is not None and locked in identities:
+        return [identities.index(locked)], locked
+    k = int(np.argmax(sizes))
+    return [k], identities[k]
+
+
 def mask_face_selection(sizes: List[float], mode: str, index: int) -> List[int]:
     """Which faces (by position in the output order) fill the face mask."""
     if mode not in MASK_FACES:
