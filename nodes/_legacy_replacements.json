@@ -1488,7 +1488,7 @@
    }
   ],
   "dropped": [],
-  "note": "Deprecated shim (removal announced in video_stabilizer_mec.py); mirrors its own delegation: method=classic, preset=manual."
+  "note": "Removed alias (L7.65 P17; C2C_LEGACY_STABILIZERS=1 registers it again); mirrors its own delegation: method=classic, preset=manual."
  },
  {
   "old_node_id": "VideoStabilizerFlowMEC",
@@ -1552,7 +1552,7 @@
    },
    {
     "new_id": "method",
-    "set_value": "raft_flow"
+    "set_value": "dense_flow"
    },
    {
     "new_id": "preset",
@@ -1574,7 +1574,7 @@
    }
   ],
   "dropped": [],
-  "note": "Deprecated shim; mirrors its own delegation: method=raft_flow, preset=manual."
+  "note": "Removed alias (L7.65 P17; C2C_LEGACY_STABILIZERS=1 registers it again); mirrors its own delegation: method=dense_flow (it always ran OpenCV DIS flow), preset=manual. raft_iters / use_half carry over but are not read by dense_flow."
  },
  {
   "old_node_id": "VideoStabilizerAutoMEC",
@@ -1622,7 +1622,18 @@
    }
   ],
   "dropped": [],
-  "note": "Deprecated shim; force_backend becomes method. Its 'flow' arrives verbatim and VideoStabilizerMEC accepts it as an alias of raft_flow."
+  "note": "Removed alias (L7.65 P17; C2C_LEGACY_STABILIZERS=1 registers it again); force_backend becomes method, 'flow' -> dense_flow (it always ran DIS; an API prompt carrying 'flow' verbatim is accepted as the same alias).",
+  "c2c_values": [
+   {
+    "new_id": "method",
+    "old_id": "force_backend",
+    "map": {
+     "auto": "auto",
+     "classic": "classic",
+     "flow": "dense_flow"
+    }
+   }
+  ]
  },
  {
   "old_node_id": "MECBuilderSampler",

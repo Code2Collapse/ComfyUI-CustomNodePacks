@@ -597,7 +597,7 @@ class _DeprecatedStabilizerBase:
             return
         _DeprecatedStabilizerBase._WARNED.add(cls.__name__)
         log.warning(
-            "[stabilizer] %s is deprecated and will be removed next release. "
+            "[stabilizer] %s is a removed alias (registered only with C2C_LEGACY_STABILIZERS=1). "
             "Use VideoStabilizerMEC with method='%s'.",
             cls.__name__, replacement_method,
         )
@@ -715,17 +715,24 @@ class VideoStabilizerAutoMEC(_DeprecatedStabilizerBase):
 # =====================================================================
 NODE_CLASS_MAPPINGS = {
     "VideoStabilizerMEC":        VideoStabilizerMEC,
-    # Deprecated aliases — remove next release.
-    "VideoStabilizerClassicMEC": VideoStabilizerClassicMEC,
-    "VideoStabilizerFlowMEC":    VideoStabilizerFlowMEC,
-    "VideoStabilizerAutoMEC":    VideoStabilizerAutoMEC,
 }
 NODE_DISPLAY_NAME_MAPPINGS = {
     "VideoStabilizerMEC":        "Video Stabilizer",
-    "VideoStabilizerClassicMEC": "Video Stabilizer — Classic (deprecated)",
-    "VideoStabilizerFlowMEC":    "Video Stabilizer — Dense Flow (deprecated)",
-    "VideoStabilizerAutoMEC":    "Video Stabilizer — Auto (deprecated)",
 }
+# L7.65 P17 (owner-approved card): the three deprecated aliases are removed. Saved workflows migrate on load to
+# VideoStabilizerMEC with the method each alias always ran (nodes/_legacy_replacements.json; API prompts through
+# core's node replacement). C2C_LEGACY_STABILIZERS=1 registers them again, from the unchanged classes above.
+if os.environ.get("C2C_LEGACY_STABILIZERS") == "1":
+    NODE_CLASS_MAPPINGS.update({
+        "VideoStabilizerClassicMEC": VideoStabilizerClassicMEC,
+        "VideoStabilizerFlowMEC":    VideoStabilizerFlowMEC,
+        "VideoStabilizerAutoMEC":    VideoStabilizerAutoMEC,
+    })
+    NODE_DISPLAY_NAME_MAPPINGS.update({
+        "VideoStabilizerClassicMEC": "Video Stabilizer — Classic (deprecated)",
+        "VideoStabilizerFlowMEC":    "Video Stabilizer — Dense Flow (deprecated)",
+        "VideoStabilizerAutoMEC":    "Video Stabilizer — Auto (deprecated)",
+    })
 
 
 # A28 (ORDERS 29, docs/audit/A28/PARAM_CNP_A.md "VideoStabilizerMEC"): which controls show when, read by js/_c2c_node_layout.js.

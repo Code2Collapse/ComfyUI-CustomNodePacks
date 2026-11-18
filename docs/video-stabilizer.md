@@ -3,8 +3,10 @@
 One node, **Video Stabilizer** (`VideoStabilizerMEC`, menu `🐺 C2C/…/Stabilization`). It removes camera shake from a
 frame batch and outputs the stabilised frames plus a **padding mask**: wire that mask into Inpaint Crop Pro to fill
 the borders the stabilisation exposed. The engine is the vendored ComfyUI-Video-Stabilizer (MIT, nomadoor and
-contributors). The three older nodes (Classic / Dense Flow / Auto, all marked deprecated) still load and render as
-before.
+contributors). The three older nodes (Classic / Dense Flow / Auto) are removed: a saved workflow that uses one turns
+into this node on load, with the method the old node always ran (Classic -> `classic`, Dense Flow -> `dense_flow`,
+Auto -> its `force_backend`, where `flow` -> `dense_flow`), so it renders as before. `C2C_LEGACY_STABILIZERS=1`
+registers the old nodes again.
 
 ## Methods
 

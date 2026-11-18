@@ -45,7 +45,7 @@
 ## Overview
 
 <!-- C2C:NODE-COUNTS:BEGIN -->
-**ComfyUI-CustomNodePacks** registers **103** nodes across these families:
+**ComfyUI-CustomNodePacks** registers **100** nodes across these families:
 
 | Family | Nodes |
 |--------|------:|
@@ -72,7 +72,7 @@
 | Mask Placement | 1 |
 | Semantic Segment | 1 |
 | NukeNodeMax | 1 |
-| Video Stabilizer | 4 |
+| Video Stabilizer | 1 |
 | C2C helpers | 8 |
 | Prompt Relay | 3 |
 | AsymFlow sampler | 1 |
@@ -86,7 +86,7 @@
 
 Startup log line to verify the pack loaded:
 
-`[C2C] CustomNodePacks: 103 nodes loaded (Vault 6, Folder Incrementer 5, Render farm 3, C2C Distributed 2, Fluid Shots/Audio 3, C2C video 3, MaskEditControl 9, Image Mask Editor 1, Model analysis 1, Face Fixer 1, Mask + Matting 5, Layer Effects 1, Mask toolkit 1, Frequency / Grain 3, Tiled refinement 4, Magnific 15, AV Handles 1, Save Video 1, SAM Multi-Mask Picker 1, SAM Loader/Generator 2, Mask Placement 1, Semantic Segment 1, NukeNodeMax 1, Video Stabilizer 4, C2C helpers 8, Prompt Relay 3, AsymFlow sampler 1, HDR Color Science 1, LocateAnything 2, Facepoints 1, Nano Banana 1, Control AOV 1, Restored VFX 3, Legacy (deprecated) 7) - 0 failed`
+`[C2C] CustomNodePacks: 100 nodes loaded (Vault 6, Folder Incrementer 5, Render farm 3, C2C Distributed 2, Fluid Shots/Audio 3, C2C video 3, MaskEditControl 9, Image Mask Editor 1, Model analysis 1, Face Fixer 1, Mask + Matting 5, Layer Effects 1, Mask toolkit 1, Frequency / Grain 3, Tiled refinement 4, Magnific 15, AV Handles 1, Save Video 1, SAM Multi-Mask Picker 1, SAM Loader/Generator 2, Mask Placement 1, Semantic Segment 1, NukeNodeMax 1, Video Stabilizer 1, C2C helpers 8, Prompt Relay 3, AsymFlow sampler 1, HDR Color Science 1, LocateAnything 2, Facepoints 1, Nano Banana 1, Control AOV 1, Restored VFX 3, Legacy (deprecated) 7) - 0 failed`
 <!-- C2C:NODE-COUNTS:END -->
 
 With **ComfyUI-OmniScale** installed next to this pack, the 15 Magnific nodes are registered by OmniScale instead,
@@ -461,9 +461,6 @@ CustomNodePacks registers **103 nodes** (counts per family and the startup line:
 | Node | id | What it does |
 |---|---|---|
 | Video Stabilizer | [`VideoStabilizerMEC`](NODE_REFERENCE.md#videostabilizermec) | Video stabilizer: classic feature tracking, RAFT optical flow or OpenCV dense flow, with presets. |
-| Video Stabilizer — Auto (deprecated) | [`VideoStabilizerAutoMEC`](NODE_REFERENCE.md#videostabilizerautomec) | DEPRECATED — use VideoStabilizerMEC (method=auto) instead. |
-| Video Stabilizer — Classic (deprecated) | [`VideoStabilizerClassicMEC`](NODE_REFERENCE.md#videostabilizerclassicmec) | DEPRECATED — use VideoStabilizerMEC (method=classic) instead. |
-| Video Stabilizer — Dense Flow (deprecated) | [`VideoStabilizerFlowMEC`](NODE_REFERENCE.md#videostabilizerflowmec) | DEPRECATED — use VideoStabilizerMEC. |
 
 ### 🐺 C2C/🧰 Core/Temporal
 
