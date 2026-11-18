@@ -423,7 +423,11 @@ PROXY_MAX_LONG = 1280
 
 
 def proxy_disabled() -> bool:
-    return os.environ.get("C2C_SAVE_SOURCE_PROXY", "").strip().lower() in ("0", "off", "false", "no")
+    try:  # L3.01: C2C setting 'Write a source proxy'; C2C_SAVE_SOURCE_PROXY still wins
+        from .. import _c2c_settings as _S
+        return not bool(_S.get("c2c.video.sourceProxy"))
+    except Exception:  # noqa: BLE001
+        return os.environ.get("C2C_SAVE_SOURCE_PROXY", "").strip().lower() in ("0", "off", "false", "no")
 
 
 def write_proxy(images, fps: float, tag: str) -> dict | None:

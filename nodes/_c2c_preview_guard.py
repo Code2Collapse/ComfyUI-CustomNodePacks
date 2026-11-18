@@ -62,7 +62,12 @@ _USER_PREF = None
 
 def ensure_previews_enabled() -> str:
     global PREVIEW_GUARD_STATUS
-    if os.environ.get("C2C_NO_FORCE_PREVIEW") == "1":
+    try:  # L3.01: C2C setting 'Do not force sampler previews on'; C2C_NO_FORCE_PREVIEW=1 still wins
+        from . import _c2c_settings as _S
+        _no_force = bool(_S.get("c2c.preview.noForce"))
+    except Exception:  # noqa: BLE001
+        _no_force = os.environ.get("C2C_NO_FORCE_PREVIEW") == "1"
+    if _no_force:
         PREVIEW_GUARD_STATUS = "disabled_by_env"
         return PREVIEW_GUARD_STATUS
     try:

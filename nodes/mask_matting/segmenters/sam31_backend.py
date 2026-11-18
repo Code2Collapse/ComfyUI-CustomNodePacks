@@ -236,7 +236,7 @@ class SAM31Segmenter(BaseSegmenter):
             )
 
         # Optional refine pass.
-        if os.environ.get("MEC_SAM31_REFINE", "0") == "1":
+        if _sam31_refine_on():
             try:
                 m_logits = state.get("masks_logits")
                 if m_logits is not None and m_logits.numel() > 0:
@@ -348,3 +348,12 @@ class SAM31Segmenter(BaseSegmenter):
         self._video_predictor = None
         self._model = None
         free_vram()
+
+
+def _sam31_refine_on() -> bool:
+    """L3.01: C2C setting 'SAM 3.1 refine pass'; MEC_SAM31_REFINE=1 still wins."""
+    try:
+        from ... import _c2c_settings as _S
+        return bool(_S.get("c2c.matte.sam31Refine"))
+    except Exception:  # noqa: BLE001
+        return os.environ.get("MEC_SAM31_REFINE", "0") == "1"

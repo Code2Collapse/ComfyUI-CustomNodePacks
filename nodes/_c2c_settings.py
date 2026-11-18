@@ -257,4 +257,16 @@ register(
             env="C2C_VAULT_TTL_MINUTES", restart=True,
             tooltip="How long an unlocked Vault stays unlocked. 0 = until ComfyUI restarts.",
             consumer="nodes.vault_node:_ttl_seconds"),
+    Setting("c2c.matte.sam31Refine", "boolean", False, "SAM 3.1 refine pass", ("Masks",), env="MEC_SAM31_REFINE",
+            tooltip="One extra refinement pass on SAM 3.1's mask logits (slower).",
+            consumer="nodes.mask_matting.segmenters.sam31_backend:_sam31_refine_on"),
+    Setting("c2c.video.sourceProxy", "boolean", True, "Write a source proxy", ("Video", "Save"),
+            env="C2C_SAVE_SOURCE_PROXY",
+            tooltip="Save Video (C2C) also writes a small H.264 proxy of the clip for the player and review.",
+            consumer="nodes.c2c_video.save_encode:proxy_disabled"),
+    Setting("c2c.preview.noForce", "boolean", False, "Do not force sampler previews on", ("Previews",),
+            env="C2C_NO_FORCE_PREVIEW", restart=True,
+            tooltip="C2C switches ComfyUI's sampler previews on at start-up so long video runs show progress. On: "
+                    "leave ComfyUI's own preview setting alone.",
+            consumer="nodes._c2c_preview_guard:ensure_previews_enabled"),
 )
