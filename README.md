@@ -1674,6 +1674,11 @@ read any file path. Through an SSH tunnel the page still counts as local.
 - SAM nodes and Semantic Segment no longer wrap HDR values above 1.0 when they convert the frame for the model.
 - **Mask Placement (MEC)**: `feather_px` applies when the placement has no feather of its own (a fixed 6 px was
   used), and a missing opencv is reported in words.
+- **Mask Placement (MEC)** `track_mode = object_track` (2026-11-18) follows the picture inside the quad from frame
+  to frame (feature tracking + a perspective transform per frame, no model); frames with too little detail keep the
+  last placement and `info` says which. How-to: [docs/mask-placement.md](docs/mask-placement.md).
+- **Video Stabilizer** (2026-11-18): the three old nodes (Classic / Dense Flow / Auto) are removed; saved workflows
+  turn into Video Stabilizer on load with the method the old node ran (`C2C_LEGACY_STABILIZERS=1` keeps them).
 - **Mask Tools (C2C)** edge_spread with no mask wired outputs an empty mask instead of nothing.
 - **Mask Tools (C2C)** `grow / shrink` extends a matte in any direction: `grow_angle` turns the up / down / left /
   right axes, `grow_units` takes pixels or % of the matte's own size, `grow_falloff` gives the grown band a soft edge,
