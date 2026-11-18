@@ -18,8 +18,8 @@ registers the old nodes again.
 | `auto` | `dense_flow` on a clip over 24 frames with 4 GB free on the GPU, else `classic` | — |
 
 Before 2026-10-24 the method named `raft_flow` actually ran OpenCV DIS, and its `raft_iters` / `use_half` settings
-did nothing. That behaviour is now called `dense_flow`, and `raft_flow` runs RAFT. `auto` and the deprecated nodes
-still pick exactly what they picked before.
+did nothing. That behaviour is now called `dense_flow`, and `raft_flow` runs RAFT. `auto` still picks exactly what it
+picked before, and the removed old nodes migrate to the method they ran.
 
 ### Which one to use: what we measured
 

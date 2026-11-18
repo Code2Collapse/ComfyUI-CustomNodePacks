@@ -1679,6 +1679,12 @@ read any file path. Through an SSH tunnel the page still counts as local.
   last placement and `info` says which. How-to: [docs/mask-placement.md](docs/mask-placement.md).
 - **Video Stabilizer** (2026-11-18): the three old nodes (Classic / Dense Flow / Auto) are removed; saved workflows
   turn into Video Stabilizer on load with the method the old node ran (`C2C_LEGACY_STABILIZERS=1` keeps them).
+- **Mask Tools (C2C)** `grade` (2026-11-19) works like Nuke's Grade on a matte: black point, white point, lift and
+  offset join gain / gamma / clamp / invert (new controls at their defaults change nothing). The report's coverage now
+  reads in percent for grade, difference key, transform and grow / shrink (it showed a 0..1 value with a % sign).
+- **Mask Track** `consistency_check` (2026-11-19) has a new metric, `edge_stability`: how much the matte's EDGE moves
+  from frame to frame, following the picture's motion when the video is wired, so only flicker counts. A chart on the
+  node shows the score per frame pair and marks the worst ones.
 - **Mask Tools (C2C)** edge_spread with no mask wired outputs an empty mask instead of nothing.
 - **Mask Tools (C2C)** `grow / shrink` extends a matte in any direction: `grow_angle` turns the up / down / left /
   right axes, `grow_units` takes pixels or % of the matte's own size, `grow_falloff` gives the grown band a soft edge,
