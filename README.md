@@ -1684,6 +1684,9 @@ read any file path. Through an SSH tunnel the page still counts as local.
   (`grow_follow_face`). At the defaults the result is exactly the old grow (2026-11-17).
 - **Image Mask Editor (C2C)** previews round to the nearest code value instead of truncating (they were half a level
   too dark) (2026-11-17).
+- **Two more settings:** Multi-GPU > **Unload idle GPU workers after (s)** (0 keeps the extra GPUs' model loaded) and
+  Video > Load > **Automatic decoder may use** (exact / fast / gpu, for Load Video's decoder "auto"). The environment
+  variables still work and take priority (2026-11-18).
 - **Tensor Inspector / SeedVR2 preview switches now do the whole job:** turning off "Tensor Inspector: enabled"
   also stops it measuring every node's outputs (from the next start), and turning off "SeedVR2 preview" also stops
   C2C hooking into the SeedVR2 upscaler for new runs (2026-11-18).
