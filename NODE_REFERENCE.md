@@ -3332,6 +3332,13 @@ Segment (C2C): find objects by words, clicks or boxes with ComfyUI's own SAM 3 /
 | `picks` | `STRING` | default `""`, multiline | Clicks and boxes in pixels: {"positive": [[x, y]], "negative": [[x, y]], "boxes": [[x0, y0, x1, y1]]}. One object per box (the clicks go with every box), else one object from the clicks. |
 | `max_objects` | `INT` | default `20`, range 1…200 | Keep at most this many objects per frame (strongest first). |
 
+**Optional inputs**
+
+| Parameter | Type | Constraints | What it does |
+|---|---|---|---|
+| `video` | choice: `track whole clip`, `per frame` | default `"track whole clip"` | A clip: find the objects on seed_frame and follow them through every frame (forward and backward, one tracking state, objects keep their order), or segment each frame on its own. |
+| `seed_frame` | `INT` | default `0`, range 0…100000 | The frame the objects are found on before tracking (pick a frame where they are clearly visible). |
+
 **Outputs**
 
 | # | Name | Type | What it is |

@@ -1686,8 +1686,9 @@ read any file path. Through an SSH tunnel the page still counts as local.
   turn into Video Stabilizer on load with the method the old node ran (`C2C_LEGACY_STABILIZERS=1` keeps them).
 - **Segment (C2C)** (new, 2026-11-19, owner card P04): the start of the one segmentation node. This first version
   finds objects by words ("person", "person:3, dog"), clicks or boxes on ComfyUI's own SAM 3 / 3.1 (the same model the
-  Mask + Matting viewer loads, shared), with one mask per object, their union and boxes. A clip is done frame by frame
-  for now; tracking, face / clothes parsing, automatic masks and a measured refine stage follow. Design:
+  Mask + Matting viewer loads, shared), with one mask per object, their union and boxes. A clip is tracked: the
+  objects found on `seed_frame` are followed forward and backward with one tracking state (`video = per frame` does
+  each frame on its own). Face / clothes parsing, automatic masks and a measured refine stage follow. Design:
   docs in the C2C workspace (L7.123).
 - **Mask Tools (C2C)** `grade` (2026-11-19) works like Nuke's Grade on a matte: black point, white point, lift and
   offset join gain / gamma / clamp / invert (new controls at their defaults change nothing). The report's coverage now
