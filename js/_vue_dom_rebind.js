@@ -23,9 +23,18 @@ const C2C_PACKS = [
     "ComfyUI-WanAnimalPreprocessor",
 ];
 
-/** Mark a DOM widget so a stale copy of it can be found and replaced. */
+/**
+ * Mark a DOM widget so a stale copy of it can be found and replaced. Also (L9.237): a DOM panel created with
+ * options.serialize = false is display-only. That option only keeps it out of the API prompt; frontend 1.53.10 saves
+ * a widget into widgets_values unless widget.serialize is false, so these panels wrote junk into every save (17 CNP
+ * node types, docs/evidence/L9.237) and, next to a forceInput socket, can make the legacy migration drop a real value.
+ * Only DOM panels: core's control_after_generate also has options.serialize = false and MUST stay saved.
+ */
 export function tagDomWidget(widget) {
-    try { if (widget?.element && widget.name) widget.element.setAttribute(ATTR, widget.name); } catch (_e) { /* ignore */ }
+    try {
+        if (widget?.element && widget.name) widget.element.setAttribute(ATTR, widget.name);
+        if (widget?.element && widget.options?.serialize === false && widget.serialize !== false) widget.serialize = false;
+    } catch (_e) { /* ignore */ }
 }
 
 export function isC2CNode(node) {
