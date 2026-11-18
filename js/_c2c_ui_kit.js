@@ -73,13 +73,13 @@ const CSS = `
 .c2ck-chip:hover{border-color:var(--c2c-overlay0);}
 
 /* popover menu (build per-open on document.body) */
-.c2ck-menu{position:fixed;z-index:2147483000;background:var(--c2c-bg2);border:1px solid var(--c2c-surface1);border-radius:9px;padding:5px;
+.c2ck-menu{position:fixed;z-index:var(--c2c-z-popover,9000);background:var(--c2c-bg2);border:1px solid var(--c2c-surface1);border-radius:9px;padding:5px;
   box-shadow:0 10px 30px rgba(0,0,0,.6);display:flex;flex-direction:column;gap:1px;min-width:176px;}
 .c2ck-menu-head{font-size:9px;font-weight:700;text-transform:uppercase;letter-spacing:.6px;color:var(--k-dim2);padding:5px 10px 3px;}
 .c2ck-menu-btn{display:flex;align-items:center;gap:9px;background:none;border:none;color:var(--k-fg);
   font:12px ui-sans-serif,system-ui;text-align:left;padding:7px 10px;border-radius:6px;cursor:pointer;
   transition:background .12s ease;width:100%;box-sizing:border-box;}
-.c2ck-menu-btn:hover:not(:disabled){background:var(--c2c-surface1);}
+.c2ck-menu-btn:hover:not(:disabled),.c2ck-menu-btn:focus-visible{background:var(--c2c-surface1);outline:none;}
 .c2ck-menu-btn:disabled{opacity:.4;cursor:not-allowed;}
 .c2ck-menu-btn .g{width:16px;text-align:center;flex:0 0 auto;color:var(--c2c-dim);}
 .c2ck-menu-sep{height:1px;background:var(--c2c-surface1);margin:3px 4px;}
@@ -100,8 +100,10 @@ export function ensureC2CKit() {
 
 /**
  * Build a floating-label popover menu on document.body (eclipse-proof:
- * position:fixed, high z-index, dismiss on outside pointerdown/wheel). Returns
+ * position:fixed, the theme's popover tier - below core dialogs - and dismiss on outside pointerdown/wheel). Returns
  * a `dismiss()` you should also call from the node's teardown.
+ * L9.241 keyboard: the first item takes focus; arrows / Home / End move, Enter / Space pick, Escape closes and focus
+ * returns where it was. role=menu / menuitem. Labels are text (never HTML).
  *
  * items: [{ label, glyph?, onPick, disabled?, title? } | { sep:true }]
  */
@@ -109,6 +111,8 @@ export function popoverMenu(clientX, clientY, { head, items } = {}) {
     ensureC2CKit();
     const menu = document.createElement("div");
     menu.className = "c2ck-menu";
+    menu.setAttribute("role", "menu");
+    const returnFocus = document.activeElement;
     if (head) {
         const h = document.createElement("div");
         h.className = "c2ck-menu-head";
@@ -118,10 +122,20 @@ export function popoverMenu(clientX, clientY, { head, items } = {}) {
     for (const it of (items || [])) {
         if (it.sep) { const s = document.createElement("div"); s.className = "c2ck-menu-sep"; menu.appendChild(s); continue; }
         const b = document.createElement("button");
+        b.type = "button";
         b.className = "c2ck-menu-btn";
-        b.innerHTML = `<span class="g">${it.glyph || ""}</span>${it.label}`;
+        b.setAttribute("role", "menuitem");
+        const g = document.createElement("span");
+        g.className = "g";
+        g.textContent = it.glyph || "";
+        b.append(g, document.createTextNode(String(it.label ?? "")));
         if (it.disabled) { b.disabled = true; if (it.title) b.title = it.title; }
-        else b.addEventListener("pointerdown", (ev) => { ev.preventDefault(); ev.stopPropagation(); dismiss(); try { it.onPick?.(); } catch (_) {} });
+        else {
+            const pick = () => { dismiss(); try { it.onPick?.(); } catch (_) {} };
+            b.addEventListener("pointerdown", (ev) => { ev.preventDefault(); ev.stopPropagation(); pick(); });
+            // keyboard activation (Enter / Space make a click with detail 0; a pointer pick already closed the menu)
+            b.addEventListener("click", (ev) => { if (ev.detail === 0) pick(); });
+        }
         menu.appendChild(b);
     }
     document.body.appendChild(menu);
@@ -132,10 +146,27 @@ export function popoverMenu(clientX, clientY, { head, items } = {}) {
     menu.style.left = Math.max(6, px) + "px";
     menu.style.top = Math.max(6, py) + "px";
     let onDoc = null;
+    let closed = false;
+    const enabled = () => [...menu.querySelectorAll(".c2ck-menu-btn:not(:disabled)")];
+    menu.addEventListener("keydown", (ev) => {
+        const list = enabled();
+        const i = list.indexOf(document.activeElement);
+        const go = (k) => { ev.preventDefault(); list[(k + list.length) % list.length]?.focus(); };
+        if (ev.key === "Escape") { ev.preventDefault(); ev.stopPropagation(); dismiss(); }
+        else if (ev.key === "ArrowDown") go(i + 1);
+        else if (ev.key === "ArrowUp") go(i < 0 ? list.length - 1 : i - 1);
+        else if (ev.key === "Home") go(0);
+        else if (ev.key === "End") go(list.length - 1);
+        else if (ev.key === "Tab") { ev.preventDefault(); dismiss(); }
+    });
     function dismiss() {
+        if (closed) return;
+        closed = true;
         try { menu.remove(); } catch (_) {}
         if (onDoc) { document.removeEventListener("pointerdown", onDoc, true); document.removeEventListener("wheel", onDoc, true); onDoc = null; }
+        try { if (returnFocus && returnFocus.isConnected) returnFocus.focus?.(); } catch (_) {}
     }
+    enabled()[0]?.focus();
     setTimeout(() => {
         onDoc = (ev) => { if (!menu.contains(ev.target)) dismiss(); };
         document.addEventListener("pointerdown", onDoc, true);

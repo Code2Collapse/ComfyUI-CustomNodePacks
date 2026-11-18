@@ -12,6 +12,13 @@ function _focusable(el) {
     return el;
 }
 
+let _uid = 0;
+/** L9.241: give a row's label an id and name its controls by it (screen readers announced a bare "slider"). */
+function _labelled(lbl, ...controls) {
+    if (!lbl.id) lbl.id = `c2c-ui-lbl-${++_uid}`;
+    for (const c of controls) c.setAttribute("aria-labelledby", lbl.id);
+}
+
 /**
  * @param {Array<{value: string, label: string}>} items
  * @param {{value?: string, onChange?: (v: string) => void, columns?: number}} [opts]
@@ -167,7 +174,9 @@ export function sliderRow(label, opts) {
     };
 
     slider.addEventListener("input", () => sync(parseFloat(slider.value)));
-    num.addEventListener("change", () => sync(parseFloat(num.value) || opts.min));
+    // L9.241: a typed 0 is a number (it used to jump to min); only a non-number keeps the current value
+    num.addEventListener("change", () => { const v = parseFloat(num.value); sync(Number.isFinite(v) ? v : val); });
+    _labelled(lbl, slider, num);
     sync(val);
 
     ctrl.appendChild(slider);
@@ -200,6 +209,7 @@ export function selectRow(label, opts) {
     }
     if (opts.value != null) sel.value = opts.value;
     sel.addEventListener("change", () => opts.onChange?.(sel.value));
+    _labelled(lbl, sel);
     ctrl.appendChild(sel);
     row.appendChild(lbl);
     row.appendChild(ctrl);
@@ -224,6 +234,7 @@ export function colorRow(label, opts = {}) {
     inp.className = "c2c-ui-color";
     inp.value = opts.value || "#b494ff";
     inp.addEventListener("input", () => opts.onChange?.(inp.value));
+    _labelled(lbl, inp);
     ctrl.appendChild(inp);
     row.appendChild(lbl);
     row.appendChild(ctrl);
@@ -261,6 +272,7 @@ export function toggleRow(label, opts = {}) {
         sync();
         opts.onChange?.(on);
     });
+    _labelled(lbl, btn);
     sync();
     ctrl.appendChild(btn);
     row.appendChild(lbl);
