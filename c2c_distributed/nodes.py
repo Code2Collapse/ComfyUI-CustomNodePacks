@@ -7,13 +7,13 @@ from . import enabled, kill_switch_reason
 from . import inventory as inv
 from . import usp
 try:                                                       # A28 layout declarations (display only)
-    from ..nodes._c2c_layout import with_layout
+    from ..nodes._layout_decl import with_layout
 except ImportError:  # loaded as a plain file (tests): the same module by path, never an absolute import
     try:
         import importlib.util as _c2c_ilu
         import os as _c2c_os
         _c2c_spec = _c2c_ilu.spec_from_file_location("c2c_layout_by_path", _c2c_os.path.join(
-            _c2c_os.path.dirname(_c2c_os.path.abspath(__file__)), '..', 'nodes', '_c2c_layout.py'))
+            _c2c_os.path.dirname(_c2c_os.path.abspath(__file__)), '..', 'nodes', '_layout_decl.py'))
         _c2c_mod = _c2c_ilu.module_from_spec(_c2c_spec)
         _c2c_spec.loader.exec_module(_c2c_mod)
         with_layout = _c2c_mod.with_layout
