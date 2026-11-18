@@ -555,6 +555,20 @@ except Exception as _exc:  # pragma: no cover
     )
     _HDR_MAPPINGS, _HDR_DISPLAY = {}, {}
 
+# Segment (C2C) - the unified segmentation node of owner card P04 (L7.123), slice 1: objects on core SAM 3
+try:
+    from .nodes.segment_c2c import (
+        NODE_CLASS_MAPPINGS as _SEGMENT_MAPPINGS,
+        NODE_DISPLAY_NAME_MAPPINGS as _SEGMENT_DISPLAY,
+    )
+except Exception as _exc:  # pragma: no cover
+    _c2c_rec_fail(
+        "Segment (C2C)", _exc,
+        hint="Unified segmentation on ComfyUI's own SAM 3 (core 0.39+).",
+        group="nodes",
+    )
+    _SEGMENT_MAPPINGS, _SEGMENT_DISPLAY = {}, {}
+
 # LocateAnything-3B grounding (open-vocabulary object detection → SAM prompts)
 try:
     from .nodes.locate_anything import (
@@ -843,6 +857,7 @@ _C2C_FAMILIES = [
     ("AsymFlow sampler", _ASYMFLOW_MAPPINGS, _ASYMFLOW_DISPLAY),
     ("HDR Color Science", _HDR_MAPPINGS, _HDR_DISPLAY),
     ("LocateAnything", _LOCATE_MAPPINGS, _LOCATE_DISPLAY),
+    ("Segment (C2C)", _SEGMENT_MAPPINGS, _SEGMENT_DISPLAY),
     ("Facepoints", _FACEPOINTS_MAPPINGS, _FACEPOINTS_DISPLAY),
     ("Nano Banana", _NANOBANANA_MAPPINGS, _NANOBANANA_DISPLAY),
     ("Control AOV", _CONTROLFORGE_MAPPINGS, _CONTROLFORGE_DISPLAY),

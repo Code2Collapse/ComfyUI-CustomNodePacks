@@ -45,7 +45,7 @@
 ## Overview
 
 <!-- C2C:NODE-COUNTS:BEGIN -->
-**ComfyUI-CustomNodePacks** registers **100** nodes across these families:
+**ComfyUI-CustomNodePacks** registers **101** nodes across these families:
 
 | Family | Nodes |
 |--------|------:|
@@ -78,6 +78,7 @@
 | AsymFlow sampler | 1 |
 | HDR Color Science | 1 |
 | LocateAnything | 2 |
+| Segment (C2C) | 1 |
 | Facepoints | 1 |
 | Nano Banana | 1 |
 | Control AOV | 1 |
@@ -86,7 +87,7 @@
 
 Startup log line to verify the pack loaded:
 
-`[C2C] CustomNodePacks: 100 nodes loaded (Vault 6, Folder Incrementer 5, Render farm 3, C2C Distributed 2, Fluid Shots/Audio 3, C2C video 3, MaskEditControl 9, Image Mask Editor 1, Model analysis 1, Face Fixer 1, Mask + Matting 5, Layer Effects 1, Mask toolkit 1, Frequency / Grain 3, Tiled refinement 4, Magnific 15, AV Handles 1, Save Video 1, SAM Multi-Mask Picker 1, SAM Loader/Generator 2, Mask Placement 1, Semantic Segment 1, NukeNodeMax 1, Video Stabilizer 1, C2C helpers 8, Prompt Relay 3, AsymFlow sampler 1, HDR Color Science 1, LocateAnything 2, Facepoints 1, Nano Banana 1, Control AOV 1, Restored VFX 3, Legacy (deprecated) 7) - 0 failed`
+`[C2C] CustomNodePacks: 101 nodes loaded (Vault 6, Folder Incrementer 5, Render farm 3, C2C Distributed 2, Fluid Shots/Audio 3, C2C video 3, MaskEditControl 9, Image Mask Editor 1, Model analysis 1, Face Fixer 1, Mask + Matting 5, Layer Effects 1, Mask toolkit 1, Frequency / Grain 3, Tiled refinement 4, Magnific 15, AV Handles 1, Save Video 1, SAM Multi-Mask Picker 1, SAM Loader/Generator 2, Mask Placement 1, Semantic Segment 1, NukeNodeMax 1, Video Stabilizer 1, C2C helpers 8, Prompt Relay 3, AsymFlow sampler 1, HDR Color Science 1, LocateAnything 2, Segment (C2C) 1, Facepoints 1, Nano Banana 1, Control AOV 1, Restored VFX 3, Legacy (deprecated) 7) - 0 failed`
 <!-- C2C:NODE-COUNTS:END -->
 
 With **ComfyUI-OmniScale** installed next to this pack, the 15 Magnific nodes are registered by OmniScale instead,
@@ -455,6 +456,7 @@ CustomNodePacks registers **103 nodes** (counts per family and the startup line:
 | LocateAnything Grounding (MEC) | [`LocateAnythingGroundingMEC`](NODE_REFERENCE.md#locateanythinggroundingmec) | Find things in an image by describing them in words - 'the person on the left', 'red car', 'coffee cup' - and get back bounding boxes. |
 | LocateAnything → SAM Prompt (MEC) | [`LocateAnythingToSAMMEC`](NODE_REFERENCE.md#locateanythingtosammec) | Turn bounding boxes into filled rectangles a SAM node can take as box prompts. |
 | Semantic Segment — Face / Clothes Parsing | [`SemanticSegmentMEC`](NODE_REFERENCE.md#semanticsegmentmec) | Semantic face / clothes parsing using SegFormer. |
+| Segment (C2C) | [`SegmentC2C`](NODE_REFERENCE.md#segmentc2c) | Find objects by words, clicks or boxes with ComfyUI's own SAM 3 / 3.1: one mask per object, their union and boxes (first slice of the unified segmentation node). |
 
 ### 🐺 C2C/🧰 Core/Stabilization
 
@@ -1682,6 +1684,11 @@ read any file path. Through an SSH tunnel the page still counts as local.
   last placement and `info` says which. How-to: [docs/mask-placement.md](docs/mask-placement.md).
 - **Video Stabilizer** (2026-11-18): the three old nodes (Classic / Dense Flow / Auto) are removed; saved workflows
   turn into Video Stabilizer on load with the method the old node ran (`C2C_LEGACY_STABILIZERS=1` keeps them).
+- **Segment (C2C)** (new, 2026-11-19, owner card P04): the start of the one segmentation node. This first version
+  finds objects by words ("person", "person:3, dog"), clicks or boxes on ComfyUI's own SAM 3 / 3.1 (the same model the
+  Mask + Matting viewer loads, shared), with one mask per object, their union and boxes. A clip is done frame by frame
+  for now; tracking, face / clothes parsing, automatic masks and a measured refine stage follow. Design:
+  docs in the C2C workspace (L7.123).
 - **Mask Tools (C2C)** `grade` (2026-11-19) works like Nuke's Grade on a matte: black point, white point, lift and
   offset join gain / gamma / clamp / invert (new controls at their defaults change nothing). The report's coverage now
   reads in percent for grade, difference key, transform and grow / shrink (it showed a 0..1 value with a % sign).
