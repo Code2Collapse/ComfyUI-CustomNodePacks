@@ -25,6 +25,7 @@ import { ensureC2CKit } from "./_c2c_ui_kit.js";
 import { createComparePlayer } from "./_c2c_compare_player.js";
 import { holdPlayerWidth } from "./c2c_video_player.js";
 import { setWidgetVisible } from "./_widget_visibility.js";
+import { canvasBackingScale, onZoomChange } from "./c2c_ui/nodes2.js";
 
 // Registered under both "VideoComparerC2C" (new) and "VideoComparerMEC"
 // (legacy alias) so old saved workflows load with the new widget.
@@ -345,6 +346,16 @@ app.registerExtension({
             // willReadFrequently: that flag moves the canvas to the CPU and made
             // every wipe and video frame composite in software.
             const ctx = cvs.getContext("2d");
+            // L9.282 P1.5: the backing store is CSS size x devicePixelRatio x graph zoom (capped by canvasBackingScale)
+            // and everything below draws in CSS units through the transform - sharp on HiDPI screens and when zoomed in
+            const sizeCanvas = (cw, ch) => {
+                const sc = canvasBackingScale(cw, ch);
+                const bw = Math.max(1, Math.round(cw * sc)), bh = Math.max(1, Math.round(ch * sc));
+                if (cvs.width !== bw || cvs.height !== bh) { cvs.width = bw; cvs.height = bh; }
+                cvs.style.height = ch + "px";
+                ctx.setTransform(bw / cw, 0, 0, bh / ch, 0, 0);
+                ctx.imageSmoothingQuality = "high";
+            };
 
             // ── Synced player v2 (mode = "synced_player", L9.40): Load Video's transport, the A/B view (wipe,
             //    difference, onion, flicker, zoom, loupe), side by side, a 2 x 2 grid and per-frame metrics -
@@ -439,7 +450,7 @@ app.registerExtension({
 
                 if (!S.srcA && !S.srcB && !S.serverPreview) {
                     const ch = 240;
-                    if (cvs.width !== cw || cvs.height !== ch) { cvs.width = cw; cvs.height = ch; }
+                    sizeCanvas(cw, ch);
                     ctx.fillStyle = C.scrimDark2; ctx.fillRect(0, 0, cw, ch);
                     ctx.fillStyle = C.sub;
                     ctx.font = "12px system-ui,sans-serif";
@@ -456,7 +467,7 @@ app.registerExtension({
                     const img = S.serverPreview;
                     const ar = img.h / img.w;
                     const ch = Math.max(180, Math.min(720, Math.round(cw * ar)));
-                    if (cvs.width !== cw || cvs.height !== ch) { cvs.width = cw; cvs.height = ch; }
+                    sizeCanvas(cw, ch);
                     ctx.clearRect(0, 0, cw, ch);
                     ctx.drawImage(img.el, 0, 0, cw, ch);
                     modeBadge.textContent = mode;
@@ -472,7 +483,7 @@ app.registerExtension({
                 const baseH = Math.max(refA.h || 1, refB?.h || 1);
                 const aspect = baseH / baseW;
                 const ch = Math.max(180, Math.min(720, Math.round(cw * aspect)));
-                if (cvs.width !== cw || cvs.height !== ch) { cvs.width = cw; cvs.height = ch; }
+                sizeCanvas(cw, ch);
 
                 modeBadge.textContent = mode;
                 liveBadge.textContent = isLive ? "● LIVE" : "○ Queue to render";
@@ -590,7 +601,11 @@ app.registerExtension({
                             p[i] = lut[idx*3]; p[i+1] = lut[idx*3+1]; p[i+2] = lut[idx*3+2]; p[i+3] = 255;
                         }
                     }
-                    ctx.putImageData(outImg, 0, 0);
+                    // computed at CSS resolution (the read-back cost does not grow with DPR x zoom), then drawn scaled
+                    const outC = (S._diffOut ||= document.createElement("canvas"));
+                    if (outC.width !== cw || outC.height !== ch) { outC.width = cw; outC.height = ch; }
+                    outC.getContext("2d").putImageData(outImg, 0, 0);
+                    ctx.drawImage(outC, 0, 0, cw, ch);
                     return;
                 }
 
@@ -616,6 +631,9 @@ app.registerExtension({
                 if (playing || S.drag) S.rafToken = requestAnimationFrame(rafTick);
             };
             const kick = () => { if (!S.rafToken) S.rafToken = requestAnimationFrame(rafTick); };
+            // graph zoom changed: redraw once at the new backing scale (the shared watcher, never per frame)
+            try { node._VC_zoomOff?.(); } catch (_e) { /* ignore */ }
+            node._VC_zoomOff = onZoomChange(() => kick());
 
             // ── Pointer interaction ─────────────────────────
             const xy = (e) => {
@@ -790,6 +808,7 @@ app.registerExtension({
             if (this._VC?.rafToken) cancelAnimationFrame(this._VC.rafToken);
             try { this._VC?.releaseAll?.(); } catch {}
             try { this._VC?.cmp?.destroy(); } catch {}
+            try { this._VC_zoomOff?.(); } catch {}
         };
     },
 });

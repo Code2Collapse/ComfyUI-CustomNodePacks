@@ -6,6 +6,7 @@ import { api } from "../../scripts/api.js";
 import { reportFailure as __c2cReport } from "./_c2c_report.js";
 import { C } from './_c2c_theme.js';
 import { ensureC2CKit } from "./_c2c_ui_kit.js";
+import { canvasBackingScale, onZoomChange } from "./c2c_ui/nodes2.js";
 
 /**
  * VideoFramePlayerMEC - frame scrubber + drag-crop + aspect-lock overlay.
@@ -254,11 +255,12 @@ app.registerExtension({
             setDisplayMode("time");
             refreshCropBtn();
 
+            // CSS units (L9.282: the backing store is CSS x DPR x zoom; drawing and hit tests use CSS units)
             const canvasXY = (e) => {
                 const r = cvs.getBoundingClientRect();
                 return [
-                    (e.clientX - r.left) * (cvs.width / (r.width || 1)),
-                    (e.clientY - r.top) * (cvs.height / (r.height || 1)),
+                    (e.clientX - r.left) * ((S.cssW || cvs.width) / (r.width || 1)),
+                    (e.clientY - r.top) * ((S.cssH || cvs.height) / (r.height || 1)),
                 ];
             };
 
@@ -544,7 +546,7 @@ app.registerExtension({
             });
 
             const tlRect = () => {
-                const cw = cvs.width, ch = cvs.height;
+                const cw = S.cssW || cvs.width, ch = S.cssH || cvs.height;
                 const pad = 16;
                 const x = pad, y = ch - TL_H - 14;
                 const w = cw - pad * 2, h = TL_H;
@@ -552,6 +554,8 @@ app.registerExtension({
                          barX: x + PLAY_BTN_W + 8, barW: w - PLAY_BTN_W - 8 };
             };
             node._tlRect = tlRect;
+            try { node._vfpZoomOff?.(); } catch (_e) { /* ignore */ }
+            node._vfpZoomOff = onZoomChange(() => node._render?.());   // redraw at the new backing scale
 
             const startPlay = () => {
                 S._lastT = performance.now();
@@ -742,10 +746,19 @@ app.registerExtension({
             const cvs = S.cvs, ctx = S.ctx;
             const cw = S.el.clientWidth || 480;
             const ch = Math.max(160, cvs.clientHeight || (S.el.clientHeight - 36) || 320);
-            if (cvs.width !== cw || cvs.height !== ch) {
-                cvs.width = cw;
-                cvs.height = ch;
+            // L9.282 P1.2 (canvas half): backing = CSS size x devicePixelRatio x graph zoom (capped), drawn in CSS units
+            // through the transform - sharp on HiDPI and zoomed in. The CSS height is pinned to what the old 1:1 backing
+            // gave, so the layout does not change.
+            const sc = canvasBackingScale(cw, ch);
+            const bw = Math.max(1, Math.round(cw * sc)), bh = Math.max(1, Math.round(ch * sc));
+            if (cvs.width !== bw || cvs.height !== bh) {
+                cvs.width = bw;
+                cvs.height = bh;
             }
+            cvs.style.height = ch + "px";
+            S.cssW = cw; S.cssH = ch;
+            ctx.setTransform(bw / cw, 0, 0, bh / ch, 0, 0);
+            ctx.imageSmoothingQuality = "high";
             ctx.clearRect(0, 0, cw, ch);
 
             // The card-style background is now provided by the parent HTML
@@ -1022,6 +1035,7 @@ app.registerExtension({
         const _onRemoved = nodeType.prototype.onRemoved;
         nodeType.prototype.onRemoved = function () {
             try { this._stopPlay?.(); } catch (__c2cErr) { __c2cReport("video_frame_player", __c2cErr); }
+            try { this._vfpZoomOff?.(); } catch (_e) { /* ignore */ }
             _onRemoved?.apply(this, arguments);
         };
     },
