@@ -1684,6 +1684,9 @@ read any file path. Through an SSH tunnel the page still counts as local.
   (`grow_follow_face`). At the defaults the result is exactly the old grow (2026-11-17).
 - **Image Mask Editor (C2C)** previews round to the nearest code value instead of truncating (they were half a level
   too dark) (2026-11-17).
+- **Tensor Inspector / SeedVR2 preview switches now do the whole job:** turning off "Tensor Inspector: enabled"
+  also stops it measuring every node's outputs (from the next start), and turning off "SeedVR2 preview" also stops
+  C2C hooking into the SeedVR2 upscaler for new runs (2026-11-18).
 - **More switches in Settings > C2C:** Diagnostics > Per-node time and memory, Masks > Matte viewer, Models &
   Downloads > Model-free fallbacks, Video > Save > Encode with FFmpeg, Vault > Unlock lasts (minutes), Masks > SAM 3.1 refine pass, Video > Save > Write a
   source proxy and Previews > Do not force sampler previews on. Each was
