@@ -1696,6 +1696,19 @@ read any file path. Through an SSH tunnel the page still counts as local.
   (`grow_follow_face`). At the defaults the result is exactly the old grow (2026-11-17).
 - **Image Mask Editor (C2C)** previews round to the nearest code value instead of truncating (they were half a level
   too dark) (2026-11-17).
+- **Security:** the model browser sent your Civitai / Hugging Face token to any address that merely *contained*
+  "civitai" or "huggingface" (for example `civitai.example.net`); now only to civitai.com, huggingface.co and their
+  own subdomains (or the base you configured). Keys are also removed from C2C log lines, error records and AI
+  payloads, including the newer key shapes (Groq, xAI, Perplexity, Fireworks, Replicate, OpenAI project keys)
+  (2026-11-18).
+- **Saved workflows are leaner:** display-only panels (previews, status strips, editors) no longer write empty values
+  into the workflow file. Old files still load with every setting intact (2026-11-18).
+- **Face Landmarks:** with tracking on, "largest face" stays on the same person while they are in view instead of
+  jumping to whoever is momentarily bigger; it chooses again after a scene cut (2026-11-18).
+- **Fluid Shot Decoder:** a new `info` output says when the processed clip had a different frame count and the
+  timing is only approximate; turn off `allow_approximate` to stop with an error instead (2026-11-18).
+- **Magnific (sign-in nodes):** a slow or offline service no longer delays ComfyUI loading its node list: the last
+  lists are shown while they refresh in the background (2026-11-18).
 - **C2C Bypass Manager** (new tool, not a node): right-click a node -> "Every <type>" -> bypass / mute / set to normal
   every node of that type, including inside subgraphs; the canvas menu does it by name pattern and restores
   everything; Ctrl+Alt+Shift+B / M / N do it for the selected node's type; the "Bypass" chip in the C2C bar opens a
