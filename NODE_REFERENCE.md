@@ -2278,7 +2278,7 @@ Universal mask placement: source an alpha (wire a mask, or give a text prompt + 
 
 **Shown in the menu as:** Mask Tools (C2C)
 
-Keyers and matte operations in one node: colour, luma and difference keys; grade (gain, gamma, clamp, invert); grow or shrink each side (left / right / up / down) with a feather; combine two mattes; gradient; grain; motion blur; edge spread; channel shuffle; transform (grow, blur and offset per axis, feather, threshold, invert).
+Keyers and matte operations in one node: colour, luma and difference keys; grade (gain, gamma, clamp, invert, black / white point, lift, offset - as Nuke Grade); grow or shrink each side (left / right / up / down) with a feather; combine two mattes; gradient; grain; motion blur; edge spread; channel shuffle; transform (grow, blur and offset per axis, feather, threshold, invert).
 
 **Source:** `ComfyUI-CustomNodePacks/nodes/mask_toolkit/nodes.py`  
 **Provenance:** ComfyUI_LayerStyle by chflame163 (MIT,
@@ -2362,6 +2362,10 @@ Keyers and matte operations in one node: colour, luma and difference keys; grade
 | `grow_falloff` | `FLOAT` | default `0.0`, range 0.0…4096.0, step 1.0 | grow / shrink: soft fall-off of the grown band, same units (0 = hard edge). |
 | `grow_follow_face` | `BOOLEAN` | default `True` | grow / shrink: with face_pose connected, turn the axes with each frame's head tilt (added to grow_angle). |
 | `face_pose` | `POSE_KEYPOINT` |  | grow / shrink: Face Landmarks' pose_keypoint - the axes follow the head's tilt per frame (first face). |
+| `grade_blackpoint` | `FLOAT` | default `0.0`, range -1.0…1.0, step 0.001 | grade: this matte value becomes black (0) - raise it to crush faint spill. |
+| `grade_whitepoint` | `FLOAT` | default `1.0`, range 0.0…2.0, step 0.001 | grade: this matte value becomes white (1) - lower it to make a weak core solid. |
+| `grade_lift` | `FLOAT` | default `0.0`, range -1.0…1.0, step 0.001 | grade: raise (or lower) the blacks while white stays put. |
+| `grade_offset` | `FLOAT` | default `0.0`, range -1.0…1.0, step 0.001 | grade: add this to every value (before gamma). |
 
 **Outputs**
 
@@ -4857,7 +4861,7 @@ Unified video-mask tracker. Pick a mode and the corresponding engine runs. All m
 | `easing` | choice: `linear`, `ease_in`, `ease_out`, `smooth_step` | default `"smooth_step"` | [anchor] easing curve |
 | `sdf_iterations` | `INT` | default `64`, range 4…512, step 4 | [anchor] SDF diffusion iterations |
 | `flow_refinement` | `BOOLEAN` | default `False` | [anchor] optical-flow refine (needs video) |
-| `metric` | choice: `mask_iou`, `pixel_diff`, `flow_warp` | default `"pixel_diff"` | [consistency_check] metric |
+| `metric` | choice: `mask_iou`, `pixel_diff`, `flow_warp`, `edge_stability` | default `"pixel_diff"` | [consistency_check] metric |
 | `binarize_threshold` | `FLOAT` | default `0.5`, range 0.01…0.99, step 0.01 | [consistency_check] mask binarize threshold |
 
 **Optional inputs**

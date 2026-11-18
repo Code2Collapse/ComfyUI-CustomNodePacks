@@ -344,7 +344,7 @@ class MaskTrackerMEC:
             raise ValueError("MaskTrackerMEC expects MASK tensor [H,W] or [B,H,W]")
 
         with torch.no_grad():
-            return (*self._execute_impl(
+            res = (*self._execute_impl(
                 mode, camera_compensation, stabilization_method, detection_mode,
                 pixel_diff_enabled, pixel_diff_threshold, flow_enabled,
                 flow_threshold, flow_algorithm, bg_sub_enabled, bg_model_frames,
@@ -355,6 +355,10 @@ class MaskTrackerMEC:
                 sdf_iterations, flow_refinement, metric, binarize_threshold,
                 mask, video, sam_model, points_json,
             ), "", *self._no_boxes(appended))
+        if mode == "consistency_check":
+            # L7.127: the per-pair scores also go to the node's chart (js/mask_track_consistency_chart.js)
+            return {"ui": {"mt_consistency": [res[3]]}, "result": res}
+        return res
 
     @staticmethod
     def _no_boxes(a):

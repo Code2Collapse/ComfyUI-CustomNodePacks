@@ -61,6 +61,42 @@ def _flow_warp_diff(prev_rgb: np.ndarray, curr_rgb: np.ndarray) -> float:
     return float(np.mean(np.abs(warped - curr_rgb.astype(np.float32))))
 
 
+def _edge_band(a: np.ndarray, b: np.ndarray, thr: float, radius: int) -> np.ndarray:
+    """Pixels near either matte's edge: soft alpha in either, or within `radius` of either binarised boundary."""
+    soft = ((a > 0.02) & (a < 0.98)) | ((b > 0.02) & (b < 0.98))
+    if not _HAS_CV2:
+        return soft
+    k = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (2 * radius + 1, 2 * radius + 1))
+    band = soft.copy()
+    for m in (a, b):
+        bin_u8 = (m > thr).astype(np.uint8)
+        edge = cv2.dilate(bin_u8, k) != cv2.erode(bin_u8, k)
+        band |= edge
+    return band
+
+
+def _edge_stability(prev_m: np.ndarray, curr_m: np.ndarray, prev_img, curr_img, thr: float) -> tuple[float, bool]:
+    """L7.127: mean alpha change in a band around the matte edge between two frames (0 = the edge holds, 1 = it
+    jumps fully). With frames and OpenCV the previous matte is first moved along the picture's optical flow
+    (Farneback, sampled current -> previous), so an edge that follows the subject does not count as flicker."""
+    h, w = curr_m.shape
+    moved = prev_m
+    compensated = False
+    if _HAS_CV2 and prev_img is not None and curr_img is not None:
+        flow = cv2.calcOpticalFlowFarneback(_to_uint8_gray(curr_img), _to_uint8_gray(prev_img), None,
+                                            pyr_scale=0.5, levels=3, winsize=15, iterations=3, poly_n=5,
+                                            poly_sigma=1.2, flags=0)
+        gx, gy = np.meshgrid(np.arange(w, dtype=np.float32), np.arange(h, dtype=np.float32))
+        moved = cv2.remap(prev_m.astype(np.float32), gx + flow[..., 0], gy + flow[..., 1],
+                          interpolation=cv2.INTER_LINEAR, borderMode=cv2.BORDER_REPLICATE)
+        compensated = True
+    radius = max(2, int(round(min(h, w) * 0.01)))
+    band = _edge_band(moved, curr_m, thr, radius)
+    if not band.any():
+        return 0.0, compensated
+    return float(np.abs(moved[band] - curr_m[band]).mean()), compensated
+
+
 def _mask_iou(prev: torch.Tensor, curr: torch.Tensor, thr: float = 0.5) -> float:
     a = (prev > thr)
     b = (curr > thr)
@@ -74,7 +110,8 @@ def _mask_iou(prev: torch.Tensor, curr: torch.Tensor, thr: float = 0.5) -> float
 class TemporalConsistencyCheckerMEC:
     """Diagnose flicker / drift in mask or image sequences."""
 
-    METRICS = ["mask_iou", "pixel_diff", "flow_warp"]
+    # L7.127: edge_stability appended last, so saved values keep their meaning (Mask Track reuses this list)
+    METRICS = ["mask_iou", "pixel_diff", "flow_warp", "edge_stability"]
 
     @classmethod
     def INPUT_TYPES(cls):
@@ -85,7 +122,11 @@ class TemporalConsistencyCheckerMEC:
                     "tooltip": (
                         "mask_iou: requires MASK input; per-frame IoU.\n"
                         "pixel_diff: L1 diff between consecutive frames (image or mask).\n"
-                        "flow_warp: Farneback flow + warp + L1 diff (requires OpenCV)."
+                        "flow_warp: Farneback flow + warp + L1 diff (requires OpenCV).\n"
+                        "edge_stability: needs MASK; how much the matte EDGE jumps between frames (alpha change "
+                        "in a band around the edge). With the image wired it follows the picture's motion first, "
+                        "so only flicker counts - a steady edge can be grown or shrunk later, a flickering one "
+                        "cannot."
                     ),
                 }),
             },
@@ -154,8 +195,8 @@ class TemporalConsistencyCheckerMEC:
         mask: torch.Tensor | None = None,
         binarize_threshold: float = 0.5,
     ):
-        if metric == "mask_iou" and mask is None:
-            raise ValueError("mask_iou requires a MASK input.")
+        if metric in ("mask_iou", "edge_stability") and mask is None:
+            raise ValueError(f"{metric} requires a MASK input.")
         if metric in ("pixel_diff", "flow_warp") and image is None and mask is None:
             raise ValueError(f"{metric} requires either an IMAGE or a MASK input.")
 
@@ -165,7 +206,7 @@ class TemporalConsistencyCheckerMEC:
             logger.warning("[MEC] flow_warp unavailable (no OpenCV); using pixel_diff.")
             actual_metric = "pixel_diff"
 
-        if actual_metric == "mask_iou":
+        if actual_metric in ("mask_iou", "edge_stability"):
             seq = mask
         elif image is not None:
             seq = image
@@ -185,10 +226,21 @@ class TemporalConsistencyCheckerMEC:
         B = int(seq.shape[0])
         scores: list[float] = []
         seq_cpu = seq.detach().cpu()
+        img_cpu = image.detach().cpu() if (image is not None and actual_metric == "edge_stability") else None
+        if img_cpu is not None and (img_cpu.shape[0] != B or tuple(img_cpu.shape[1:3]) != tuple(seq_cpu.shape[-2:])):
+            img_cpu = None                                # frames that do not match the matte: score uncompensated
+        compensated_any = False
         for i in range(B - 1):
             a = seq_cpu[i]
             b = seq_cpu[i + 1]
-            if actual_metric == "mask_iou":
+            if actual_metric == "edge_stability":
+                s, comp = _edge_stability(a.float().numpy(), b.float().numpy(),
+                                          None if img_cpu is None else img_cpu[i, ..., :3].float().numpy(),
+                                          None if img_cpu is None else img_cpu[i + 1, ..., :3].float().numpy(),
+                                          binarize_threshold)
+                compensated_any |= comp
+                scores.append(s)
+            elif actual_metric == "mask_iou":
                 s = _mask_iou(a, b, binarize_threshold)
                 # Convert IoU (1 = stable) to instability in [0, 1]
                 scores.append(1.0 - s)
@@ -216,6 +268,12 @@ class TemporalConsistencyCheckerMEC:
             "pairs": [{"i": i, "score": float(s)} for i, s in enumerate(scores)],
             "flicker_score": flicker,
         }
+        if actual_metric == "edge_stability":
+            report["motion_compensated"] = bool(compensated_any)
+            report["worst_pairs"] = [int(i) for i in np.argsort(scores)[::-1][:3]] if scores else []
+            report["note"] = ("Alpha change around the matte edge, 0 = the edge holds, 1 = it jumps fully. "
+                              + ("Motion was followed with optical flow." if compensated_any else
+                                 "No matching frames wired (or no OpenCV): moving edges count as change too."))
         return (image, mask, flicker, json.dumps(report, indent=2))
 
 
