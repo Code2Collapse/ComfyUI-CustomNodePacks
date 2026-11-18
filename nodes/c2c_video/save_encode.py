@@ -38,6 +38,13 @@ def _import_folder_paths():
 
 
 def read_comfy_setting(key: str, default: str) -> str:
+    try:  # L3.01: a declared setting resolves through the registry (env -> saved, validated -> default)
+        from .. import _c2c_settings as _reg
+        if key in {s.id for s in _reg.declared()}:
+            val = _reg.get(key)
+            return str(val) if val not in (None, "") else default
+    except Exception:  # noqa: BLE001 - fall back to reading the file directly
+        pass
     try:
         fp = _import_folder_paths()
         base = fp.get_user_directory()

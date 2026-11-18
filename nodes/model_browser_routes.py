@@ -88,13 +88,26 @@ def _friendly_http_error(status: int, url: str) -> str:
     return f"HTTP {status} from {host}"
 
 
+def _belongs(url: str, domains: tuple, bases: tuple) -> bool:
+    """True when ``url`` is on one of ``domains`` (the host itself or a subdomain) or under a configured base (same
+    host, path prefix). L3 S6: a substring test sent the token to e.g. civitai.example.net or huggingface.co.evil.io."""
+    u = urllib.parse.urlparse(url)
+    host = (u.hostname or "").lower()
+    if any(host == d or host.endswith("." + d) for d in domains):
+        return True
+    for base in bases:
+        b = urllib.parse.urlparse(base)
+        if b.hostname and host == b.hostname.lower() and (u.path or "/").startswith(b.path or "/"):
+            return True
+    return False
+
+
 def _auth_header(url: str) -> dict:
     """The user's token for the site this URL belongs to (the configured base counts as that site)."""
-    host = urllib.parse.urlparse(url).netloc
-    if "civitai" in host or url.startswith((_CIVITAI_BASE, _CIVITAI_DL_BASE)):
+    if _belongs(url, ("civitai.com",), (_CIVITAI_BASE, _CIVITAI_DL_BASE)):
         key = os.environ.get("CIVITAI_API_KEY", "").strip()
         return {"Authorization": f"Bearer {key}"} if key else {}
-    if "huggingface" in host or url.startswith((_HF_API_BASE, _HF_BASE)):
+    if _belongs(url, ("huggingface.co", "hf.co"), (_HF_API_BASE, _HF_BASE)):
         tok = os.environ.get("HF_TOKEN", "").strip()
         return {"Authorization": f"Bearer {tok}"} if tok else {}
     return {}

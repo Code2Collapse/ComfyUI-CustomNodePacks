@@ -67,6 +67,16 @@ class RedactionResult:
 def redact_text(s: str) -> RedactionResult:
     counts: dict[str, int] = {}
     out = s
+    try:                                       # L3 S6: the shared secret rules (more key shapes, auth values, env keys)
+        try:
+            from ..nodes._c2c_redact import redact_secrets
+        except ImportError:                    # c2c_ai imported as a top-level package (tests, tools)
+            from nodes._c2c_redact import redact_secrets
+        out, n = redact_secrets(out)
+        if n:
+            counts["KEY"] = n
+    except Exception:  # noqa: BLE001 - the local rules below still run
+        pass
     for label, pat, repl in _PATTERNS:
         out, n = pat.subn(repl, out)
         if n:

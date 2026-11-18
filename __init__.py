@@ -12,6 +12,12 @@ A growing collection of custom nodes:
 
 print("[MEC] Loading MaskEditControl node pack …")
 
+try:  # L3 S6: keys never reach the log through a C2C / MEC logger
+    from .nodes._c2c_redact import install_log_filter as _c2c_install_log_filter
+    _c2c_install_log_filter()
+except Exception:  # noqa: BLE001 - never block the pack
+    pass
+
 
 def _c2c_try_import(mod: str, *names: str):
     """L9.196: one module that fails to import must cost only its own nodes, not the whole pack (memory
@@ -985,6 +991,11 @@ try:
         _c2c_reg_register_routes(_ps)
     except Exception as _re:
         print(f"[C2C] registry routes deferred: {_re}")
+    try:  # L3.01: settings registry schema / effective routes
+        from .nodes._c2c_settings import register_routes as _c2c_settings_routes
+        _c2c_settings_routes(_ps)
+    except Exception as _se:  # noqa: BLE001 - static JS settings keep working without it
+        print(f"[C2C] settings registry routes unavailable: {_se}")
     for _hook, _args in ((_register_integrity_routes, (_ps,)), (_start_integrity_scan, ()),
                          (_install_insight_hook, ())):
         if _hook is not None:                    # L9.196: a module that failed to import is skipped, not fatal

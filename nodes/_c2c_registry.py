@@ -60,6 +60,15 @@ class FailureRecord:
     traceback: str = ""
     severity: str = "warning"             # "warning" | "error" | "info"
 
+    def __post_init__(self):
+        # L3 S6: a key inside an exception text never reaches the status route, the socket event or the log
+        try:
+            from ._c2c_redact import redact
+            self.message, self.traceback = redact(self.message), redact(self.traceback)
+            self.hint = redact(self.hint) if self.hint else self.hint
+        except Exception:  # noqa: BLE001 - recording a failure must never fail
+            pass
+
 
 @dataclass
 class StatusRecord:
