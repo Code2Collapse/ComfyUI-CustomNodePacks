@@ -1686,6 +1686,20 @@ read any file path. Through an SSH tunnel the page still counts as local.
   turn into Video Stabilizer on load with the method the old node ran (`C2C_LEGACY_STABILIZERS=1` keeps them).
 - **Save Video (C2C)** (2026-11-19): H.264 (NVENC) encodes at most 4096 px a side; a larger clip is now refused
   before ffmpeg starts, naming H.265 / AV1 (NVENC) or the CPU encoder (it used to fail with "NVENC could not start").
+- **Mask Refiner / Mask Track viewer** (2026-11-19): after a run both show the plate with their matte (scrub, Comp /
+  Alpha / Checker / Overlay, coverage / edge detail / flicker). **Mask + Matting** shows the matte of the newest
+  finished frame while it runs (setting "Live matte while running").
+- **Load Video (C2C) + a Wan 2.1 / 2.2 VAE** (2026-11-19) now encodes the clip as an exact stream (the latent equals
+  core's VAE Encode), with spatial tiles when a step would not fit the GPU - no more Load -> IMAGE -> VAE Encode detour.
+- **SeedVR2 preview** (2026-11-19): tiles of its tiled VAE decode appear as they finish.
+- **Video Inpaint (ProPainter)** (2026-11-19): new `backend` - `auto` uses ProPainter only if you installed it, else a
+  model-free OpenCV fill (approximate). Saved workflows keep ProPainter. Audit in the C2C workspace (L7.92).
+- **New features (A25)** (2026-11-19): Size, Conditional Switch, Execution Timer, Batch Range, Probe, Number Lerp,
+  Seed List, Text Template; Video Stabilizer (horizon lock, path correction, rolling shutter), Video Comparer (change
+  report), Frame Player (rotate + pad, source map), PAR (lens metadata, overscan, round-trip check), Audio Reverser
+  (range, grain), Fluid Shots (scene cuts, local motion, audio retime, integrity), AV Handles (grid-aligned, exact
+  audio), Save Video (pingpong, verified delivery manifest). Every new input is appended with a default that keeps
+  saved workflows exactly as they were; see each node's tooltips.
 - **Video Frame Player** (2026-11-19): a clip longer than 120 frames reaches the player as ONE small proxy video
   instead of a picture per frame (300 frames: 54.8 MB of PNGs -> one 10.8 MB file; the browser holds one video, not
   300 images). Every frame of the proxy is a keyframe, so scrubbing lands on the exact frame. Setting: "Frame Player:
