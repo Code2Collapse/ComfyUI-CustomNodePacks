@@ -13,6 +13,54 @@ import { vueFitNodeHeight, vueSyncNodeWidgets } from "./_widget_visibility.js";
 import { ensureC2CKit } from "./_c2c_ui_kit.js";
 import { afterRender, rebindNode, tagDomWidget } from "./_vue_dom_rebind.js";
 import { createViewer } from "./c2c_viewer/viewer.js";
+import { executionIdOf } from "./c2c_viewer/transport.js";
+
+// L7.73: the live matte while the node runs (nodes/mask_matting/_live_preview.py). The server names the executing
+// node by its execution id ("12" or "7:12" inside a subgraph); the viewer of the node with that id draws it, and the
+// next "executing" event (another node, or the end of the run) hands the frame back to the normal result.
+const LIVE_EVENT = "c2c.mask_matting.live";
+const liveNodes = new Set();          // nodes with a mounted viewer
+const showingLive = new Map();        // node -> execution id it is showing live
+
+function liveNodeFor(d) {
+    const ids = [d?.node, d?.display_node].filter((v) => v != null && v !== "").map(String);
+    if (!ids.length) return null;
+    const root = app.rootGraph ?? app.graph;
+    for (const node of liveNodes) {
+        if (!node.graph || !node.__c2cViewer) continue;
+        const id = executionIdOf(root, node);
+        if (id && ids.includes(id)) return { node, id };
+    }
+    return null;
+}
+
+function onLive(d) {
+    const hit = liveNodeFor(d);
+    if (!hit) return;
+    showingLive.set(hit.node, hit.id);
+    hit.node.__c2cViewer.showLive(d);
+}
+
+function endLive(runningId = null) {
+    for (const [node, id] of [...showingLive]) {
+        if (runningId != null && String(runningId) === id) continue;
+        showingLive.delete(node);
+        try { node.__c2cViewer?.clearLive(); } catch (_e) { /* the viewer may be gone */ }
+    }
+}
+
+if (!globalThis.__c2cMaskLiveListeners) {
+    globalThis.__c2cMaskLiveListeners = true;
+    api.addEventListener(LIVE_EVENT, (e) => { try { onLive(e.detail); } catch (err) { console.warn("[C2C] live matte:", err); } });
+    api.addEventListener("executing", (e) => {
+        if (!showingLive.size) return;
+        const d = e.detail;
+        endLive(d && typeof d === "object" ? d.node : d);
+    });
+    for (const t of ["execution_error", "execution_interrupted", "execution_success"]) {
+        api.addEventListener(t, () => { if (showingLive.size) endLive(); });
+    }
+}
 
 // Maps each widget to a predicate (segmenter,matter,mode,supports,vals) -> bool.
 // ``vals`` is a flat {widgetName: value} snapshot, allowing toggle-gated widgets.
@@ -368,6 +416,7 @@ function mountViewer(node) {
     const i = node.widgets.indexOf(widget);
     if (i > 0) { node.widgets.splice(i, 1); node.widgets.unshift(widget); }
     node.__c2cViewer = v;
+    liveNodes.add(node);               // L7.73
     node.__c2cViewerFold = (name) => !node.properties?.c2c_viewer_advanced && name !== "picks";
     if ((node.size?.[0] || 0) < VIEWER_MIN_W) node.setSize([VIEWER_MIN_W, node.size[1]]);
     const backendW = (node.widgets || []).find((w) => w.name === "backend");
@@ -381,7 +430,10 @@ function mountViewer(node) {
     const origRemoved = node.onRemoved;
     node.onRemoved = function (...a) {
         if (teardown) clearTimeout(teardown);
-        teardown = setTimeout(() => { teardown = null; if (!node.graph) v.destroy(); }, 2000);
+        teardown = setTimeout(() => {
+            teardown = null;
+            if (!node.graph) { liveNodes.delete(node); showingLive.delete(node); v.destroy(); }
+        }, 2000);
         return origRemoved?.apply(this, a);
     };
     const origAdded = node.onAdded;

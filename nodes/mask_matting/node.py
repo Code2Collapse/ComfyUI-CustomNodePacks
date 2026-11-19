@@ -23,6 +23,7 @@ import torch
 from .._is_changed_util import hash_args_and_kwargs
 from . import _engines
 from . import _picks
+from . import _live_preview as _live   # L7.73: live matte while it runs
 from .matters import all_matters, get_matter_cls
 from .matters import list_keys as list_matter_keys
 from .segmenters import all_segmenters, get_segmenter_cls
@@ -1362,7 +1363,7 @@ class MaskOpsMEC:
 
             if _use_onyx:
                 from ._onyx_pipeline import LegacyPrompts, run_onyx_pipeline
-                onyx = run_onyx_pipeline(
+                onyx = _live.within(_live.onyx(B), run_onyx_pipeline)(
                     img_bhwc,
                     scene_raw=str(scene_prompts or ""),
                     legacy=LegacyPrompts(
@@ -1616,11 +1617,11 @@ class MaskOpsMEC:
                                 tracking_direction=tracking_direction, seed=int(seed),
                             )
                         try:
-                            seg_out = _first_pass()
+                            seg_out = _live.within(_live.segmentation(seg_inst, B), _first_pass)()
                         except Exception as _exc:
                             # the backend loads lazily: a missing model shows up here, not at construction
                             seg_key, seg_cls, seg_inst, mode = _model_free_segmenter(_exc, seg_key)
-                            seg_out = _first_pass()
+                            seg_out = _live.within(_live.segmentation(seg_inst, B), _first_pass)()
                         mask_t = seg_out["mask"].float().clamp(0, 1)
                         score = float(seg_out.get("score", 1.0))
 
@@ -1979,13 +1980,13 @@ class MaskOpsMEC:
                                 obj_masks_raw[i].unsqueeze(0) for i in range(n_obj)
                             ]
                             boxes = obj_boxes_raw[:n_obj]
-                            mat_out = mat_inst.matte_multi(
+                            mat_out = _live.within(_live.matting(mat_inst, B), mat_inst.matte_multi)(
                                 img_bhwc, om_list, boxes,
                                 edge_radius=edge, memory_size=int(memory_size),
                                 **_vit_kw,
                             )
                         else:
-                            mat_out = mat_inst.matte(
+                            mat_out = _live.within(_live.matting(mat_inst, B), mat_inst.matte)(
                                 img_bhwc, mask_t, trimap=trimap_t,
                                 edge_radius=edge, memory_size=int(memory_size),
                                 **_vit_kw,

@@ -250,6 +250,11 @@ register(
             tooltip="The interactive viewer on Mask + Matting and the SAM nodes. Off: their plain widgets (picks as "
                     "a text box). A saved selection still applies, so results never change.",
             consumer="nodes.mask_matting._picks:viewer_enabled"),
+    Setting("c2c.matte.livePreview", "boolean", True, "Live matte while running", ("Masks",),
+            env="C2C_MASK_LIVE_PREVIEW",
+            tooltip="While Mask + Matting runs, its viewer shows the matte of the newest finished frame and the "
+                    "frame count (at most twice a second, one small frame). Off: the result only at the end.",
+            consumer="nodes.mask_matting._live_preview:enabled"),
     Setting("c2c.models.fallbacks", "boolean", True, "Model-free fallbacks", ("Models & Downloads",),
             env="C2C_MODEL_FALLBACK",
             tooltip="When a mask / matting model is missing, run the labelled model-free method instead of stopping "
