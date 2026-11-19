@@ -617,8 +617,9 @@ class _DeprecatedStabilizerBase:
         _DeprecatedStabilizerBase._WARNED.add(cls.__name__)
         log.warning(
             "[stabilizer] %s is a removed alias (registered only with C2C_LEGACY_STABILIZERS=1). "
-            "Use VideoStabilizerMEC with method='%s'.",
-            cls.__name__, replacement_method,
+            "Use VideoStabilizerMEC with method='%s' (same frames, mask and info - docs/migration/%s.md). "
+            "Without C2C_LEGACY_STABILIZERS=1 saved workflows and API prompts migrate to it automatically.",
+            cls.__name__, replacement_method, cls.__name__,
         )
 
 

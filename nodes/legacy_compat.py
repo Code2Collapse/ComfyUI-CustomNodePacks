@@ -6,6 +6,7 @@ should use the unified / core replacements named in each class DESCRIPTION.
 from __future__ import annotations
 
 import json
+import logging
 
 import torch
 import torch.nn.functional as F
@@ -13,6 +14,38 @@ import torch.nn.functional as F
 from .utils import normalize_bbox as _norm_bbox
 
 _LEGACY_CATEGORY = "\U0001f43a C2C/\U0001f9f0 Core/Legacy"
+
+# L9.176 (A25 migration assistant): what to use instead, said once per node id per server run. These ids are still
+# registered, so nothing migrates them automatically (the front end and the API-prompt hook only migrate ids that are
+# really gone); the node keeps running exactly as before. Parity numbers: docs/migration/<id>.md.
+_log = logging.getLogger("C2C.legacy")
+_NOTICE = {
+    "MaskPreviewOverlay": "no node gives the same preview picture; for a matte check use Mask Tools (C2C) (its "
+                          "image output is the matte as grey) or MaskOpsMEC's preview output.",
+    "MaskCompositeAdvanced": "Mask Tools (C2C) mode 'combine' gives the same result for union, intersect, subtract "
+                             "(also min = intersect, max = union, difference = xor), core Combine Masks for xor; "
+                             "invert_a / invert_b = Invert Mask, threshold = Threshold Mask (> instead of >=); "
+                             "'blend' has no replacement.",
+    "MaskMath": "Mask Tools (C2C) mode 'grade' gives the same result for invert, multiply_scalar (gain), add_scalar "
+                "(offset), power / gamma (gamma), remap_range (black / white point) and contrast (gain + offset); "
+                "clamp, quantize, threshold_hysteresis and abs_diff_from_value have no replacement.",
+    "BBoxFromMask": "no current node returns this BBOX; keep this node.",
+    "BBoxToMask": "core Create Solid Mask (0, width, height) + Combine Masks ('add', a Solid Mask 1.0 of the box size "
+                  "at x, y) gives the same mask.",
+    "BBoxPad": "no current node pads this BBOX; keep this node.",
+    "BBoxCrop": "core Crop Image (crop_region) + Crop Mask give the same crop for a box inside the image.",
+}
+_NOTICED: set = set()
+
+
+def _deprecation_notice(node_id: str) -> None:
+    """One logger.warning per id per process (L9.176); never raises, never changes an output."""
+    if node_id in _NOTICED:
+        return
+    _NOTICED.add(node_id)
+    _log.warning("[C2C] %s is deprecated (kept so saved workflows load and run unchanged; it is still registered, "
+                 "so it is not migrated). Instead: %s See docs/migration/%s.md", node_id,
+                 _NOTICE.get(node_id, "see the node description."), node_id)
 
 
 class MaskPreviewOverlay:
@@ -59,6 +92,7 @@ class MaskPreviewOverlay:
     def preview(self, image, mask, display_mode, overlay_color_r, overlay_color_g,
                 overlay_color_b, opacity, edge_width, show_bbox,
                 bbox_color_r, bbox_color_g, bbox_color_b, bbox=None):
+        _deprecation_notice("MaskPreviewOverlay")
 
         B, H, W, C = image.shape
         m = mask.clone().to(image.device)
@@ -214,6 +248,7 @@ class MaskCompositeAdvanced:
 
     def composite(self, mask_a, mask_b, operation, blend_factor,
                   invert_a, invert_b, threshold):
+        _deprecation_notice("MaskCompositeAdvanced")
         a = mask_a.clone()
         b = mask_b.clone()
 
@@ -293,6 +328,7 @@ class MaskMath:
     DESCRIPTION = "Deprecated — kept so old workflows load. No unified successor."
 
     def compute(self, mask, operation, value_a, value_b):
+        _deprecation_notice("MaskMath")
         m = mask.clone()
 
         if operation == "add_scalar":
@@ -378,6 +414,7 @@ class BBoxFromMask:
     DESCRIPTION = "Deprecated — kept so old workflows load. No unified successor."
 
     def extract(self, mask, padding, padding_x, padding_y, threshold):
+        _deprecation_notice("BBoxFromMask")
         m = mask
         if m.dim() == 3:
             m = m[0]
@@ -432,6 +469,7 @@ class BBoxToMask:
     DESCRIPTION = "Deprecated — kept so old workflows load. No unified successor."
 
     def convert(self, bbox, image_width, image_height, reference_image=None):
+        _deprecation_notice("BBoxToMask")
         if reference_image is not None:
             _, h, w, _ = reference_image.shape
             image_height, image_width = int(h), int(w)
@@ -472,6 +510,7 @@ class BBoxPad:
     DESCRIPTION = "Deprecated — kept so old workflows load. No unified successor."
 
     def pad(self, bbox, pad_left, pad_right, pad_top, pad_bottom, image_width, image_height):
+        _deprecation_notice("BBoxPad")
         x, y, bw, bh = _norm_bbox(bbox)
         x, y, bw, bh = int(x), int(y), int(bw), int(bh)
         x1 = max(0, x - pad_left)
@@ -508,6 +547,7 @@ class BBoxCrop:
     )
 
     def crop(self, image, bbox, mask=None):
+        _deprecation_notice("BBoxCrop")
         x, y, bw, bh = _norm_bbox(bbox)
         x, y, bw, bh = int(x), int(y), int(bw), int(bh)
         B, H, W, C = image.shape
