@@ -153,6 +153,8 @@ function apply(node) {
     // L7.114: the viewer's own input (picks) is a row only when the viewer is off (C2C_VIEWER=0); with the viewer on,
     // its "All settings" switch folds every other control while closed (node.__c2cViewerFold, mask_matting.js)
     const viewerNames = new Set(spec.viewer || []);
+    // L9.294: stored by every backend and read by none (_visibility.INERT) - folded everywhere, show-all included
+    const inert = new Set(spec.inert || []);
     const viewerFold = typeof node.__c2cViewerFold === "function" ? node.__c2cViewerFold : null;
     let hidden = 0;
     const shown = [];                                    // what the rules want, before sections close some of it
@@ -171,7 +173,8 @@ function apply(node) {
         if (w.options?.serialize === false || w.serialize === false) continue;
         const isSocket = sockets.has(w.name);
         let ruled;
-        if (viewerNames.has(w.name)) ruled = !viewerFold;
+        if (inert.has(w.name)) ruled = false;
+        else if (viewerNames.has(w.name)) ruled = !viewerFold;
         else {
             ruled = isSocket
                 || (keep === null && !engineOnly.has(w.name))   // undeclared: show all

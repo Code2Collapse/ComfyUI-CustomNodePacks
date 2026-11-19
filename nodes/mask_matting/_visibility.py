@@ -388,6 +388,7 @@ def visible(segmenter: str, matter: str, values: Dict[str, Any]) -> List[str]:
             cand |= _widgets_of(getattr(mat, "PARAMS", ()) or ())
         cand -= set(ONYX_IGNORES)
         cand -= BACKEND_ONLY
+        cand -= INERT
         return sorted(
             n for n in cand
             if n in SOCKETS
@@ -398,11 +399,18 @@ def visible(segmenter: str, matter: str, values: Dict[str, Any]) -> List[str]:
         return cand
     return sorted(
         n for n in cand
-        if n not in BACKEND_ONLY
+        if n not in BACKEND_ONLY and n not in INERT
         and (n in SOCKETS
              or (toggle_allows(n, values) and tiling_visible(n, matter, values)))
     )
 
+
+
+#: L9.294: stored on every backend (segmenters/__init__.py, matters/__init__.py) and read by none - folded on every
+#: backend, the "has not declared, show everything" case included. Still declared, saved and passed, so saved
+#: workflows keep their values; a backend that starts reading one takes it out of here
+#: (tests/test_mask_visibility_inert.py checks the claim against the backend code).
+INERT = frozenset({"attention", "offload"})
 
 
 def build_spec() -> Dict[str, Any]:
@@ -454,6 +462,7 @@ def build_spec() -> Dict[str, Any]:
         "finishing": list(FINISHING),
         "backend_only": sorted(BACKEND_ONLY),
         "viewer": list(VIEWER),
+        "inert": sorted(INERT),
     }
 
 
