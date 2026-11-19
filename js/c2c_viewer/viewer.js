@@ -14,6 +14,11 @@
  * read from the --cu tokens: a var() in a canvas fillStyle paints black. No polling while idle; the transport polls
  * /history only while a helper job is pending (transport.js).
  *
+ * QC mode (L7.124, opts.mode = "qc"; Mask Refiner and Mask Track): no Subject step and no helper prompts. The node's
+ * own run sends the Result payload (ui "c2c_viewer", nodes/c2c_viewer/result.py node_payload); the panel shows
+ * Plate -> Render: the plate and the node's matte, scrubbable, with the same views, wipe and QC chips. Without
+ * opts.mode the viewer is the Mask + Matting one, unchanged.
+ *
  * This module takes ComfyUI's `app` and `api` as arguments (mask_matting.js passes them), so it has no import that
  * depends on where the pack is installed.
  *
@@ -41,6 +46,9 @@ const ROWS = [24, 24, 14, 26, 28, 16, 24, 22, 24];
 const GAP = 6;
 const PAD = 4;
 const FIXED = ROWS.reduce((a, b) => a + b, 0) + GAP * ROWS.length + PAD * 2 + 2;   // + the view's 1 px border
+// QC mode (L7.124) shows head, scrub, ruler, status, tools and qc only
+const QC_ROWS = [0, 1, 2, 5, 6, 7];
+const FIXED_QC = QC_ROWS.reduce((a, i) => a + ROWS[i], 0) + GAP * QC_ROWS.length + PAD * 2 + 2;
 const VIEW_MIN = 140;
 const VIEW_MAX = 640;
 
@@ -254,17 +262,21 @@ function humanError(e) {
  *  opts.getBackend()         the node's backend widget value
  *  opts.onAdvanced(open)     the "All settings" switch (mask_matting.js folds the regular widgets)
  *  opts.onLayout()           the panel wants a new height (the plate's aspect changed)
- * Returns {root, heightFor(width), syncFromWidget(), destroy()}.
+ *  opts.mode                 "qc" (L7.124): Plate -> Render only, fed by showResult(payload); omitted = Mask + Matting
+ *  opts.emptyText            QC mode: the message before the first run
+ * Returns {root, heightFor(width), syncFromWidget(), destroy(), showResult(payload), showLive(event), clearLive(), live}
+ * (showLive / clearLive: L7.73, the live matte while Mask + Matting runs; fed by mask_matting.js).
  */
 export function createViewer(node, opts) {
     ensureViewerStyles();
     const { app, api } = opts;
+    const qcMode = opts.mode === "qc";
     const runner = createRunner(api);
 
     const st = {
         plate: null, frame: 0, objects: [], detFrame: null, sel: null, text: "", model: "", models: [], missing: null,
         tab: "pick", result: null, resultStale: false, previewDone: false, view: "comp", wipe: 1, busy: false,
-        wrapper: "", selVer: 0,
+        wrapper: "", selVer: 0, peek: false,
     };
 
     // ── DOM ─────────────────────────────────────────────────────────────────────────────────────────────────────
@@ -364,6 +376,15 @@ export function createViewer(node, opts) {
     advRow.append(advLabel, el("span", "c2cv-spacer"), advBtn);
 
     root.append(head, view, scrub, ruler, findRow, actions, status, tools, qcRow, advRow);
+    if (qcMode) {                                     // L7.124: no pick step, no helper prompts, no settings fold
+        st.tab = "result";
+        modelSel.hidden = true;
+        findRow.hidden = true;
+        actions.hidden = true;
+        tabBar.hidden = true;
+        advRow.hidden = true;
+        canvas.setAttribute("aria-label", "The plate with this node's matte. Drag to wipe to the plate; arrow keys step frames.");
+    }
 
     // ── small state helpers ─────────────────────────────────────────────────────────────────────────────────────
     const plateFrames = () => st.plate?.count || 0;
@@ -620,6 +641,11 @@ export function createViewer(node, opts) {
         render: "The rendered matte",
     };
     function stepClicked(id) {
+        if (qcMode) {                                 // QC mode: the steps switch what the frame shows
+            st.peek = id === "plate";
+            update();
+            return;
+        }
         if (st.busy) return;
         if (id === "plate") loadPlate();
         else if (id === "subject") { st.tab = "pick"; update(); }
@@ -741,11 +767,12 @@ export function createViewer(node, opts) {
         g.fillStyle = T.sunken;
         g.fillRect(0, 0, canvas.width, canvas.height);
         paintRuler();
+        if (st.live) { g.setTransform(s, 0, 0, s, 0, 0); paintLive(g, cw, ch); return; }   // L7.73
         const p = st.plate;
         if (!p) return;
         g.setTransform(s, 0, 0, s, 0, 0);
         const r = fitRect(cw, ch, p.width, p.height);
-        if (st.tab === "result" && st.result) paintResult(g, r, T);
+        if (st.tab === "result" && st.result && !(qcMode && st.peek)) paintResult(g, r, T);
         else paintPick(g, r, T);
     }
 
@@ -957,9 +984,11 @@ export function createViewer(node, opts) {
 
     // ── the rest of the panel ───────────────────────────────────────────────────────────────────────────────────
     function updateTag() {
+        if (st.live) { tag.hidden = false; tag.textContent = liveTagText(); return; }   // L7.73
         if (!st.plate) { tag.hidden = true; return; }
         let t = frameLabel(st.frame, st.plate.count);
-        if (st.tab === "result" && st.result) {
+        if (qcMode && st.peek) t += " · plate";
+        else if (st.tab === "result" && st.result) {
             const res = st.result;
             if (st.frame < res.start || st.frame >= res.start + res.count) t += " · not rendered";
             else if (res.empty && st.frame >= res.empty[0] && st.frame < res.empty[1]) t += " · empty (before the pick frame)";
@@ -979,7 +1008,72 @@ export function createViewer(node, opts) {
         }
     }
 
+    function updateQc() {
+        const p = st.plate;
+        const ids = [["plate", "Plate", "The plate alone"], ["render", "Render", "The plate with this node's matte"]];
+        const cur = !st.result ? "plate" : st.peek ? "plate" : "render";
+        steps.replaceChildren(...ids.map(([id, label, tip], i) => {
+            const state = id === cur ? "current" : (st.result ? "done" : "todo");
+            const chip = el("button", `c2cv-step c2cv-step--${state}`, `${state === "done" ? "✓" : i + 1} ${label}`);
+            chip.type = "button";
+            chip.disabled = !st.result;
+            chip.style.cursor = st.result ? "pointer" : "default";
+            chip.title = tip;
+            chip.setAttribute("aria-current", state === "current" ? "step" : "false");
+            chip.addEventListener("click", () => stepClicked(id));
+            return chip;
+        }));
+        const n = plateFrames();
+        slider.max = String(Math.max(0, n - 1));
+        slider.value = String(st.frame);
+        slider.disabled = !n;
+        prevBtn.disabled = !n || st.frame <= 0;
+        nextBtn.disabled = !n || st.frame >= n - 1;
+        frameBox.value = n ? String(st.frame) : "";
+        frameBox.disabled = !n;
+        msg.hidden = !!p;
+        if (!p) msg.textContent = opts.emptyText || "Run the workflow: the plate and this node's matte show here, with QC.";
+        setPill(viewBar, st.view);
+        viewBar.style.visibility = st.peek ? "hidden" : "visible";
+        const res = st.result;
+        resultInfo.textContent = res ? `Frames ${res.start}–${res.start + res.count - 1}`
+            + (res.step > 1 ? ` · every ${res.step}th shown` : "") : "";
+        const q = res?.qc;
+        for (const [name, c] of Object.entries(qcChips)) {
+            const metric = q?.[name];
+            const t = q?.thresholds?.[name];
+            const lvl = qcLevel(metric?.value, t);
+            c.dot.className = `c2cv-dot${lvl === "n/a" ? "" : ` c2cv-dot--${lvl}`}`;
+            c.label.textContent = `${QC_NAMES[name]} ${metric ? qcValueText(name, metric.value) : "n/a"}`;
+            c.chip.title = metric ? qcTooltip(name, metric, t, q?.qc_side)
+                + (q?.sampled_frames ? ` (measured on ${q.sampled_frames} sampled frames)` : "")
+                : `${QC_NAMES[name]}: shown after a run.`;
+        }
+        updateTag();
+        syncViewHeight();
+        draw();
+    }
+
+    /** QC mode: a run's Result payload (ui "c2c_viewer" of the node) -> the plate and the matte to scrub. */
+    function showResult(payload) {
+        if (!payload || payload.kind !== "result" || !Array.isArray(payload.frames)) return;
+        const frames = payload.frames.map((f) => ({ ...f.plate, index: f.index }));
+        const aspectChanged = !st.plate || st.plate.width / st.plate.height !== payload.width / payload.height;
+        st.plate = { kind: "plate", count: payload.count, width: payload.width, height: payload.height,
+            proxy: payload.proxy, step: payload.step, frames };
+        st.result = { ...payload, preview: false };
+        st.resultStale = false;
+        plateImgs.clear();
+        resultImgs.clear();
+        st.frame = Math.min(Math.max(0, st.frame), Math.max(0, payload.count - 1));
+        setStatus(`${payload.width} × ${payload.height}, ${payload.count} frame${payload.count === 1 ? "" : "s"}`
+            + (payload.step > 1 ? ` (every ${payload.step}th shown)` : "") + ". Drag on the frame to wipe to the plate.", "ok");
+        if (aspectChanged) opts.onLayout?.();
+        update();
+    }
+
     function update() {
+        if (qcMode) { updateQc(); return; }
         const p = st.plate;
         const pick = pickStep();
         const sp = stepper({ plate: !!p, subject: !!st.sel?.subject, preview: st.previewDone, result: !!st.result,
@@ -1035,7 +1129,9 @@ export function createViewer(node, opts) {
         if (document.activeElement !== findBox && !findBox.value && st.text) findBox.value = st.text;
         modelSel.disabled = st.busy || !pick;
         // message on the frame
-        if (!p) {
+        if (st.live) {
+            msg.hidden = true;                          // L7.73: the live matte fills the frame
+        } else if (!p) {
             msg.hidden = false;
             msg.textContent = "Mask + Matting viewer. Connect a plate to the image input, then press Load plate.";
         } else if (st.tab === "result" && !st.result) {
@@ -1074,7 +1170,7 @@ export function createViewer(node, opts) {
         return Math.min(VIEW_MAX, Math.max(VIEW_MIN, Math.round(Math.max(120, inner) / aspect)));
     }
     function heightFor(width) {
-        return FIXED + viewHeight((width || 400) - 8 - PAD * 2 - 2);
+        return (qcMode ? FIXED_QC : FIXED) + viewHeight((width || 400) - 8 - PAD * 2 - 2);
     }
     /** The view's minimum height follows the panel's own width: Nodes 2.0 fits the node to its content, so a view
      *  that only flexed into the space shrank to VIEW_MIN there (live check 2026-10-29). */
@@ -1119,8 +1215,62 @@ export function createViewer(node, opts) {
         tintCache.clear();
     }
 
+    // ── L7.73: the live matte while the node runs ───────────────────────────────────────────────────────────────
+    // mask_matting.js feeds showLive() from the "c2c.mask_matting.live" event (<= 2 per second, one proxy frame each)
+    // and calls clearLive() when the node stops running; the run's normal result then shows as before. Nothing here
+    // is saved. QC mode never receives it, so it behaves as before.
+    let liveImg = null;
+    let liveSaved = null;
+    let liveText = "";
+    const LIVE_STAGES = { segmentation: "Segmentation", matting: "Matting" };
+    function liveTagText() {
+        const l = st.live;
+        return l ? `live · frame ${l.frame}` : "";
+    }
+    function showLive(d) {
+        if (!d || typeof d !== "object") return;
+        if (!st.live) liveSaved = { text: status.textContent, kind: (status.className.match(/c2cv-status--(\w+)/) || [])[1] || "" };
+        const sw = Number(d.source_width) || Number(d.width) || st.live?.w || st.plate?.width || 16;
+        const sh = Number(d.source_height) || Number(d.height) || st.live?.h || st.plate?.height || 9;
+        st.live = { stage: String(d.stage || ""), label: String(d.label || ""), frame: Number(d.frame) | 0,
+            done: Number(d.done) | 0, total: Number(d.total) | 0, w: sw, h: sh };
+        if (typeof d.image === "string" && d.image.startsWith("data:image/")) {
+            const img = new Image();
+            img.onload = () => { if (st.live) { liveImg = img; draw(); } };
+            img.src = d.image;
+        }
+        const l = st.live;
+        const stage = LIVE_STAGES[l.stage] || l.stage || "Running";
+        liveText = `${stage}${l.label ? ` (${l.label})` : ""}: frame ${l.done} / ${l.total}`;
+        setStatus(liveText);
+        msg.hidden = true;
+        updateTag();
+        draw();
+    }
+    function clearLive() {
+        if (!st.live) return;
+        st.live = null;
+        liveImg = null;
+        if (liveSaved && status.textContent === liveText) setStatus(liveSaved.text, liveSaved.kind);
+        liveSaved = null;
+        update();
+    }
+    function paintLive(g, cw, ch) {
+        const l = st.live;
+        const p = st.plate;
+        const r = fitRect(cw, ch, p ? p.width : l.w, p ? p.height : l.h);
+        g.fillStyle = "#000";
+        g.fillRect(r.x, r.y, r.w, r.h);
+        if (liveImg) g.drawImage(liveImg, r.x, r.y, r.w, r.h);
+        if (l.total > 0) {                               // progress along the bottom edge of the frame
+            g.fillStyle = colours().accent;
+            g.fillRect(r.x, r.y + r.h - 3, r.w * Math.min(1, l.done / l.total), 3);
+        }
+    }
+
     setStatus("");
-    loadModels();
-    syncFromWidget();
-    return { root, heightFor, syncFromWidget, destroy, get busy() { return st.busy; } };
+    if (qcMode) update();
+    else { loadModels(); syncFromWidget(); }
+    return { root, heightFor, syncFromWidget, destroy, showResult, showLive, clearLive,
+        get live() { return !!st.live; }, get busy() { return st.busy; } };
 }

@@ -329,9 +329,10 @@ class MaskTrackerMEC:
                 mask=None, video=None, sam_model=None, points_json="", **appended):
 
         if mode == "stabilize":
-            return (*self._mode_stabilize(video, mask, appended), *self._no_boxes(appended))
+            return self._with_viewer((*self._mode_stabilize(video, mask, appended), *self._no_boxes(appended)),
+                                     video, mask, mode)
         if mode == "spline_track":
-            return self._mode_spline_track(video, appended)
+            return self._with_viewer(self._mode_spline_track(video, appended), video, mask, mode)
         if mode == "bbox_smooth":
             return self._mode_bbox_smooth(appended)
         if video is not None and (
@@ -357,8 +358,26 @@ class MaskTrackerMEC:
             ), "", *self._no_boxes(appended))
         if mode == "consistency_check":
             # L7.127: the per-pair scores also go to the node's chart (js/mask_track_consistency_chart.js)
-            return {"ui": {"mt_consistency": [res[3]]}, "result": res}
-        return res
+            return self._with_viewer({"ui": {"mt_consistency": [res[3]]}, "result": res}, video, mask, mode)
+        return self._with_viewer(res, video, mask, mode)
+
+    @staticmethod
+    def _with_viewer(res, video, mask, mode):
+        """L7.124: the Matte viewer in QC mode (the video + the masks output + QC chips) - ui payload only, the outputs
+        are untouched. The input mask is the QC reference only in stabilize (same frames in and out)."""
+        if video is None:
+            return res
+        try:
+            from .c2c_viewer.result import with_node_viewer
+        except Exception:  # noqa: BLE001 - the viewer must never take Mask Track down
+            return res
+        out = res["result"] if isinstance(res, dict) else res
+        masks = out[0]
+        coarse = None
+        if (mode == "stabilize" and isinstance(mask, torch.Tensor) and isinstance(masks, torch.Tensor)
+                and mask.ndim == masks.ndim == 3 and mask.shape[0] == masks.shape[0]):
+            coarse = mask
+        return with_node_viewer(res, video, masks, coarse, source=f"track_{mode}")
 
     @staticmethod
     def _no_boxes(a):

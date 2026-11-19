@@ -770,7 +770,7 @@ class MaskRefineMEC:
         if not isinstance(mask, torch.Tensor) or mask.ndim not in (2, 3):
             raise ValueError("MaskRefineMEC expects MASK tensor [H,W] or [B,H,W]")
         with torch.no_grad():
-            return self._execute_impl(
+            res = self._execute_impl(
                 image, mask, preset, auto_edge_lock, subject_class,
                 enable_hole_fill, morph_op, enable_thin_recover,
                 enable_joint_bilateral, enable_guided_filter, enable_dense_crf,
@@ -781,6 +781,12 @@ class MaskRefineMEC:
                 advanced_overrides_json, enable_integrity_check,
                 integrity_drop_threshold, integrity_jump_threshold,
             )
+        # L7.124: the Matte viewer in QC mode (plate + refined alpha + QC chips) - ui payload only, outputs unchanged
+        try:
+            from ..c2c_viewer.result import with_node_viewer
+        except Exception:  # noqa: BLE001 - the viewer must never take the refiner down
+            return res
+        return with_node_viewer(res, image, res[1], mask, source="refine")
 
     def _execute_impl(
         self,

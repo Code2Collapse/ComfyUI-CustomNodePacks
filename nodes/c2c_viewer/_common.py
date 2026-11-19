@@ -138,3 +138,30 @@ def bbox_of(mask: np.ndarray) -> Optional[Tuple[int, int, int, int]]:
 
 def split_terms(text: str) -> Sequence[str]:
     return [t.strip() for t in str(text or "").split(",") if t.strip()]
+
+
+# ── L7.124: the viewer in QC mode on Mask Refiner / Mask Track (the node's own ui payload, no helper prompts) ──────
+#: proxies of a node's own run are smaller than a viewer render's: they are written on EVERY run of the node
+NODE_MAX_SIDE = 640
+NODE_MAX_FRAMES = 72
+#: consecutive frame pairs the QC flicker number is measured on (2 x this many proxy frames at most)
+NODE_QC_PAIRS = 16
+
+
+def viewer_enabled() -> bool:
+    """The Matte viewer kill switch (C2C_VIEWER=0 / the C2C setting 'Matte viewer'), shared with Mask + Matting."""
+    try:
+        from ..mask_matting._picks import viewer_enabled as _on
+        return bool(_on())
+    except Exception:  # noqa: BLE001 - no Mask + Matting: the env variable alone
+        return os.environ.get("C2C_VIEWER", "").strip() != "0"
+
+
+def in_executor() -> bool:
+    """True while ComfyUI's executor runs the node (comfy_execution.utils.get_executing_context). A direct Python call
+    (another node, a test, a script) gets the node's plain result tuple, never the ui dict."""
+    try:
+        from comfy_execution.utils import get_executing_context
+        return get_executing_context() is not None
+    except Exception:  # noqa: BLE001 - a core without the executing context: no viewer payload
+        return False
