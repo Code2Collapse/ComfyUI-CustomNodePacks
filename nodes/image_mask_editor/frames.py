@@ -134,12 +134,26 @@ def _write_png_atomic(rgb: np.ndarray, path: Path) -> None:
     _atomic_replace(tmp, path)
 
 
-def _write_thumb_atomic(rgb: np.ndarray, path: Path) -> None:
-    im = Image.fromarray(rgb, mode="RGB")
-    w, h = im.size
-    scale = _THUMB_MAX / max(w, h)
-    if scale < 1.0:
-        im = im.resize((max(1, int(w * scale)), max(1, int(h * scale))), Image.BILINEAR)
+def _thumb_u8(image: torch.Tensor, i: int) -> Optional[np.ndarray]:
+    """L9.169: the thumbnail through the shared preview encoder (area downscale of the float frame on its own device,
+    rounded uint8); None -> the caller falls back to resizing the full-size uint8 frame."""
+    try:
+        from .._c2c_preview_encode import preview_frames
+    except ImportError:  # pragma: no cover - loaded outside the package
+        return None
+    frames, _why = preview_frames(image[..., :3], indices=[i], long_edge=_THUMB_MAX)
+    return frames[0] if frames else None
+
+
+def _write_thumb_atomic(rgb: np.ndarray, path: Path, thumb: Optional[np.ndarray] = None) -> None:
+    if thumb is not None:
+        im = Image.fromarray(thumb, mode="RGB")
+    else:
+        im = Image.fromarray(rgb, mode="RGB")
+        w, h = im.size
+        scale = _THUMB_MAX / max(w, h)
+        if scale < 1.0:
+            im = im.resize((max(1, int(w * scale)), max(1, int(h * scale))), Image.BILINEAR)
     tmp = path.parent / f".{path.name}.tmp"
     im.save(tmp, format="JPEG", quality=_THUMB_QUALITY, optimize=False)
     _atomic_replace(tmp, path)
@@ -191,8 +205,9 @@ def record_input_frames(
         def _write(i: int) -> None:
             rgb = _frame_rgb_u8(image, i)
             _write_png_atomic(rgb, ed_dir / f"{i:05d}.png")
-            _write_thumb_atomic(rgb, ed_dir / f"t_{i:05d}.jpg")
+            _write_thumb_atomic(rgb, ed_dir / f"t_{i:05d}.jpg", _thumb_u8(image, i))
 
+        # the full-size PNGs stay lossless (the editor paints on them); each worker holds one frame at a time
         if _WRITE_WORKERS > 1 and B > 1:
             from concurrent.futures import ThreadPoolExecutor
             with ThreadPoolExecutor(max_workers=_WRITE_WORKERS) as pool:

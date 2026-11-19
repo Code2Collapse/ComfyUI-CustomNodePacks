@@ -92,6 +92,22 @@ def preview_frames(t, indices: Optional[Sequence[int]] = None, long_edge: Option
         return None, f"preview unavailable: {type(exc).__name__}: {exc}"[:240]
 
 
+def iter_preview_frames(t, indices: Optional[Sequence[int]] = None, chunk: int = 8, **kwargs):
+    """L9.169: stream preview_frames a chunk at a time -> yields (frame index, uint8 frame). A caller that encodes
+    each frame straight away (MP4, JPEG strip, thumbnails) never holds more than `chunk` small frames. kwargs go to
+    preview_frames (long_edge, size, transfer, rolloff). Unlike preview_frames this RAISES RuntimeError(reason) when
+    a chunk cannot be previewed, so the caller's own fallback runs."""
+    n = int(t.shape[0]) if t is not None and getattr(t, "ndim", 0) >= 3 else 0
+    idx = list(range(n)) if indices is None else [int(i) for i in indices if 0 <= int(i) < n]
+    step = max(1, int(chunk))
+    for s in range(0, len(idx), step):
+        sel = idx[s:s + step]
+        frames, why = preview_frames(t, indices=sel, **kwargs)
+        if frames is None:
+            raise RuntimeError(why)
+        yield from zip(sel, frames)
+
+
 def encode_still(frame_u8: np.ndarray, fmt: str = "jpeg", quality: int = 85) -> Tuple[bytes, str]:
     """-> (bytes, actual format). A frame with alpha is never written as JPEG (it raised before): PNG instead."""
     from PIL import Image

@@ -95,27 +95,25 @@ def _preview_ui(image, hf, lf, mode, method, radius, detail, linear):
         import uuid
 
         import folder_paths  # type: ignore
-        import numpy as np
         from PIL import Image
+        from .._c2c_preview_encode import preview_frames, target_size
         H, W = int(image.shape[1]), int(image.shape[2])
-        k = min(1.0, PREVIEW_MAX_SIDE / max(H, W))
-        size = (max(1, round(H * k)), max(1, round(W * k)))
+        size = target_size(W, H, PREVIEW_MAX_SIDE)[::-1]          # (h, w), the same rounding as before
 
-        def small(t):
-            x = t[:1, ..., :3].permute(0, 3, 1, 2).float()
-            if k < 1.0:
-                x = torch.nn.functional.interpolate(x, size=size, mode="area")
-            return x[0].permute(1, 2, 0).clamp(0, 1).cpu().numpy()
-
-        hf_vis = hf * 0.5 if mode == "Divide" else hf + 0.5     # ratio ~1 / difference ~0 -> mid grey
+        # L9.169: only the FIRST frame is shown - slice before any arithmetic (hf + 0.5 on the whole batch was a
+        # full-batch float copy: +647 MB for 60 x 720p), then the shared encoder (area downscale, rounded uint8).
+        hf1 = hf[:1, ..., :3]
+        hf_vis = hf1 * 0.5 if mode == "Divide" else hf1 + 0.5   # ratio ~1 / difference ~0 -> mid grey
         out_dir = folder_paths.get_temp_directory()
         os.makedirs(out_dir, exist_ok=True)
         tag = uuid.uuid4().hex[:10]
         files = []
-        for kind, t in (("input", image), ("base", lf), ("detail", hf_vis)):
+        for kind, t in (("input", image[:1]), ("base", lf[:1]), ("detail", hf_vis)):
+            frames, why = preview_frames(t[..., :3], long_edge=PREVIEW_MAX_SIDE)
+            if frames is None:
+                raise RuntimeError(why)
             name = f"c2c_freq_{tag}_{kind}.png"
-            Image.fromarray((small(t) * 255.0 + 0.5).astype(np.uint8)).save(os.path.join(out_dir, name),
-                                                                           compress_level=1)
+            Image.fromarray(frames[0]).save(os.path.join(out_dir, name), compress_level=1)
             files.append({"filename": name, "subfolder": "", "type": "temp", "kind": kind})
         return {"c2c_freq": files, "c2c_freq_settings": [{
             "method": method, "radius": radius, "mode": mode, "detail": detail, "linear": linear,

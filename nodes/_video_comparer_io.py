@@ -369,10 +369,19 @@ def save_preview_media(images: Optional[torch.Tensor], tag: str, fps: float = 24
     from PIL import Image
 
     out_dir, sub = _preview_dir()
-    frames = _to_uint8_frames(images, PREVIEW_MAX_FRAMES, PREVIEW_MAX_LONG)
-    stem = f"{tag}_{hashlib.sha1(f'{_time.time_ns()}|{tag}|{frames.shape}'.encode()).hexdigest()[:12]}"
-    meta = {"subfolder": sub, "type": "temp", "frames": int(frames.shape[0]), "fps": float(fps or 24.0)}
-    if frames.shape[0] > 1:
+    # L9.169: stream - each chunk of small frames goes straight into the encoder (the whole preview batch used to sit
+    # in RAM as one uint8 array first: 600 x 1280x720 = 1.6 GB at the cap).
+    try:
+        from ._c2c_preview_encode import iter_preview_frames
+    except ImportError:  # loaded top-level (tests)
+        from _c2c_preview_encode import iter_preview_frames
+    n = min(int(images.shape[0]), int(PREVIEW_MAX_FRAMES))
+    nw, nh = _even_scale(int(images.shape[2]), int(images.shape[1]), PREVIEW_MAX_LONG)
+    rgb = images[:n, ..., :3]                                   # a view: no copy
+    stem = f"{tag}_{hashlib.sha1(f'{_time.time_ns()}|{tag}|{(n, nh, nw, 3)}'.encode()).hexdigest()[:12]}"
+    meta = {"subfolder": sub, "type": "temp", "frames": n, "fps": float(fps or 24.0)}
+    if n > 1:
+        name = None
         try:
             from fractions import Fraction
 
@@ -387,13 +396,13 @@ def save_preview_media(images: Optional[torch.Tensor], tag: str, fps: float = 24
                                 options={"movflags": "+faststart"} if ext == "mp4" else {})
             try:
                 stream = container.add_stream(codec, rate=Fraction(meta["fps"]).limit_denominator(1_000_000))
-                stream.height, stream.width = int(frames.shape[1]), int(frames.shape[2])
+                stream.height, stream.width = int(nh), int(nw)
                 stream.pix_fmt = "yuv420p"
                 from .c2c_video.testmedia import _rgb_to_yuv, _tag_bt709
                 _tag_bt709(stream)                      # L9.67: BT.709 limited, said in the file
                 if codec == "libx264":
                     stream.options = {"crf": "18", "preset": "veryfast"}
-                for i, row in enumerate(frames):
+                for i, row in iter_preview_frames(rgb, chunk=8, size=(nw, nh)):
                     vf = _rgb_to_yuv(np.ascontiguousarray(row), "yuv420p")
                     vf.pts = i
                     for packet in stream.encode(vf):
@@ -404,9 +413,14 @@ def save_preview_media(images: Optional[torch.Tensor], tag: str, fps: float = 24
                 container.close()
             return {**meta, "filename": name, "kind": "video"}
         except Exception:  # noqa: BLE001 - no encoder: still show the first frame
-            pass
+            if name:
+                try:
+                    os.remove(os.path.join(out_dir, name))     # a half-written file must not linger
+                except OSError:
+                    pass
+    first = _to_uint8_frames(rgb[:1], 1, PREVIEW_MAX_LONG)[0]
     name = f"{stem}.png"
-    Image.fromarray(frames[0]).save(os.path.join(out_dir, name), compress_level=1)
+    Image.fromarray(first).save(os.path.join(out_dir, name), compress_level=1)
     return {**meta, "filename": name, "kind": "image", "frames": 1}
 
 
