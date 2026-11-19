@@ -678,6 +678,12 @@ def _encode_chunks(h: C2CVideo, vae: Any, chunks) -> dict[str, Any]:
     ProgressBar, interrupt = _progress_and_interrupt()
     n = len(h)
     pbar = ProgressBar(n) if ProgressBar is not None else None
+    # L7.75: Wan 2.1 / 2.2 video VAEs are encoded as a causal stream (exact = core's untiled encode; spatial tiles
+    # only when a step would not fit); every other VAE keeps the per-chunk encode below.
+    from . import stream_encode as SE
+    if SE.stream_family(vae) is not None:
+        return SE.stream_encode(vae, chunks, n, interrupt=interrupt,
+                                progress=(lambda d, t: pbar.update_absolute(d, t)) if pbar is not None else None)
     done = 0
     for chunk in chunks:
         interrupt()
