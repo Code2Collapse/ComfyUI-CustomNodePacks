@@ -1686,6 +1686,16 @@ read any file path. Through an SSH tunnel the page still counts as local.
   turn into Video Stabilizer on load with the method the old node ran (`C2C_LEGACY_STABILIZERS=1` keeps them).
 - **Save Video (C2C)** (2026-11-19): H.264 (NVENC) encodes at most 4096 px a side; a larger clip is now refused
   before ffmpeg starts, naming H.265 / AV1 (NVENC) or the CPU encoder (it used to fail with "NVENC could not start").
+- **Video Frame Player** (2026-11-19): a clip longer than 120 frames reaches the player as ONE small proxy video
+  instead of a picture per frame (300 frames: 54.8 MB of PNGs -> one 10.8 MB file; the browser holds one video, not
+  300 images). Every frame of the proxy is a keyframe, so scrubbing lands on the exact frame. Setting: "Frame Player:
+  one proxy video above (frames)"; 0 keeps a picture per frame.
+- **Previews use less memory** (2026-11-19): Video Comparer's browser preview is encoded a few frames at a time (60 x
+  720p: 7.6 s -> 2.4 s), Frequency Separate's preview no longer copies the whole batch (+647 MB -> +29 MB).
+- **Save Video stream save** (2026-11-19): Wan 2.2 latents are now decoded in spatial tiles too (as Wan 2.1 already
+  was) when tile_mode asks for them; a VAE that cannot be tiled says so instead of ignoring the request.
+- **Deprecated nodes** (2026-11-19): each one says, once per run, what replaces it; a page per node in
+  [docs/migration/](docs/migration/README.md) shows the replacement and the measured parity.
 - **Tooltips on every input and output** (2026-11-19): all 88 current nodes now explain each of their inputs and
   outputs when you hover them (before: 59% of them). Every text was checked against what the code does; no input
   name, order or default changed. They are also listed in [NODE_REFERENCE.md](NODE_REFERENCE.md).
