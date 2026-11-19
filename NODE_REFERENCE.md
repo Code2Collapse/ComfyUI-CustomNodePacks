@@ -225,11 +225,11 @@ Generate or edit images with Google's Nano Banana family (gemini-3-pro-image / g
 | `model` | choice: `gemini-3-pro-image-preview`, `gemini-2.5-flash-image`, `gemini-2.5-flash-image-preview`, `gemini-2.0-flash-preview-image-generation` | default `"gemini-3-pro-image-preview"` | gemini-3-pro-image-preview = Nano Banana Pro (1K/2K/4K, best text, 14 refs). gemini-2.5-flash-image = fast GA model. |
 | `mode` | choice: `text_to_image`, `edit_image`, `compose_images`, `style_transfer` | default `"text_to_image"` | edit_image needs ≥1 reference image; style_transfer needs ≥2 (first = content, last = style). |
 | `prompt_style` | choice: `raw`, `cinematic`, `structured_json`, `character_consistency`, `product_shot` | default `"raw"` | Wraps your prompt in a proven template: cinematic photo, structured JSON brief, character-consistency lock, or commercial product shot. |
-| `aspect_ratio` | choice: `auto`, `1:1`, `16:9`, `9:16`, `4:3`, `3:4`, `21:9`, `3:2`, … (+3) | default `"auto"` | — |
+| `aspect_ratio` | choice: `auto`, `1:1`, `16:9`, `9:16`, `4:3`, `3:4`, `21:9`, `3:2`, … (+3) | default `"auto"` | Shape of the generated image. auto = the model decides (for edits it usually keeps the reference's shape). |
 | `resolution` | choice: `auto`, `1K`, `2K`, `4K` | default `"auto"` | 1K/2K/4K are Nano Banana **Pro** only; flash models ignore this. |
 | `enhance_prompt` | `BOOLEAN` | default `False` | Higgsfield-style enhancer: a fast Gemini text pass expands your prompt into a rich, detailed image brief before generation. |
 | `response_modalities` | choice: `IMAGE+TEXT`, `IMAGE` | default `"IMAGE+TEXT"` | IMAGE = picture only; IMAGE+TEXT also returns the model's commentary on the text_response output. |
-| `temperature` | `FLOAT` | default `1.0`, range 0.0…2.0, step 0.05 | — |
+| `temperature` | `FLOAT` | default `1.0`, range 0.0…2.0, step 0.05 | Randomness of the model. Lower = closer to the prompt and more repeatable, higher = more varied. |
 | `batch_count` | `INT` | default `1`, range 1…4 | Sequential API calls; results are stacked into one batch. |
 | `seed` | `INT` | default `0`, range 0…2147483647 | Gemini has no true seed — this controls ComfyUI caching: same seed reuses the cached result, new seed regenerates. |
 
@@ -240,17 +240,17 @@ Generate or edit images with Google's Nano Banana family (gemini-3-pro-image / g
 | `api_key` | `STRING` | default `""` | Leave empty: the key is read from the C2C key store (GEMINI_API_KEY) or the GEMINI_API_KEY / GOOGLE_API_KEY environment variable. A key pasted here is moved into the key store and cleared, so it is never saved in the workflow or in image metadata. |
 | `system_instruction` | `STRING` | default `""`, multiline | Optional system-level art direction applied to every generation (brand style, banned elements, palette rules). |
 | `image_1` | `IMAGE` |  | Reference image(s). Batches flatten in order. |
-| `image_2` | `IMAGE` |  | — |
-| `image_3` | `IMAGE` |  | — |
+| `image_2` | `IMAGE` |  | More reference image(s), after image_1. |
+| `image_3` | `IMAGE` |  | More reference image(s), after image_2. |
 | `image_4` | `IMAGE` |  | For style_transfer the LAST image is the style. |
 
 **Outputs**
 
 | # | Name | Type | What it is |
 |---|---|---|---|
-| 0 | `images` | `IMAGE` | — |
-| 1 | `text_response` | `STRING` | — |
-| 2 | `info` | `STRING` | — |
+| 0 | `images` | `IMAGE` | The generated images, one per batch_count call, resized to the first one's size. |
+| 1 | `text_response` | `STRING` | The model's text reply (empty with response_modalities = IMAGE). |
+| 2 | `info` | `STRING` | Model, mode, size, reference count, latency and tokens used (JSON). |
 
 
 ---
@@ -277,8 +277,8 @@ Reverses the audio waveform (torch.flip on the sample dim), preserving sample ra
 
 | # | Name | Type | What it is |
 |---|---|---|---|
-| 0 | `audio` | `AUDIO` | — |
-| 1 | `time_map` | `TIMEMAP` | — |
+| 0 | `audio` | `AUDIO` | The audio played backwards (same sample rate and channels). |
+| 1 | `time_map` | `TIMEMAP` | Maps original to reversed timestamps (t_new = duration - t_orig) for syncing video. |
 
 
 ---
@@ -311,7 +311,7 @@ VAE decode with optional fp32 (<=0.17 dB measured gain), spatial-only tiling for
 | `clamp_output` | `BOOLEAN` | default `True` | Core clamps decoder output to 0..1. Off keeps out-of-range values (4.6x / 5.3x more accurate there on Flux/Wan, measured M2). For HDR/EXR chains. |
 | `tile_mode` | choice: `auto`, `off`, `manual` | default `"auto"` | auto: tile only when the untiled decode would not fit the GPU (measured on an 8 GB card: a 2K Wan decode took 502 s untiled, spilling into system RAM, and 37 s tiled, with the same picture); a tile_size above 0 is used as given. off: never tile. manual: tile at tile_size. Video is tiled in space only - splitting a video VAE in time costs ~21 dB. |
 | `samples` | `LATENT` |  | The latent to decode (with vae). Leave empty to clean 'image'. |
-| `vae` | `VAE` |  | — |
+| `vae` | `VAE` |  | The VAE that made the latent (needed with samples). |
 | `image` | `IMAGE` |  | An already-decoded picture to clean instead of decoding a latent. |
 | `clean` | `BOOLEAN` | default `False` | Measure the decode and correct what is wrong with it: colour cast, oversaturation, crushed shadows, chroma speckle. The report says what it found, including clipping it cannot undo. |
 | `balance_mode` | choice: `off`, `grey world`, `match reference`, `white point` | default `"off"` | Clean (when clean is on): off = measure only. grey world = drive the AVERAGE neutral. Fast and wrong on any shot that is genuinely one colour - a sunset averages red and this will throw the sunset away. white point = drive the BRIGHTEST 1% neutral. Safer on coloured scenes, because a red room still has a neutral highlight. match reference = copy a plate's channel means. Use when you have the real footage. |
@@ -368,16 +368,16 @@ VFX-AOV control fusion: emit depth/canny/pose/normal/motion/ID as separate passe
 | `id_matte_model` | choice: `off`, `sam_auto` | default `"off"` | ID/segmentation matte. sam_auto = automatic SAM segmentation (controlnet_aux SAMPreprocessor). 'off' = wire an external matte. |
 | `edge_model` | choice: `internal_canny`, `off`, `canny`, `lineart`, `anyline`, `hed`, `pidinet`, `teed` | default `"internal_canny"` | internal_canny = OpenCV (no model). Others delegate to controlnet_aux. |
 | `run_canny` | `BOOLEAN` | default `True` | Used only when edge_model = internal_canny. |
-| `canny_low` | `INT` | default `100`, range 0…255 | — |
-| `canny_high` | `INT` | default `200`, range 0…255 | — |
+| `canny_low` | `INT` | default `100`, range 0…255 | Canny lower threshold: weaker edges are kept only where they join a strong edge. Lower = more detail lines. |
+| `canny_high` | `INT` | default `200`, range 0…255 | Canny upper threshold: gradients above it are always edges. Lower = more edges. |
 | `canny_aperture` | choice: `3`, `5`, `7` | default `3` | Sobel aperture for internal Canny (odd 3/5/7). |
 | `depth_invert` | `BOOLEAN` | default `False` | Invert depth (1 - depth). Use when source is 'far=bright' but the ControlNet expects 'near=bright'. |
 | `preproc_resolution` | `INT` | default `512`, range 64…4096, step 8 | Resolution passed to delegated preprocessors. |
 | `run_motion` | `BOOLEAN` | default `False` | Optical-flow motion-vector pass (needs an image batch ≥ 2 frames). |
-| `depth_weight` | `FLOAT` | default `1.0`, range 0.0…2.0, step 0.05 | — |
-| `canny_weight` | `FLOAT` | default `1.0`, range 0.0…2.0, step 0.05 | — |
-| `pose_weight` | `FLOAT` | default `1.0`, range 0.0…2.0, step 0.05 | — |
-| `normal_weight` | `FLOAT` | default `0.0`, range 0.0…2.0, step 0.05 | — |
+| `depth_weight` | `FLOAT` | default `1.0`, range 0.0…2.0, step 0.05 | How much the depth pass counts in the blended output (0 = left out). The separate pass outputs are not scaled. |
+| `canny_weight` | `FLOAT` | default `1.0`, range 0.0…2.0, step 0.05 | How much the canny pass counts in the blended output (0 = left out). The separate pass outputs are not scaled. |
+| `pose_weight` | `FLOAT` | default `1.0`, range 0.0…2.0, step 0.05 | How much the pose pass counts in the blended output (0 = left out). The separate pass outputs are not scaled. |
+| `normal_weight` | `FLOAT` | default `0.0`, range 0.0…2.0, step 0.05 | How much the normal pass counts in the blended output (0 = left out). The separate pass outputs are not scaled. |
 | `match_to` | choice: `depth`, `canny`, `pose`, `image`, `largest` | default `"image"` | Internal: align every AOV pass to this source's size before resize/output. |
 | `resize` | choice: `off`, `width/height`, `scale` | default `"off"` | Resize ALL outputs in-node. off = keep source size; width/height = resize to an exact width x height; scale = multiply size by 'scale'. |
 | `width` | `INT` | default `1024`, range 0…16384, step 8 | Target width (resize=width/height). 0 = derive from height + aspect. |
@@ -513,8 +513,8 @@ Lists the GPUs (architecture Turing to Blackwell, memory, BF16 / FP8 / FP4 suppo
 
 | # | Name | Type | What it is |
 |---|---|---|---|
-| 0 | `summary` | `STRING` | — |
-| 1 | `report_json` | `STRING` | — |
+| 0 | `summary` | `STRING` | Readable summary: GPUs, links, working backends and usable multi-GPU modes. |
+| 1 | `report_json` | `STRING` | The full inventory (and qualification result when run) as JSON. |
 
 
 ---
@@ -534,7 +534,7 @@ Limits: speed-up on real multi-GPU hardware is not measured yet; ControlNet and 
 
 | Parameter | Type | Constraints | What it does |
 |---|---|---|---|
-| `model` | `MODEL` |  | — |
+| `model` | `MODEL` |  | The diffusion model to split; put this node last in the model chain (after LoRA / attention nodes). |
 | `gpus` | `INT` | default `0`, range 0…64 | How many GPUs to use; 0 = all that ComfyUI sees. Each GPU holds a full copy of the model. |
 | `strategy` | choice: `auto`, `ulysses`, `ring` | default `"auto"` | auto: Ulysses as far as the head count and fast links allow, Ring for the rest (USP). ulysses: prefer head-parallel all-to-all (best on NVLink). ring: K/V blocks passed around (best across slow links). |
 | `min_tokens_per_gpu` | `INT` | default `1024`, range 1…1048576 | Calls with fewer tokens per GPU run on one GPU: below this the exchange costs more than it saves. |
@@ -550,8 +550,8 @@ Limits: speed-up on real multi-GPU hardware is not measured yet; ControlNet and 
 
 | # | Name | Type | What it is |
 |---|---|---|---|
-| 0 | `model` | `MODEL` | — |
-| 1 | `plan` | `STRING` | — |
+| 0 | `model` | `MODEL` | The model with every call split over the GPUs (unchanged with one GPU). |
+| 1 | `plan` | `STRING` | The chosen mode, devices, memory per GPU and communication path, as text. |
 
 
 ---
@@ -695,8 +695,8 @@ Lightroom-style film grain with per-frame animation for video batches.
 
 | # | Name | Type | What it is |
 |---|---|---|---|
-| 0 | `image` | `IMAGE` | — |
-| 1 | `report` | `STRING` | — |
+| 0 | `image` | `IMAGE` | The image with grain added (inside the mask only when one is wired). |
+| 1 | `report` | `STRING` | Settings used, the device, and any fallback (e.g. computed on the CPU after a GPU out-of-memory). |
 
 
 ---
@@ -731,8 +731,8 @@ Merge a high-frequency detail layer onto a low-frequency base. Output is clamped
 
 | # | Name | Type | What it is |
 |---|---|---|---|
-| 0 | `image` | `IMAGE` | — |
-| 1 | `report` | `STRING` | — |
+| 0 | `image` | `IMAGE` | The base with the detail layer merged back on. |
+| 1 | `report` | `STRING` | What ran and any notes, as text. |
 
 
 ---
@@ -768,10 +768,10 @@ Split an image into low-frequency base and high-frequency detail. HF leaves in w
 
 | # | Name | Type | What it is |
 |---|---|---|---|
-| 0 | `high_frequency` | `IMAGE` | — |
-| 1 | `low_frequency` | `IMAGE` | — |
-| 2 | `high_frequency_masked` | `IMAGE` | — |
-| 3 | `report` | `STRING` | — |
+| 0 | `high_frequency` | `IMAGE` | The fine detail layer (no detail = 1.0 in Divide mode, 0.0 in Subtract). Wire to Frequency Combine. |
+| 1 | `low_frequency` | `IMAGE` | The soft base layer with the detail removed. |
+| 2 | `high_frequency_masked` | `IMAGE` | The detail layer kept only inside the mask (neutral elsewhere); same as high_frequency without a mask. |
+| 3 | `report` | `STRING` | What ran: method, radius, mode and any notes, as text. |
 
 
 ---
@@ -792,7 +792,7 @@ Width and height for a render: a common aspect ratio scaled to a long edge (Wan 
 
 | Parameter | Type | Constraints | What it does |
 |---|---|---|---|
-| `preset` | choice: `1:1 square`, `16:9 landscape`, `9:16 portrait`, `4:3 landscape`, `3:4 portrait`, `21:9 ultrawide`, `2.39:1 cinema`, `Wan 480p land`, … (+4) | default `"16:9 landscape"` | — |
+| `preset` | choice: `1:1 square`, `16:9 landscape`, `9:16 portrait`, `4:3 landscape`, `3:4 portrait`, `21:9 ultrawide`, `2.39:1 cinema`, `Wan 480p land`, … (+4) | default `"16:9 landscape"` | An aspect ratio scaled to 'base', a Wan native size, or Custom (width x height below). |
 | `base` | `INT` | default `1024`, range 64…8192 | Long edge target (ignored for Wan presets and Custom). |
 | `multiple` | `INT` | default `64`, range 1…256 | Snap width and height to this multiple. Wan presets ignore it: their native sizes (832x480, 1280x720) are already what Wan needs (multiples of 16). |
 
@@ -808,8 +808,8 @@ Width and height for a render: a common aspect ratio scaled to a long edge (Wan 
 
 | # | Name | Type | What it is |
 |---|---|---|---|
-| 0 | `width` | `INT` | — |
-| 1 | `height` | `INT` | — |
+| 0 | `width` | `INT` | Width in pixels, snapped to the multiple. |
+| 1 | `height` | `INT` | Height in pixels, snapped to the multiple. |
 
 
 ---
@@ -827,15 +827,15 @@ Return value_true when condition is True, else value_false. Both inputs are wild
 
 | Parameter | Type | Constraints | What it does |
 |---|---|---|---|
-| `condition` | `BOOLEAN` | default `True` | — |
-| `value_true` | `*` |  | — |
-| `value_false` | `*` |  | — |
+| `condition` | `BOOLEAN` | default `True` | On: pass value_true. Off: pass value_false. |
+| `value_true` | `*` |  | Passed on when condition is on (only this branch runs). |
+| `value_false` | `*` |  | Passed on when condition is off (only this branch runs). |
 
 **Outputs**
 
 | # | Name | Type | What it is |
 |---|---|---|---|
-| 0 | `out` | `*` | — |
+| 0 | `out` | `*` | value_true or value_false, whichever the condition chose. |
 
 
 ---
@@ -853,17 +853,17 @@ Stopwatch: returns seconds since the *previous* execution of the same label. Fir
 
 | Parameter | Type | Constraints | What it does |
 |---|---|---|---|
-| `passthrough` | `*` |  | — |
-| `label` | `STRING` | default `"stage_a"` | — |
+| `passthrough` | `*` |  | Anything: passed on unchanged; the timer ticks when it arrives. |
+| `label` | `STRING` | default `"stage_a"` | Timers with the same label measure from each other's ticks. |
 | `reset` | `BOOLEAN` | default `False` | If true, this tick is treated as the first. |
 
 **Outputs**
 
 | # | Name | Type | What it is |
 |---|---|---|---|
-| 0 | `passthrough` | `*` | — |
-| 1 | `report` | `STRING` | — |
-| 2 | `elapsed_seconds` | `FLOAT` | — |
+| 0 | `passthrough` | `*` | The input, unchanged. |
+| 1 | `report` | `STRING` | '[label] +seconds' for this tick. |
+| 2 | `elapsed_seconds` | `FLOAT` | Seconds since the previous tick with the same label (0 on the first). |
 
 
 ---
@@ -881,7 +881,7 @@ Pick frames from an IMAGE batch: a start:end:step range (negative values count f
 
 | Parameter | Type | Constraints | What it does |
 |---|---|---|---|
-| `images` | `IMAGE` |  | — |
+| `images` | `IMAGE` |  | The frames to pick from (an IMAGE batch). |
 | `start` | `INT` | default `0`, range -100000…100000 | Range mode: first frame. Negative counts from the end. |
 | `end` | `INT` | default `-1`, range -100000…100000 | Range mode: exclusive end. -1 = end of batch. |
 | `step` | `INT` | default `1`, range 1…1024 | Range mode: keep every Nth frame. |
@@ -922,8 +922,8 @@ Pass-through probe for debugging: wire an image, a mask and/or a latent and read
 
 | Parameter | Type | Constraints | What it does |
 |---|---|---|---|
-| `images` | `IMAGE` |  | — |
-| `mask` | `MASK` |  | — |
+| `images` | `IMAGE` |  | An image to measure (passed on unchanged). |
+| `mask` | `MASK` |  | A mask to measure coverage of (passed on unchanged). |
 | `latent` | `LATENT` |  | ComfyUI LATENT dict (must contain 'samples'). |
 | `threshold` | `FLOAT` | default `0.5`, range 0.0…1.0, step 0.01 | Mask: a pixel counts as covered above this value. |
 | `fail_on_corrupt` | `BOOLEAN` | default `False` | Latent: stop the run when it holds NaN or Inf. |
@@ -963,17 +963,17 @@ Linear / smoothstep / cosine interpolation between two values. t is clamped to [
 
 | Parameter | Type | Constraints | What it does |
 |---|---|---|---|
-| `a` | `FLOAT` | default `0.0`, range -1000000000.0…1000000000.0, step 0.0001 | — |
-| `b` | `FLOAT` | default `1.0`, range -1000000000.0…1000000000.0, step 0.0001 | — |
-| `t` | `FLOAT` | default `0.5`, range 0.0…1.0, step 0.001 | — |
-| `curve` | choice: `linear`, `smoothstep`, `cosine` | default `"linear"` | — |
+| `a` | `FLOAT` | default `0.0`, range -1000000000.0…1000000000.0, step 0.0001 | The value at t = 0. |
+| `b` | `FLOAT` | default `1.0`, range -1000000000.0…1000000000.0, step 0.0001 | The value at t = 1. |
+| `t` | `FLOAT` | default `0.5`, range 0.0…1.0, step 0.001 | How far from a to b (0..1). |
+| `curve` | choice: `linear`, `smoothstep`, `cosine` | default `"linear"` | linear: straight; smoothstep and cosine ease in and out near a and b. |
 
 **Outputs**
 
 | # | Name | Type | What it is |
 |---|---|---|---|
-| 0 | `float` | `FLOAT` | — |
-| 1 | `int` | `INT` | — |
+| 0 | `float` | `FLOAT` | The interpolated value. |
+| 1 | `int` | `INT` | The interpolated value, rounded to the nearest whole number. |
 
 
 ---
@@ -991,16 +991,16 @@ Generate N deterministic seeds from a base seed. Modes: increment (base, base+1,
 
 | Parameter | Type | Constraints | What it does |
 |---|---|---|---|
-| `base_seed` | `INT` | default `0`, range 0…4294967295 | — |
-| `count` | `INT` | default `4`, range 1…1024 | — |
-| `mode` | choice: `increment`, `hash`, `random` | default `"increment"` | — |
+| `base_seed` | `INT` | default `0`, range 0…4294967295 | The seed every other seed is derived from. |
+| `count` | `INT` | default `4`, range 1…1024 | How many seeds to make. |
+| `mode` | choice: `increment`, `hash`, `random` | default `"increment"` | increment: base, base+1, ...; hash: sha256 of base and index (unrelated seeds); random: a seeded random stream. All are repeatable for the same base. |
 
 **Outputs**
 
 | # | Name | Type | What it is |
 |---|---|---|---|
-| 0 | `first_seed` | `INT` | — |
-| 1 | `csv_all_seeds` | `STRING` | — |
+| 0 | `first_seed` | `INT` | The first seed of the list. |
+| 1 | `csv_all_seeds` | `STRING` | Every seed, comma separated (e.g. for a seed sweep). |
 
 
 ---
@@ -1018,17 +1018,17 @@ Substitute {a}{b}{c}{d} placeholders in a template string. Useful for building p
 
 | Parameter | Type | Constraints | What it does |
 |---|---|---|---|
-| `template` | `STRING` | default `"a {a} of {b}, {c}, {d}"`, multiline | — |
-| `a` | `STRING` | default `""` | — |
-| `b` | `STRING` | default `""` | — |
-| `c` | `STRING` | default `""` | — |
-| `d` | `STRING` | default `""` | — |
+| `template` | `STRING` | default `"a {a} of {b}, {c}, {d}"`, multiline | Text with {a} {b} {c} {d} placeholders; each is replaced by the input of that name. |
+| `a` | `STRING` | default `""` | Replaces {a} in the template. |
+| `b` | `STRING` | default `""` | Replaces {b} in the template. |
+| `c` | `STRING` | default `""` | Replaces {c} in the template. |
+| `d` | `STRING` | default `""` | Replaces {d} in the template. |
 
 **Outputs**
 
 | # | Name | Type | What it is |
 |---|---|---|---|
-| 0 | `text` | `STRING` | — |
+| 0 | `text` | `STRING` | The template with its placeholders filled in. |
 
 
 ---
@@ -1049,32 +1049,32 @@ Crop around mask for inpainting (lquesada API + Wan 2.2 Animate aware). crop_mod
 
 | Parameter | Type | Constraints | What it does |
 |---|---|---|---|
-| `downscale_algorithm` | choice: `nearest`, `bilinear`, `bicubic`, `lanczos`, `box`, `hamming`, `area` | default `"bilinear"` | — |
-| `upscale_algorithm` | choice: `nearest`, `bilinear`, `bicubic`, `lanczos`, `box`, `hamming`, `area` | default `"bicubic"` | — |
+| `downscale_algorithm` | choice: `nearest`, `bilinear`, `bicubic`, `lanczos`, `box`, `hamming`, `area` | default `"bilinear"` | Resampling used when something is made smaller (pre-resize, fitting the crop to the target). area / box keep detail best when shrinking. |
+| `upscale_algorithm` | choice: `nearest`, `bilinear`, `bicubic`, `lanczos`, `box`, `hamming`, `area` | default `"bicubic"` | Resampling used when something is made bigger. bicubic / lanczos are sharp; nearest keeps hard edges. |
 | `preresize` | `BOOLEAN` | default `False` | Resize input image before processing (lquesada-style). |
-| `preresize_mode` | choice: `ensure minimum resolution`, `ensure maximum resolution`, `ensure minimum and maximum resolution` | default `"ensure minimum resolution"` | — |
-| `preresize_min_width` | `INT` | default `1024`, range 0…16384, step 1 | — |
-| `preresize_min_height` | `INT` | default `1024`, range 0…16384, step 1 | — |
-| `preresize_max_width` | `INT` | default `16384`, range 0…16384, step 1 | — |
-| `preresize_max_height` | `INT` | default `16384`, range 0…16384, step 1 | — |
+| `preresize_mode` | choice: `ensure minimum resolution`, `ensure maximum resolution`, `ensure minimum and maximum resolution` | default `"ensure minimum resolution"` | preresize: scale the whole image up to at least the minimum, down to at most the maximum, or both (keeping its aspect). |
+| `preresize_min_width` | `INT` | default `1024`, range 0…16384, step 1 | preresize: smallest width the image is scaled up to. |
+| `preresize_min_height` | `INT` | default `1024`, range 0…16384, step 1 | preresize: smallest height the image is scaled up to. |
+| `preresize_max_width` | `INT` | default `16384`, range 0…16384, step 1 | preresize: largest width the image is scaled down to. |
+| `preresize_max_height` | `INT` | default `16384`, range 0…16384, step 1 | preresize: largest height the image is scaled down to. |
 | `mask_fill_holes` | `BOOLEAN` | default `True` | Mark fully-enclosed regions as masked. |
 | `mask_expand_pixels` | `INT` | default `0`, range 0…16384, step 1 | Dilate mask by this many pixels. |
 | `mask_invert` | `BOOLEAN` | default `False` | Invert mask (anything masked is kept). |
 | `mask_blend_pixels` | `INT` | default `32`, range 0…64, step 1 | Pixels of feather for stitch blending (lquesada default 32). |
 | `mask_hipass_filter` | `FLOAT` | default `0.1`, range 0.0…1.0, step 0.01 | Zero out mask values below this threshold. |
 | `extend_for_outpainting` | `BOOLEAN` | default `False` | Extend image with edge-replicated padding for outpainting. |
-| `extend_up_factor` | `FLOAT` | default `1.0`, range 0.01…100.0, step 0.01 | — |
-| `extend_down_factor` | `FLOAT` | default `1.0`, range 0.01…100.0, step 0.01 | — |
-| `extend_left_factor` | `FLOAT` | default `1.0`, range 0.01…100.0, step 0.01 | — |
-| `extend_right_factor` | `FLOAT` | default `1.0`, range 0.01…100.0, step 0.01 | — |
+| `extend_up_factor` | `FLOAT` | default `1.0`, range 0.01…100.0, step 0.01 | extend_for_outpainting: grow the image upward by (factor - 1) x its height (1 = none, 1.5 = half the height more). |
+| `extend_down_factor` | `FLOAT` | default `1.0`, range 0.01…100.0, step 0.01 | extend_for_outpainting: grow the image downward by (factor - 1) x its height (1 = none, 1.5 = half the height more). |
+| `extend_left_factor` | `FLOAT` | default `1.0`, range 0.01…100.0, step 0.01 | extend_for_outpainting: grow the image to the left by (factor - 1) x its width (1 = none, 1.5 = half the width more). |
+| `extend_right_factor` | `FLOAT` | default `1.0`, range 0.01…100.0, step 0.01 | extend_for_outpainting: grow the image to the right by (factor - 1) x its width (1 = none, 1.5 = half the width more). |
 | `context_from_mask_extend_factor` | `FLOAT` | default `1.2`, range 0.1…100.0, step 0.01 | Resize context bbox around the mask. 1.0 = exact mask bbox. >1 grows outward (1.5 = +50% on every side). <1 shrinks INWARD so the crop is tighter than the mask bbox (0.7 = inset 15% on every side). Useful for 16:9 / portrait single-still crops where the mask bbox is larger than the subject you actually want sampled. |
 | `auto_context_factor` | `BOOLEAN` | default `False` | Override context_from_mask_extend_factor automatically so the mask fills ~70% of the resulting crop area. Uses actual mask AREA (not just bbox) to handle sparse / thin / non-convex masks. Result clamped to [0.30, 10.00]. OFF = use the manual slider above. Recommended ON for batch / unattended runs. |
 | `aspect_preset` | choice: `Custom`, `Auto`, `Square`, `16:9`, `9:16`, `4:3`, `3:4` | default `"Custom"` | Force the output crop aspect ratio. Custom : use output_target_width / _height as-is (legacy lquesada behaviour - DEFAULT). Auto : pick best of {Square, 16:9, 9:16, 4:3, 3:4} from the mask bbox aspect. Square / 16:9 / 9:16 / 4:3 / 3:4 : keep the SHORTER of (output_target_width, output_target_height) and recompute the longer side from this AR. Multiple-of-padding rounding still applies downstream. |
 | `output_resize_to_target_size` | `BOOLEAN` | default `True` | Force output to a specific resolution for sampling. |
-| `output_target_width` | `INT` | default `512`, range 64…16384, step 1 | — |
-| `output_target_height` | `INT` | default `512`, range 64…16384, step 1 | — |
-| `output_padding` | choice: `0`, `8`, `16`, `32`, `64`, `128`, `256`, `512` | default `"32"` | — |
-| `device_mode` | choice: `cpu (compatible)`, `gpu (much faster)` | default `"gpu (much faster)"` | — |
+| `output_target_width` | `INT` | default `512`, range 64…16384, step 1 | output_resize_to_target_size: width of the crop handed to the sampler. |
+| `output_target_height` | `INT` | default `512`, range 64…16384, step 1 | output_resize_to_target_size: height of the crop handed to the sampler. |
+| `output_padding` | choice: `0`, `8`, `16`, `32`, `64`, `128`, `256`, `512` | default `"32"` | Round the crop size up to a multiple of this (models want sizes divisible by 8 / 16 / 32 ...). 0 = no rounding. |
+| `device_mode` | choice: `cpu (compatible)`, `gpu (much faster)` | default `"gpu (much faster)"` | Where the resizing and blending run. cpu when the GPU is busy or short of memory. |
 | `wan_align_multiple` | `INT` | default `16`, range 1…256, step 1 | Force final crop W/H to multiples of this (Wan VAE patchify; 16 recommended). |
 | `wan_temporal_smooth_frames` | `FLOAT` | default `0.0`, range 0.0…64.0, step 0.1 | Gaussian smoothing of mask along time axis (frames). 0 disables. |
 | `wan_stable_crop` | `BOOLEAN` | default `True` | Use a single union bbox across all frames (Wan replacement-mode). |
@@ -1091,9 +1091,9 @@ Crop around mask for inpainting (lquesada API + Wan 2.2 Animate aware). crop_mod
 
 | Parameter | Type | Constraints | What it does |
 |---|---|---|---|
-| `image` | `IMAGE` |  | — |
-| `mask` | `MASK` |  | — |
-| `optional_context_mask` | `MASK` |  | — |
+| `image` | `IMAGE` |  | The frames to inpaint (a still or a clip). |
+| `mask` | `MASK` |  | White = the area to regenerate. |
+| `optional_context_mask` | `MASK` |  | Extra area the crop must include as context, without being regenerated. |
 | `roto_quality` | `BOOLEAN` | default `False` | Roto-Sync mode: tightens the inpaint seam for clean alpha edges. Forces laplacian_pyramid blend, halves blend_radius (min 4), and pre-erodes the inpaint mask by 1 px so the stitch falls just inside the subject. Safe to leave OFF for general inpaint; turn ON for compositing / roto / VFX work where boundaries must not bleed. |
 | `preview_frame` | `INT` | default `0`, range 0…100000, step 1 | Which frame the preview under the node shows (0 = the first). Display only: every frame is still cropped exactly as before. |
 | `crop_mode` | choice: `pro`, `smart aspect`, `mask prepare` | default `"pro"` | pro: the crop above (lquesada-style, video aware). smart aspect: the stills crop that sizes the output between a minimum and a maximum side (the former Smart Image Crop). mask prepare: no crop - clean the mask and make the inpaint and stitch masks for the whole frame (the former Inpaint Mask Prepare). |
@@ -1120,12 +1120,12 @@ Crop around mask for inpainting (lquesada API + Wan 2.2 Animate aware). crop_mod
 
 | # | Name | Type | What it is |
 |---|---|---|---|
-| 0 | `stitcher` | `STITCHER` | — |
-| 1 | `cropped_image` | `IMAGE` | — |
-| 2 | `inpaint_mask` | `MASK` | — |
-| 3 | `stitch_blend_mask` | `MASK` | — |
-| 4 | `info` | `STRING` | — |
-| 5 | `preview` | `IMAGE` | — |
+| 0 | `stitcher` | `STITCHER` | Everything Inpaint Stitch Pro needs to put the result back - connect it there. |
+| 1 | `cropped_image` | `IMAGE` | The crop to inpaint (send it to your sampler / VAE encode). |
+| 2 | `inpaint_mask` | `MASK` | The mask for the sampler, on the crop. |
+| 3 | `stitch_blend_mask` | `MASK` | The feathered mask the stitch blends with. |
+| 4 | `info` | `STRING` | Sizes, crop box and settings used, as text. |
+| 5 | `preview` | `IMAGE` | The picture the node shows: frame preview_frame with the crop window (the crop itself if it cannot be drawn). |
 
 
 ---
@@ -1152,8 +1152,8 @@ Stitch the inpainted crop back into the original (lquesada-compatible) with blen
 
 | Parameter | Type | Constraints | What it does |
 |---|---|---|---|
-| `stitcher` | `STITCHER` |  | — |
-| `inpainted_image` | `IMAGE` |  | — |
+| `stitcher` | `STITCHER` |  | Inpaint Crop Pro's stitcher output (where each crop came from). |
+| `inpainted_image` | `IMAGE` |  | The crops after inpainting (same count as the crop node gave; they may be a different size). |
 | `roto_quality_override` | choice: `from_crop`, `force_on`, `force_off` | default `"from_crop"` | Roto-Sync at stitch time. 'from_crop' honors the InpaintCropProMEC flag (recommended). 'force_on' applies tight-seam stitching even if crop didn't set it; 'force_off' disables it. |
 | `stitch_mode` | choice: `blend`, `paste back`, `smart`, `context blend` | default `"blend"` | blend: the crop's blend mask and blend modes (as before). paste back: resize and paste the crop, optional feathered edge (the former Inpaint Paste Back). smart: the stitch for a crop made in 'smart aspect' mode; needs original_image (the former Smart Image Stitch). context blend: no stitcher - blend a full-frame inpainted image over original_image under mask, with colour correction and lightness rescue (the former Context Inpainter). |
 | `original_image` | `IMAGE` |  | [smart / context blend] The original image. |
@@ -1180,9 +1180,9 @@ Stitch the inpainted crop back into the original (lquesada-compatible) with blen
 
 | # | Name | Type | What it is |
 |---|---|---|---|
-| 0 | `image` | `IMAGE` | — |
-| 1 | `blend_mask_used` | `MASK` | — |
-| 2 | `info` | `STRING` | — |
+| 0 | `image` | `IMAGE` | The full frames with the inpainted crops blended back in. |
+| 1 | `blend_mask_used` | `MASK` | The mask the blend actually used, at full-frame size. |
+| 2 | `info` | `STRING` | Blend mode and settings used, as text. |
 
 
 ---
@@ -1201,11 +1201,11 @@ Unified ProPainter node. Absorbs ProPainterTemporal / Remove / Stitch / StitchRe
 | Parameter | Type | Constraints | What it does |
 |---|---|---|---|
 | `mode` | choice: `temporal`, `remove`, `stitch`, `stitch_refine`, `flow` | default `"remove"` | Pick the ProPainter operation. Each mode reads a different subset of the optional inputs/widgets below. |
-| `use_half` | `BOOLEAN` | default `True` | — |
+| `use_half` | `BOOLEAN` | default `True` | Run the flow-completion and inpainting networks in fp16 on CUDA (about half the VRAM). Ignored on CPU. |
 | `color_match_mode` | choice: `off`, `reinhard`, `lab`, `lab_transfer`, `none` | default `"reinhard"` | Per-frame masked colour match between fill and surroundings (ignored in 'flow' mode). |
-| `raft_iter` | `INT` | default `12`, range 1…100 | — |
-| `neighbor_stride` | `INT` | default `5`, range 1…32 | — |
-| `ref_stride` | `INT` | default `10`, range 1…64 | — |
+| `raft_iter` | `INT` | default `12`, range 1…100 | RAFT optical-flow refinement steps. More = more accurate flow, slower. |
+| `neighbor_stride` | `INT` | default `5`, range 1…32 | Step between local windows of neighbouring frames that are inpainted together. Smaller = more overlap, smoother, slower. |
+| `ref_stride` | `INT` | default `10`, range 1…64 | Spacing of the far-away reference frames each window also looks at. Smaller = more references (fills long occlusions better), more memory. |
 | `subvideo_length` | `INT` | default `8`, range 2…300 | Frames per InpaintGenerator window. 8GB cards: 8-30. 12GB: 40-60. 24GB: 80+. |
 | `raft_chunk` | `INT` | default `16`, range 1…64 | Frame-pairs per RAFT forward pass. |
 | `blend_boundary` | `BOOLEAN` | default `True` | [temporal] Blend the inpaint with original at the crop boundary using stitch_data. |
@@ -1584,7 +1584,7 @@ Deprecated — kept so old workflows load. Closest current node: MaskOpsMEC prev
 
 | Parameter | Type | Constraints | What it does |
 |---|---|---|---|
-| `project` | choice: `— sign in (Magnific menu) and press R to refresh —` |  | — |
+| `project` | choice: `— sign in (Magnific menu) and press R to refresh —` |  | Your Magnific project. Press R after creating one at magnific.com to refresh the list. |
 | `folder` | choice: `(project root)` | default `"(project root)"` | Folder inside the selected project; the list narrows to that project. |
 | `content_type` | choice: `image`, `video`, `audio` | default `"image"` | Media type to browse; only the matching output is populated. |
 | `selected` | `STRING` | default `""` | Set by clicking a thumbnail in the grid. |
@@ -1593,11 +1593,11 @@ Deprecated — kept so old workflows load. Closest current node: MaskOpsMEC prev
 
 | # | Name | Type | What it is |
 |---|---|---|---|
-| 0 | `image` | `IMAGE` | — |
-| 1 | `video` | `VIDEO` | — |
-| 2 | `audio` | `AUDIO` | — |
-| 3 | `creation_identifier` | `STRING` | — |
-| 4 | `metadata` | `STRING` | — |
+| 0 | `image` | `IMAGE` | The picked creation when content_type = image (empty otherwise). |
+| 1 | `video` | `VIDEO` | The picked creation when content_type = video. |
+| 2 | `audio` | `AUDIO` | The picked creation when content_type = audio. |
+| 3 | `creation_identifier` | `STRING` | Its creation id. |
+| 4 | `metadata` | `STRING` | Model, prompt, seed, tool and url of the result as JSON - split it with the Metadata (unpack) node. |
 
 
 ---
@@ -1613,10 +1613,10 @@ Deprecated — kept so old workflows load. Closest current node: MaskOpsMEC prev
 
 | Parameter | Type | Constraints | What it does |
 |---|---|---|---|
-| `prompt` | `STRING` | default `""`, multiline | — |
-| `model` | choice: `auto` | default `"auto"` | — |
-| `aspect_ratio` | choice: `auto`, `1:1`, `16:9`, `9:16`, `2:3`, `3:4`, `4:5`, `5:4`, … (+5) | default `"auto"` | — |
-| `count` | `INT` | default `1`, range 1…8 | — |
+| `prompt` | `STRING` | default `""`, multiline | What to generate. |
+| `model` | choice: `auto` | default `"auto"` | Image model; auto lets Magnific choose. The list comes from your account (press R to refresh). |
+| `aspect_ratio` | choice: `auto`, `1:1`, `16:9`, `9:16`, `2:3`, `3:4`, `4:5`, `5:4`, … (+5) | default `"auto"` | Shape of the image; auto = the model's default. |
+| `count` | `INT` | default `1`, range 1…8 | How many images; each one is a separate paid generation (above 4 needs confirm_task_count). |
 | `seed` | `INT` | default `0`, range 0…4294967295 | Sent to Magnific. Same seed and settings reproduce the result on models that honor it; a batch uses seed, seed+1, … per image. |
 
 **Optional inputs**
@@ -1628,7 +1628,7 @@ Deprecated — kept so old workflows load. Closest current node: MaskOpsMEC prev
 | `reference_image_2` | `IMAGE` |  | Another reference picture (or batch), same reference_type as the first. |
 | `reference_image_3` | `IMAGE` |  | Another reference picture (or batch), same reference_type as the first. |
 | `reference_image_4` | `IMAGE` |  | Another reference picture (or batch), same reference_type as the first. |
-| `reference_type` | choice: `image`, `style` | default `"image"` | — |
+| `reference_type` | choice: `image`, `style` | default `"image"` | How the reference pictures are used: image = content to follow, style = look to copy. |
 | `resolution` | choice: `auto` | default `"auto"` | auto = model default; narrows to the selected model. |
 | `library_references` | `MAGNIFIC_LIBRARY_REFS` |  | Optional — from a Magnific Library Reference node. Attaches Library characters, styles, elements or locations; their @name tokens are added to the prompt when missing. |
 | `confirm_task_count` | `INT` | default `0`, range 0…8 | Every image is a separate paid generation. Counts of up to 4 run as they are; for a bigger count type the same number here to submit it. |
@@ -1637,9 +1637,9 @@ Deprecated — kept so old workflows load. Closest current node: MaskOpsMEC prev
 
 | # | Name | Type | What it is |
 |---|---|---|---|
-| 0 | `images` | `IMAGE` | — |
-| 1 | `creation_identifiers` | `STRING` | — |
-| 2 | `metadata` | `STRING` | — |
+| 0 | `images` | `IMAGE` | The generated images as one batch. |
+| 1 | `creation_identifiers` | `STRING` | The creation id of each image, one per line. |
+| 2 | `metadata` | `STRING` | Model, prompt, seed, tool and url of the result as JSON - split it with the Metadata (unpack) node. |
 
 
 ---
@@ -1655,10 +1655,10 @@ Deprecated — kept so old workflows load. Closest current node: MaskOpsMEC prev
 
 | Parameter | Type | Constraints | What it does |
 |---|---|---|---|
-| `prompt` | `STRING` | default `""`, multiline | — |
-| `model` | choice: `Google Lyria`, `Lyria 3 Short`, `Lyria 3 Long`, `ElevenLabs Music`, `ElevenLabs Music v2`, `google-lyria`, `google-lyria-3`, `google-lyria-3-pro`, … (+2) | default `"Google Lyria"` | — |
+| `prompt` | `STRING` | default `""`, multiline | Describe the music: genre, mood, instruments, lyrics. |
+| `model` | choice: `Google Lyria`, `Lyria 3 Short`, `Lyria 3 Long`, `ElevenLabs Music`, `ElevenLabs Music v2`, `google-lyria`, `google-lyria-3`, `google-lyria-3-pro`, … (+2) | default `"Google Lyria"` | Music model. |
 | `duration_seconds` | `INT` | default `30`, range 10…300 | Only Lyria 3 Long and ElevenLabs honor it; the rest are fixed at 30s. |
-| `instrumental` | `BOOLEAN` | default `False` | — |
+| `instrumental` | `BOOLEAN` | default `False` | On: no vocals. |
 | `seed` | `INT` | default `0`, range 0…4294967295 | Music generation takes no seed: changing it only forces a new run. |
 
 **Optional inputs**
@@ -1671,9 +1671,9 @@ Deprecated — kept so old workflows load. Closest current node: MaskOpsMEC prev
 
 | # | Name | Type | What it is |
 |---|---|---|---|
-| 0 | `audio` | `AUDIO` | — |
-| 1 | `creation_identifier` | `STRING` | — |
-| 2 | `metadata` | `STRING` | — |
+| 0 | `audio` | `AUDIO` | The generated music. |
+| 1 | `creation_identifier` | `STRING` | The Magnific creation id of the result (find it in your library, or pass it on). |
+| 2 | `metadata` | `STRING` | Model, prompt, seed, tool and url of the result as JSON - split it with the Metadata (unpack) node. |
 
 
 ---
@@ -1689,11 +1689,11 @@ Deprecated — kept so old workflows load. Closest current node: MaskOpsMEC prev
 
 | Parameter | Type | Constraints | What it does |
 |---|---|---|---|
-| `prompt` | `STRING` | default `""`, multiline | — |
-| `model` | choice: `auto` | default `"auto"` | — |
+| `prompt` | `STRING` | default `""`, multiline | What happens in the video. |
+| `model` | choice: `auto` | default `"auto"` | Video model; auto lets Magnific choose. The list comes from your account (press R to refresh). |
 | `duration` | choice: `5`, `10` | default `"5"` | Seconds; narrows to the selected model. |
 | `resolution` | choice: `auto` | default `"auto"` | auto = model default; narrows to the selected model. |
-| `aspect_ratio` | choice: `auto`, `16:9`, `9:16`, `1:1`, `4:3`, `3:4`, `21:9` | default `"auto"` | — |
+| `aspect_ratio` | choice: `auto`, `16:9`, `9:16`, `1:1`, `4:3`, `3:4`, `21:9` | default `"auto"` | Shape of the video; auto = the model's default (or the start frame's shape). |
 | `sound_effects` | `BOOLEAN` | default `False` | Only models with native audio honor it. |
 | `seed` | `INT` | default `0`, range 0…4294967295 | Sent to Magnific. Same seed and settings reproduce the result on models that honor it (e.g. Seedance). |
 
@@ -1704,7 +1704,7 @@ Deprecated — kept so old workflows load. Closest current node: MaskOpsMEC prev
 | `folder` | `MAGNIFIC_FOLDER` |  | Optional — from a Magnific Save To node. Not connected → your Personal project. |
 | `start_frame` | `IMAGE` |  | Image-to-video start keyframe. |
 | `end_frame` | `IMAGE` |  | End keyframe (models that support it). |
-| `reference_image` | `IMAGE` |  | — |
+| `reference_image` | `IMAGE` |  | A picture of what should appear (models that take image references). |
 | `reference_video` | `VIDEO` |  | Video reference (models that support it, e.g. Seedance 2.0). Not combinable with a start/end frame. |
 | `library_references` | `MAGNIFIC_LIBRARY_REFS` |  | Optional — from a Magnific Library Reference node. Attaches Library characters, styles, elements or locations; their @name tokens are added to the prompt when missing. Video takes characters, elements and styles (no locations). |
 
@@ -1712,9 +1712,9 @@ Deprecated — kept so old workflows load. Closest current node: MaskOpsMEC prev
 
 | # | Name | Type | What it is |
 |---|---|---|---|
-| 0 | `video` | `VIDEO` | — |
-| 1 | `creation_identifier` | `STRING` | — |
-| 2 | `metadata` | `STRING` | — |
+| 0 | `video` | `VIDEO` | The generated clip. |
+| 1 | `creation_identifier` | `STRING` | The Magnific creation id of the result (find it in your library, or pass it on). |
+| 2 | `metadata` | `STRING` | Model, prompt, seed, tool and url of the result as JSON - split it with the Metadata (unpack) node. |
 
 
 ---
@@ -1744,7 +1744,7 @@ Deprecated — kept so old workflows load. Closest current node: MaskOpsMEC prev
 
 | # | Name | Type | What it is |
 |---|---|---|---|
-| 0 | `library_references` | `MAGNIFIC_LIBRARY_REFS` | — |
+| 0 | `library_references` | `MAGNIFIC_LIBRARY_REFS` | This asset plus everything chained into it - wire to a generation node or another Library Reference. |
 
 
 ---
@@ -1767,13 +1767,13 @@ Deprecated — kept so old workflows load. Closest current node: MaskOpsMEC prev
 
 | # | Name | Type | What it is |
 |---|---|---|---|
-| 0 | `model` | `STRING` | — |
-| 1 | `prompt` | `STRING` | — |
-| 2 | `seed` | `INT` | — |
-| 3 | `creation_identifier` | `STRING` | — |
-| 4 | `tool` | `STRING` | — |
-| 5 | `url` | `STRING` | — |
-| 6 | `json` | `STRING` | — |
+| 0 | `model` | `STRING` | The model that made the result. |
+| 1 | `prompt` | `STRING` | The prompt it was made from. |
+| 2 | `seed` | `INT` | Its seed (to replay it). |
+| 3 | `creation_identifier` | `STRING` | Its creation id. |
+| 4 | `tool` | `STRING` | The Magnific tool that ran. |
+| 5 | `url` | `STRING` | Where the result can be downloaded. |
+| 6 | `json` | `STRING` | The whole entry as JSON. |
 
 
 ---
@@ -1789,7 +1789,7 @@ Deprecated — kept so old workflows load. Closest current node: MaskOpsMEC prev
 
 | Parameter | Type | Constraints | What it does |
 |---|---|---|---|
-| `image` | `IMAGE` |  | — |
+| `image` | `IMAGE` |  | The picture to cut out (uploaded to Magnific). |
 
 **Optional inputs**
 
@@ -1801,10 +1801,10 @@ Deprecated — kept so old workflows load. Closest current node: MaskOpsMEC prev
 
 | # | Name | Type | What it is |
 |---|---|---|---|
-| 0 | `image` | `IMAGE` | — |
-| 1 | `mask` | `MASK` | — |
-| 2 | `creation_identifier` | `STRING` | — |
-| 3 | `metadata` | `STRING` | — |
+| 0 | `image` | `IMAGE` | The cut-out picture (RGB). |
+| 1 | `mask` | `MASK` | The subject's alpha: 1 = kept, 0 = removed background. |
+| 2 | `creation_identifier` | `STRING` | The Magnific creation id of the result (find it in your library, or pass it on). |
+| 3 | `metadata` | `STRING` | Model, prompt, seed, tool and url of the result as JSON - split it with the Metadata (unpack) node. |
 
 
 ---
@@ -1820,9 +1820,9 @@ Deprecated — kept so old workflows load. Closest current node: MaskOpsMEC prev
 
 | Parameter | Type | Constraints | What it does |
 |---|---|---|---|
-| `image` | `IMAGE` |  | — |
+| `image` | `IMAGE` |  | The picture to edit; scaled down to the retouch size limit when larger (the console says so). |
 | `mask` | `MASK` |  | 1.0/white = area to change. Must be the same pixel size as the image. |
-| `mode` | choice: `replace`, `erase` | default `"replace"` | — |
+| `mode` | choice: `replace`, `erase` | default `"replace"` | replace = paint what the prompt says into the mask; erase = remove what is there. |
 | `prompt` | `STRING` | default `""`, multiline | Replace mode only: what the masked area should become. |
 
 **Optional inputs**
@@ -1835,9 +1835,9 @@ Deprecated — kept so old workflows load. Closest current node: MaskOpsMEC prev
 
 | # | Name | Type | What it is |
 |---|---|---|---|
-| 0 | `image` | `IMAGE` | — |
-| 1 | `creation_identifier` | `STRING` | — |
-| 2 | `metadata` | `STRING` | — |
+| 0 | `image` | `IMAGE` | The retouched picture (at the size it was sent). |
+| 1 | `creation_identifier` | `STRING` | The Magnific creation id of the result (find it in your library, or pass it on). |
+| 2 | `metadata` | `STRING` | Model, prompt, seed, tool and url of the result as JSON - split it with the Metadata (unpack) node. |
 
 
 ---
@@ -1853,14 +1853,14 @@ Deprecated — kept so old workflows load. Closest current node: MaskOpsMEC prev
 
 | Parameter | Type | Constraints | What it does |
 |---|---|---|---|
-| `project` | choice: `— sign in (Magnific menu) and press R to refresh —` |  | — |
+| `project` | choice: `— sign in (Magnific menu) and press R to refresh —` |  | Your Magnific project. Press R after creating one at magnific.com to refresh the list. |
 | `folder` | choice: `(project root)` | default `"(project root)"` | Folder inside the selected project; the list narrows to that project. |
 
 **Outputs**
 
 | # | Name | Type | What it is |
 |---|---|---|---|
-| 0 | `folder` | `MAGNIFIC_FOLDER` | — |
+| 0 | `folder` | `MAGNIFIC_FOLDER` | Where new creations are stored - wire it to a generation node's folder input. |
 
 
 ---
@@ -1876,10 +1876,10 @@ Deprecated — kept so old workflows load. Closest current node: MaskOpsMEC prev
 
 | Parameter | Type | Constraints | What it does |
 |---|---|---|---|
-| `image` | `IMAGE` |  | — |
-| `version` | choice: `faithful`, `creative`, `flexible` | default `"faithful"` | — |
-| `sharpen` | `INT` | default `0`, range 0…100 | — |
-| `smart_grain` | `INT` | default `0`, range 0…100 | — |
+| `image` | `IMAGE` |  | A portrait to enhance (uploaded to Magnific). |
+| `version` | choice: `faithful`, `creative`, `flexible` | default `"faithful"` | faithful = keeps the face as it is (skin_detail applies); creative = freer; flexible = aim set by optimized_for. |
+| `sharpen` | `INT` | default `0`, range 0…100 | Sharpening (video: magnific mode, custom preset only). |
+| `smart_grain` | `INT` | default `0`, range 0…100 | Added grain that follows the image (video: magnific mode, custom preset only). |
 | `skin_detail` | `INT` | default `0`, range 0…100 | Faithful version only. |
 | `optimized_for` | choice: `default`, `enhance_skin`, `enhance_everything`, `improve_lighting`, `transform_to_real`, `no_make_up` | default `"default"` | Flexible version only. |
 
@@ -1893,9 +1893,9 @@ Deprecated — kept so old workflows load. Closest current node: MaskOpsMEC prev
 
 | # | Name | Type | What it is |
 |---|---|---|---|
-| 0 | `image` | `IMAGE` | — |
-| 1 | `creation_identifier` | `STRING` | — |
-| 2 | `metadata` | `STRING` | — |
+| 0 | `image` | `IMAGE` | The enhanced picture. |
+| 1 | `creation_identifier` | `STRING` | The Magnific creation id of the result (find it in your library, or pass it on). |
+| 2 | `metadata` | `STRING` | Model, prompt, seed, tool and url of the result as JSON - split it with the Metadata (unpack) node. |
 
 
 ---
@@ -1911,11 +1911,11 @@ Deprecated — kept so old workflows load. Closest current node: MaskOpsMEC prev
 
 | Parameter | Type | Constraints | What it does |
 |---|---|---|---|
-| `query` | `STRING` | default `""` | — |
-| `content_type` | choice: `any`, `photo`, `vector`, `illustration`, `psd`, `design` | default `"photo"` | — |
-| `license` | choice: `any`, `free`, `premium` | default `"any"` | — |
-| `orientation` | choice: `any`, `portrait`, `landscape`, `square`, `panoramic` | default `"any"` | — |
-| `ai_generated` | choice: `any`, `only`, `excluded` | default `"any"` | — |
+| `query` | `STRING` | default `""` | What to search the Magnific stock library for. |
+| `content_type` | choice: `any`, `photo`, `vector`, `illustration`, `psd`, `design` | default `"photo"` | Kind of stock item; vectors, PSDs and designs come back as JPG renders. |
+| `license` | choice: `any`, `free`, `premium` | default `"any"` | Only free items, only premium items, or both. |
+| `orientation` | choice: `any`, `portrait`, `landscape`, `square`, `panoramic` | default `"any"` | Shape filter. |
+| `ai_generated` | choice: `any`, `only`, `excluded` | default `"any"` | Include AI-generated items, show only them, or leave them out. |
 | `selected` | `STRING` | default `""` | Set by clicking a thumbnail in the results grid. |
 
 **Optional inputs**
@@ -1928,8 +1928,8 @@ Deprecated — kept so old workflows load. Closest current node: MaskOpsMEC prev
 
 | # | Name | Type | What it is |
 |---|---|---|---|
-| 0 | `image` | `IMAGE` | — |
-| 1 | `info` | `STRING` | — |
+| 0 | `image` | `IMAGE` | The stock image you clicked. |
+| 1 | `info` | `STRING` | Its stock id and type, and where it was saved. |
 
 
 ---
@@ -1945,11 +1945,11 @@ Deprecated — kept so old workflows load. Closest current node: MaskOpsMEC prev
 
 | Parameter | Type | Constraints | What it does |
 |---|---|---|---|
-| `query` | `STRING` | default `""` | — |
-| `content_type` | choice: `any`, `photo`, `vector`, `illustration`, `psd`, `design` | default `"photo"` | — |
-| `license` | choice: `any`, `free`, `premium` | default `"any"` | — |
-| `orientation` | choice: `any`, `portrait`, `landscape`, `square`, `panoramic` | default `"any"` | — |
-| `ai_generated` | choice: `any`, `only`, `excluded` | default `"any"` | — |
+| `query` | `STRING` | default `""` | What to search the Magnific stock library for. |
+| `content_type` | choice: `any`, `photo`, `vector`, `illustration`, `psd`, `design` | default `"photo"` | Kind of stock item; vectors, PSDs and designs come back as JPG renders. |
+| `license` | choice: `any`, `free`, `premium` | default `"any"` | Only free items, only premium items, or both. |
+| `orientation` | choice: `any`, `portrait`, `landscape`, `square`, `panoramic` | default `"any"` | Shape filter. |
+| `ai_generated` | choice: `any`, `only`, `excluded` | default `"any"` | Include AI-generated items, show only them, or leave them out. |
 | `selection` | choice: `index`, `random` | default `"index"` | index = take result_index; random = pick between range_from and range_to. |
 | `result_index` | `INT` | default `0`, range 0…999 | Used when selection = index. |
 | `range_from` | `INT` | default `0`, range 0…999 | Random range start (0 = first result). |
@@ -1966,8 +1966,8 @@ Deprecated — kept so old workflows load. Closest current node: MaskOpsMEC prev
 
 | # | Name | Type | What it is |
 |---|---|---|---|
-| 0 | `image` | `IMAGE` | — |
-| 1 | `info` | `STRING` | — |
+| 0 | `image` | `IMAGE` | The chosen stock image. |
+| 1 | `info` | `STRING` | Every usable result found, the picked one marked >, and where it was saved. |
 
 
 ---
@@ -1983,34 +1983,34 @@ Deprecated — kept so old workflows load. Closest current node: MaskOpsMEC prev
 
 | Parameter | Type | Constraints | What it does |
 |---|---|---|---|
-| `image` | `IMAGE` |  | — |
-| `scale` | choice: `2x`, `4x`, `8x`, `16x` | default `"2x"` | — |
-| `precision` | choice: `creative`, `precision` | default `"creative"` | — |
-| `presets` | choice: `subtle`, `vivid`, `wild` | default `"subtle"` | — |
-| `engine` | choice: `Automatic`, `Illusio`, `Sharpy`, `Sparkle`, `automatic`, `magnific_illusio`, `magnific_sharpy`, `magnific_sparkle` | default `"Automatic"` | — |
-| `mode` | choice: `Automatic`, `Magnific v1 (high HDR)`, `Magnific v2 (sublime)`, `Magnific v2 (photo)`, `Magnific v2 (photo denoiser)`, `default`, `ultra`, `ultra-sublime`, … (+2) | default `"Automatic"` | — |
+| `image` | `IMAGE` |  | The picture to upscale (uploaded to Magnific). |
+| `scale` | choice: `2x`, `4x`, `8x`, `16x` | default `"2x"` | Size multiplier. |
+| `precision` | choice: `creative`, `precision` | default `"creative"` | creative = invents new detail (the -10..10 sliders apply); precision = stays faithful to the input (the 0..100 sliders apply). |
+| `presets` | choice: `subtle`, `vivid`, `wild` | default `"subtle"` | How strong the added detail is. |
+| `engine` | choice: `Automatic`, `Illusio`, `Sharpy`, `Sparkle`, `automatic`, `magnific_illusio`, `magnific_sharpy`, `magnific_sparkle` | default `"Automatic"` | Upscaling engine; Automatic lets Magnific choose. |
+| `mode` | choice: `Automatic`, `Magnific v1 (high HDR)`, `Magnific v2 (sublime)`, `Magnific v2 (photo)`, `Magnific v2 (photo denoiser)`, `default`, `ultra`, `ultra-sublime`, … (+2) | default `"Automatic"` | Magnific model version; Automatic lets the server choose. |
 
 **Optional inputs**
 
 | Parameter | Type | Constraints | What it does |
 |---|---|---|---|
 | `folder` | `MAGNIFIC_FOLDER` |  | Optional — from a Magnific Save To node. Not connected → your Personal project. |
-| `prompt` | `STRING` | default `""`, multiline | — |
-| `creativity` | `INT` | default `0`, range -10…10 | — |
-| `hdr` | `INT` | default `0`, range -10…10 | — |
-| `resemblance` | `INT` | default `0`, range -10…10 | — |
-| `fractality` | `INT` | default `0`, range -10…10 | — |
-| `sharpness` | `INT` | default `0`, range 0…100 | — |
-| `grain` | `INT` | default `0`, range 0…100 | — |
-| `ultra_detail` | `INT` | default `0`, range 0…100 | — |
+| `prompt` | `STRING` | default `""`, multiline | Optional: describe the picture to guide the new detail. |
+| `creativity` | `INT` | default `0`, range -10…10 | Creative mode: how much new detail is invented. |
+| `hdr` | `INT` | default `0`, range -10…10 | Creative mode: local contrast / definition. |
+| `resemblance` | `INT` | default `0`, range -10…10 | Creative mode: how closely the result keeps to the original. |
+| `fractality` | `INT` | default `0`, range -10…10 | Creative mode: how much fine, repeating detail the prompt adds per pixel. |
+| `sharpness` | `INT` | default `0`, range 0…100 | Precision mode: sharpening. |
+| `grain` | `INT` | default `0`, range 0…100 | Precision mode: added film grain. |
+| `ultra_detail` | `INT` | default `0`, range 0…100 | Precision mode: extra fine detail. |
 
 **Outputs**
 
 | # | Name | Type | What it is |
 |---|---|---|---|
-| 0 | `image` | `IMAGE` | — |
-| 1 | `creation_identifier` | `STRING` | — |
-| 2 | `metadata` | `STRING` | — |
+| 0 | `image` | `IMAGE` | The upscaled picture. |
+| 1 | `creation_identifier` | `STRING` | The Magnific creation id of the result (find it in your library, or pass it on). |
+| 2 | `metadata` | `STRING` | Model, prompt, seed, tool and url of the result as JSON - split it with the Metadata (unpack) node. |
 
 
 ---
@@ -2026,12 +2026,12 @@ Deprecated — kept so old workflows load. Closest current node: MaskOpsMEC prev
 
 | Parameter | Type | Constraints | What it does |
 |---|---|---|---|
-| `video` | `VIDEO` |  | — |
-| `mode` | choice: `magnific`, `magnific_precision`, `topaz` | default `"magnific"` | — |
+| `video` | `VIDEO` |  | The clip to upscale (uploaded as MP4). |
+| `mode` | choice: `magnific`, `magnific_precision`, `topaz` | default `"magnific"` | magnific = creative upscale (preset / custom sliders); magnific_precision = faithful (strength); topaz = scale by upscale_factor. |
 | `target_resolution` | choice: `1280`, `1920`, `2560`, `3840` | default `"1920"` | Output width (Magnific/Precision modes). |
 | `upscale_factor` | choice: `2`, `4` | default `"2"` | Scale multiplier (Topaz mode). |
 | `preset` | choice: `realistic`, `animationAnd3D`, `artistic`, `custom` | default `"realistic"` | Creative bundle for the magnific mode; custom uses the sliders below. |
-| `fps_boost` | `BOOLEAN` | default `False` | — |
+| `fps_boost` | `BOOLEAN` | default `False` | magnific / magnific_precision modes: ask the server to raise the frame rate as well (not sent in topaz mode). |
 | `preview` | `BOOLEAN` | default `False` | 12-frame preview run instead of the full clip. |
 
 **Optional inputs**
@@ -2039,21 +2039,21 @@ Deprecated — kept so old workflows load. Closest current node: MaskOpsMEC prev
 | Parameter | Type | Constraints | What it does |
 |---|---|---|---|
 | `folder` | `MAGNIFIC_FOLDER` |  | Optional — from a Magnific Save To node. Not connected → your Personal project. |
-| `creativity` | `INT` | default `0`, range 0…100 | — |
-| `sharpen` | `INT` | default `0`, range 0…100 | — |
-| `smart_grain` | `INT` | default `0`, range 0…100 | — |
-| `flavor` | choice: `natural`, `vivid` | default `"natural"` | — |
-| `premium_quality` | `BOOLEAN` | default `True` | — |
-| `turbo` | `BOOLEAN` | default `False` | — |
+| `creativity` | `INT` | default `0`, range 0…100 | magnific mode, custom preset: how much new detail is invented. |
+| `sharpen` | `INT` | default `0`, range 0…100 | Sharpening (video: magnific mode, custom preset only). |
+| `smart_grain` | `INT` | default `0`, range 0…100 | Added grain that follows the image (video: magnific mode, custom preset only). |
+| `flavor` | choice: `natural`, `vivid` | default `"natural"` | magnific mode, custom preset: colour rendering. |
+| `premium_quality` | `BOOLEAN` | default `True` | magnific mode, custom preset: the slower, higher-quality pass. |
+| `turbo` | `BOOLEAN` | default `False` | magnific mode, custom preset: faster processing. |
 | `strength` | `INT` | default `50`, range 0…100 | Precision mode only. |
 
 **Outputs**
 
 | # | Name | Type | What it is |
 |---|---|---|---|
-| 0 | `video` | `VIDEO` | — |
-| 1 | `creation_identifier` | `STRING` | — |
-| 2 | `metadata` | `STRING` | — |
+| 0 | `video` | `VIDEO` | The upscaled clip. |
+| 1 | `creation_identifier` | `STRING` | The Magnific creation id of the result (find it in your library, or pass it on). |
+| 2 | `metadata` | `STRING` | Model, prompt, seed, tool and url of the result as JSON - split it with the Metadata (unpack) node. |
 
 
 ---
@@ -2069,9 +2069,9 @@ Deprecated — kept so old workflows load. Closest current node: MaskOpsMEC prev
 
 | Parameter | Type | Constraints | What it does |
 |---|---|---|---|
-| `text` | `STRING` | default `""`, multiline | — |
-| `voice` | choice: `— sign in (Magnific menu) and press R to refresh —` |  | — |
-| `speed` | `FLOAT` | default `1.0`, range 0.7…1.2, step 0.05 | — |
+| `text` | `STRING` | default `""`, multiline | The words to speak. |
+| `voice` | choice: `— sign in (Magnific menu) and press R to refresh —` |  | Voice from your Magnific account (press R to refresh). |
+| `speed` | `FLOAT` | default `1.0`, range 0.7…1.2, step 0.05 | Speaking speed; 1 = normal. |
 
 **Optional inputs**
 
@@ -2083,9 +2083,9 @@ Deprecated — kept so old workflows load. Closest current node: MaskOpsMEC prev
 
 | # | Name | Type | What it is |
 |---|---|---|---|
-| 0 | `audio` | `AUDIO` | — |
-| 1 | `creation_identifier` | `STRING` | — |
-| 2 | `metadata` | `STRING` | — |
+| 0 | `audio` | `AUDIO` | The spoken audio. |
+| 1 | `creation_identifier` | `STRING` | The Magnific creation id of the result (find it in your library, or pass it on). |
+| 2 | `metadata` | `STRING` | Model, prompt, seed, tool and url of the result as JSON - split it with the Metadata (unpack) node. |
 
 
 ---
@@ -2500,26 +2500,26 @@ Production-grade segmentation + matting + AUTO-QUALITY + diagnostics in one node
 | `matter` | choice: `none`, `auto`, `vitmatte`, `rvm`, `bgmattingv2`, `matanyone  [missing-deps]`, `birefnet`, `rmbg`, … (+1) | default `"vitmatte"` | Optional alpha refinement. 'none' returns the segmenter mask as alpha. vitmatte is Apache-2.0; matanyone (MatAnyone / MatAnyone2 weights) is S-Lab License 1.0 (NON-COMMERCIAL). |
 | `model` | choice: `(auto)`, `[preset:sam3] sam3.safetensors`, `[preset:sam3.1] sam3.1_multiplex_fp16.safetensors`, `[preset:sam3.1] sam3.1_multiplex_fp32.safetensors`, `[preset:sam3.1] sam3.pt`, `[preset:birefnet] BiRefNet-general-epoch_244.pth`, `[preset:rmbg] RMBG-2.0.safetensors`, `[preset:inspyrenet] InSPyReNet_SwinB.pth`, … (+8) | default `"(auto)"` | Specific weight file to use. Tag prefix selects the backend folder; '(auto)' lets each backend pick. |
 | `matter_model` | choice: `(auto)`, `[preset:sam3] sam3.safetensors`, `[preset:sam3.1] sam3.1_multiplex_fp16.safetensors`, `[preset:sam3.1] sam3.1_multiplex_fp32.safetensors`, `[preset:sam3.1] sam3.pt`, `[preset:birefnet] BiRefNet-general-epoch_244.pth`, `[preset:rmbg] RMBG-2.0.safetensors`, `[preset:inspyrenet] InSPyReNet_SwinB.pth`, … (+8) | default `"(auto)"` | Weight file for the matter backend. |
-| `precision` | choice: `fp16`, `bf16`, `fp32` | default `"fp16"` | — |
-| `attention` | choice: `auto`, `sdpa`, `flash`, `sage`, `xformers`, `eager` | default `"auto"` | — |
-| `offload` | choice: `none`, `cpu`, `sequential` | default `"none"` | — |
+| `precision` | choice: `fp16`, `bf16`, `fp32` | default `"fp16"` | Number format for the model backends that honour it (ViTMatte, RVM, BGMattingV2, salient, LocateAnything). fp16 = fastest, least memory; bf16 = safer on newer cards; fp32 = slowest, exact. |
+| `attention` | choice: `auto`, `sdpa`, `flash`, `sage`, `xformers`, `eager` | default `"auto"` | Currently no effect: stored for the backends, but none of them reads it yet. |
+| `offload` | choice: `none`, `cpu`, `sequential` | default `"none"` | Currently no effect: stored for the backends, but none of them reads it yet. |
 | `subject_preset` | choice: `custom`, `hair`, `fur`, `cloth`, `skin_face`, `hard_edge`, `soft_glow` | default `"custom"` | Override trimap_dilate/erode/edge with subject-tuned values. |
-| `trimap_dilate` | `INT` | default `8`, range 0…128, step 1 | — |
-| `trimap_erode` | `INT` | default `8`, range 0…128, step 1 | — |
-| `edge_radius` | `INT` | default `4`, range 0…64, step 1 | — |
+| `trimap_dilate` | `INT` | default `8`, range 0…128, step 1 | Trimap: pixels the mask edge is grown outward to mark 'unknown' (the band the matter solves). Larger = catches more hair, slower. |
+| `trimap_erode` | `INT` | default `8`, range 0…128, step 1 | Trimap: pixels the mask edge is shrunk inward; what is left is sure foreground. |
+| `edge_radius` | `INT` | default `4`, range 0…64, step 1 | Edge band width in pixels the matter refines around the coarse mask (the advanced trimap uses it as its base radius). |
 | `edge_mode` | choice: `soft`, `feather`, `hard`, `hard+feather` | default `"soft"` | Final alpha edge. 'soft' = as the matter produced it. 'feather' = blur the existing edge. 'hard' = binary cut at edge_threshold, no partial alpha (what a holdout or garbage matte wants). 'hard+feather' = cut hard then feather — the edge width becomes yours rather than the model's, which is how you match edges across shots keyed by different backends. |
 | `edge_threshold` | `FLOAT` | default `0.5`, range 0.0…1.0, step 0.01 | Cut point for the hard modes. Lower keeps more of the soft fringe as solid; higher eats into it. |
 | `edge_feather` | `FLOAT` | default `0.0`, range 0.0…64.0, step 0.5 | Feather radius in pixels, read as ~2 sigma of a true Gaussian. 0 with a feather mode selected does nothing. |
 | `individual_objects` | `BOOLEAN` | default `False` | If supported by the backend, return one mask per detected object. |
-| `tracking_direction` | choice: `forward`, `backward`, `bidirectional` | default `"forward"` | — |
+| `tracking_direction` | choice: `forward`, `backward`, `bidirectional` | default `"forward"` | Video: which way the tracker runs from the prompted frame. bidirectional covers frames before and after it. |
 | `frame_annotation` | `INT` | default `0`, range 0…100000 | Frame index (in clip) where prompts are anchored. |
-| `object_id` | `INT` | default `0`, range 0…1024 | — |
+| `object_id` | `INT` | default `0`, range 0…1024 | Video: the tracker's id for the prompted object (change it only to keep ids stable across runs). |
 | `max_frames_to_track` | `INT` | default `0`, range 0…100000 | 0 = no cap. |
-| `memory_size` | `INT` | default `8`, range 1…256 | — |
-| `start_frame` | `INT` | default `0`, range 0…100000 | — |
+| `memory_size` | `INT` | default `8`, range 1…256 | Video: how many past frames the tracker / video matter remembers. More = steadier through occlusion, more memory. |
+| `start_frame` | `INT` | default `0`, range 0…100000 | Video: first frame to process (0 = from the start). |
 | `end_frame` | `INT` | default `-1`, range -1…100000 | -1 = last frame. |
 | `auto_download` | `BOOLEAN` | default `False` | Allow Download: fetch a missing weight from Hugging Face / torch.hub into its models/ subfolder. Off: installed copies are used wherever they are (this pack, other packs, the HF cache); without one the model-free method runs and the info output says so. |
-| `seed` | `INT` | default `0`, range 0…18446744073709551615 | — |
+| `seed` | `INT` | default `0`, range 0…18446744073709551615 | Seed for the backends that sample (text grounding); same seed + inputs = same result. |
 | `tta_flip` | `BOOLEAN` | default `False` | Test-time augmentation: run segmenter on the H-flipped image and average. Slower but cleaner. |
 | `multiscale` | `BOOLEAN` | default `False` | Run the segmenter at 0.75x / 1.0x / 1.25x and fuse. Helps small / thin subjects. |
 | `post_refine` | choice: `none`, `guided`, `crf`, `crf+guided` | default `"none"` | Final alpha refinement. 'guided' = guided filter (fast, torch-only). 'crf' = DenseCRF (requires pydensecrf, sharpest edges). |
@@ -2533,25 +2533,25 @@ Production-grade segmentation + matting + AUTO-QUALITY + diagnostics in one node
 | `edge_band_radius` | `INT` | default `4`, range 1…64 | Width of the soft edge band when splitting edge/inside/outside masks. |
 | `premultiply` | `BOOLEAN` | default `True` | Premultiply preview by alpha. Disable for straight-alpha outputs. |
 | `enable_luma_key` | `BOOLEAN` | default `False` | Run a luminance keyer on the source image BEFORE segmentation and use it as a hint / external_mask. |
-| `luma_mode` | choice: `auto`, `highlights`, `midtones`, `shadows`, `custom` | default `"auto"` | — |
-| `luma_low` | `FLOAT` | default `0.0`, range 0.0…1.0, step 0.01 | — |
-| `luma_high` | `FLOAT` | default `1.0`, range 0.0…1.0, step 0.01 | — |
-| `luma_gamma` | `FLOAT` | default `1.0`, range 0.01…10.0, step 0.01 | — |
-| `luma_falloff` | `FLOAT` | default `1.0`, range 0.0…10.0, step 0.1 | — |
-| `luma_invert` | `BOOLEAN` | default `False` | — |
+| `luma_mode` | choice: `auto`, `highlights`, `midtones`, `shadows`, `custom` | default `"auto"` | Luma key: which brightness range keys in. highlights 0.7-1, midtones 0.3-0.7, shadows 0-0.3, custom = luma_low..luma_high, auto picks from the image. |
+| `luma_low` | `FLOAT` | default `0.0`, range 0.0…1.0, step 0.01 | Luma key, custom mode: bottom of the brightness ramp (BT.709 luma). |
+| `luma_high` | `FLOAT` | default `1.0`, range 0.0…1.0, step 0.01 | Luma key, custom mode: top of the brightness ramp. |
+| `luma_gamma` | `FLOAT` | default `1.0`, range 0.01…10.0, step 0.01 | Luma key: gamma on the key. Above 1 thins it, below 1 fattens it. |
+| `luma_falloff` | `FLOAT` | default `1.0`, range 0.0…10.0, step 0.1 | Luma key: ramp shape. 0 = hard cut, 1 = smoothstep, above 1 = more gradual. |
+| `luma_invert` | `BOOLEAN` | default `False` | Luma key: swap keyed and unkeyed areas. |
 | `luma_mix` | choice: `intersect`, `union`, `replace`, `hint_only` | default `"hint_only"` | How to combine the luma-key mask with the segmenter result. 'hint_only' = use as external_mask hint; 'intersect/union/replace' = combine with the final alpha. |
 | `enable_advanced_trimap` | `BOOLEAN` | default `False` | Use the edge-aware trimap generator (asymmetric inner/outer scaling, image-edge snapping, smoothing) instead of the simple dilate/erode trimap. |
-| `trimap_inner_scale` | `FLOAT` | default `1.0`, range 0.1…3.0, step 0.1 | — |
-| `trimap_outer_scale` | `FLOAT` | default `1.5`, range 0.5…5.0, step 0.1 | — |
-| `trimap_smooth` | `FLOAT` | default `0.0`, range 0.0…20.0, step 0.5 | — |
-| `trimap_threshold` | `FLOAT` | default `0.5`, range 0.0…1.0, step 0.01 | — |
+| `trimap_inner_scale` | `FLOAT` | default `1.0`, range 0.1…3.0, step 0.1 | Advanced trimap: inward width of the unknown band, as a multiple of edge_radius. |
+| `trimap_outer_scale` | `FLOAT` | default `1.5`, range 0.5…5.0, step 0.1 | Advanced trimap: outward width of the unknown band, as a multiple of edge_radius (wider outside catches loose hair). |
+| `trimap_smooth` | `FLOAT` | default `0.0`, range 0.0…20.0, step 0.5 | Advanced trimap: blur (sigma, pixels) on the band transitions; sure foreground / background stay hard. 0 = off. |
+| `trimap_threshold` | `FLOAT` | default `0.5`, range 0.0…1.0, step 0.01 | Advanced trimap: mask value above which a pixel counts as foreground before the band is built. |
 | `auto_quality` | `BOOLEAN` | default `True` | AUTOMATIC robustness for hard images. Detects motion blur, low light, low contrast, speckle noise and low bg/fg colour separation, then applies just-enough pre-processing (CLAHE, unsharp, NL-means, chroma stretch) BEFORE the segmenter, and a light guided-filter+edge-snap polish on the alpha. No knobs. |
 | `auto_disambiguate` | `BOOLEAN` | default `True` | When BOTH positive and negative points are supplied, score SAM's 3 candidate masks by (pos-coverage − neg-coverage − size-penalty) instead of raw score. This is what makes `pos=face, neg=neck` return just the face, not the whole person. |
 | `quality_mode` | choice: `fast`, `balanced`, `max_fidelity` | default `"balanced"` | Strength of auto_quality pre/post processing. fast = mild, balanced = default, max_fidelity = NL-means denoise + larger guided filter. |
 | `enable_diagnose` | `BOOLEAN` | default `True` | Run automatic mask-failure diagnostics (severity score + suggested method). |
-| `diag_ring_width` | `INT` | default `5`, range 1…50 | — |
-| `diag_blur_threshold` | `FLOAT` | default `50.0`, range 0.0…1000.0, step 1.0 | — |
-| `diag_brightness_threshold` | `FLOAT` | default `0.15`, range 0.0…1.0, step 0.01 | — |
+| `diag_ring_width` | `INT` | default `5`, range 1…50 | Diagnostics: width in pixels of the ring around the mask edge where contrast and colour confusion are measured. |
+| `diag_blur_threshold` | `FLOAT` | default `50.0`, range 0.0…1000.0, step 1.0 | Diagnostics: sharpness score (Laplacian variance x 1000) below which a frame is reported as blurry. |
+| `diag_brightness_threshold` | `FLOAT` | default `0.15`, range 0.0…1.0, step 0.01 | Diagnostics: mean brightness below which a frame is reported as too dark. |
 | `robust_propagation` | `BOOLEAN` | default `False` | Confidence-aware re-anchor loop for video. After SAM2 propagation, every frame's mask is scored vs the last good mask (IoU × size-ratio). When confidence drops below the threshold, the chosen re-anchor strategy fires (flow warp / DINOv2 region search / convex blend). Robust against motion blur + lighting drift. Single-image inputs skip this stage. |
 | `robust_confidence_threshold` | `FLOAT` | default `0.65`, range 0.0…1.0, step 0.05 | Below this confidence the re-anchor fires. |
 | `robust_reanchor_method` | choice: `blend`, `flow`, `dino`, `none` | default `"blend"` | flow=Farneback optical-flow warp of last good mask. dino=DINOv2 patch-feature region search + SAM2 re-prompt. blend=convex mix of current+warped. none=accept drifted output (debug). |
@@ -2655,17 +2655,17 @@ Unified, training-free mask refinement. Toggle each stage on or off and chain th
 | `preset` | choice: `balanced`, `fast`, `hair`, `aggressive`, `crf_heavy` | default `"balanced"` | Picks sensible numeric defaults for every enabled stage. Override with `advanced_overrides_json` if needed. |
 | `auto_edge_lock` | `BOOLEAN` | default `True` | Pin the mask to real image edges to stop bleeding into the background. Force-enables guided_filter + edge_snap with parameters tuned by `subject_class`. Recommended for any face / garment / product / hair workflow. |
 | `subject_class` | choice: `general`, `face`, `hair`, `garment`, `object`, `hard_surface` | default `"general"` | Tunes auto_edge_lock for the dominant subject: general — balanced edge protection face — tight 2-3 px band, high snap, no morph dilate hair — thin-recover ON, soft band, low snap garment — medium band, medium snap, close holes object — medium band, high snap, fill holes hard_surface— thin band, max snap, threshold > 0.5 |
-| `enable_hole_fill` | `BOOLEAN` | default `False` | — |
-| `morph_op` | choice: `none`, `close`, `open`, `dilate`, `erode` | default `"none"` | — |
-| `enable_thin_recover` | `BOOLEAN` | default `False` | — |
-| `enable_joint_bilateral` | `BOOLEAN` | default `False` | — |
-| `enable_guided_filter` | `BOOLEAN` | default `True` | — |
-| `enable_dense_crf` | `BOOLEAN` | default `False` | — |
-| `enable_edge_snap` | `BOOLEAN` | default `False` | — |
-| `cascade_passes` | `INT` | default `0`, range 0…5 | — |
-| `feather_sigma` | `FLOAT` | default `0.0`, range 0.0…20.0, step 0.1 | — |
-| `gamma` | `FLOAT` | default `1.0`, range 0.1…5.0, step 0.05 | — |
-| `threshold` | `FLOAT` | default `0.0`, range 0.0…1.0, step 0.01 | — |
+| `enable_hole_fill` | `BOOLEAN` | default `False` | Stage 1: fill holes inside the mask (eyes, mouths, textures the segmenter punched through). |
+| `morph_op` | choice: `none`, `close`, `open`, `dilate`, `erode` | default `"none"` | Stage 2: morphology with a round brush. open removes specks, close fills slivers, dilate / erode grow / shrink. |
+| `enable_thin_recover` | `BOOLEAN` | default `False` | Stage 3: bring back thin strands (hair, wire, grass) the segmenter cut off. |
+| `enable_joint_bilateral` | `BOOLEAN` | default `False` | Stage 4: edge-preserving smoothing guided by the image. Needs opencv-contrib-python; skipped without it. |
+| `enable_guided_filter` | `BOOLEAN` | default `True` | Stage 5: guided filter - snaps the soft edge to colour edges in the image (fast, no model). |
+| `enable_dense_crf` | `BOOLEAN` | default `False` | Stage 6: DenseCRF boundary refinement (sharpest edges, slower). Needs pydensecrf; skipped without it. |
+| `enable_edge_snap` | `BOOLEAN` | default `False` | Stage 7: pull the edge band toward image gradients - a cheap alternative to DenseCRF. |
+| `cascade_passes` | `INT` | default `0`, range 0…5 | Extra refinement passes after stage 7: guided filter (plus joint bilateral / edge snap when on) again, radii halved each pass. 0 = none. |
+| `feather_sigma` | `FLOAT` | default `0.0`, range 0.0…20.0, step 0.1 | Blur the final soft edge (Gaussian sigma, pixels). 0 = off. |
+| `gamma` | `FLOAT` | default `1.0`, range 0.1…5.0, step 0.05 | Power curve on the soft alpha: above 1 thins semi-transparent edges, below 1 thickens them. |
+| `threshold` | `FLOAT` | default `0.0`, range 0.0…1.0, step 0.01 | Above 0: cut the result to a hard 0 / 1 mask at this value. 0 = keep it soft. |
 | `enable_domain_transform` | `BOOLEAN` | default `False` | Gastal & Oliveira (2011) Domain Transform RGB-edge filter. Often sharper than guided filter on hair / fine detail; much faster than DenseCRF. Requires opencv-contrib-python (ximgproc). |
 | `enable_color_decontaminate` | `BOOLEAN` | default `False` | Push alpha in the boundary band toward 0/1 using local LAB-distance to fg/bg means. Fixes 'halo' alpha bleed when bg has similar luminance. |
 | `enable_unsharp_alpha` | `BOOLEAN` | default `False` | Sharpen the soft alpha (α + amount·(α − gauss(α))). |
@@ -2711,18 +2711,18 @@ Convert an anamorphic plate to SQUARE pixels before AI processing (Nuke: 4448x38
 
 | Parameter | Type | Constraints | What it does |
 |---|---|---|---|
-| `image` | `IMAGE` |  | — |
-| `par_preset` | choice: `custom`, `square 1.0`, `anamorphic 2x (2.0)`, `anamorphic 1.8x (1.8)`, `ARRI 4448x3840→2:1 (1.7266)`, `anamorphic 1.5x (1.5)`, `anamorphic 1.33x (1.33)`, `NTSC DV (0.9091)`, … (+1) | default `"ARRI 4448x3840→2:1 (1.7266)"` | — |
+| `image` | `IMAGE` |  | Frames shot with non-square pixels (anamorphic lens, DV, HDV ...). |
+| `par_preset` | choice: `custom`, `square 1.0`, `anamorphic 2x (2.0)`, `anamorphic 1.8x (1.8)`, `ARRI 4448x3840→2:1 (1.7266)`, `anamorphic 1.5x (1.5)`, `anamorphic 1.33x (1.33)`, `NTSC DV (0.9091)`, … (+1) | default `"ARRI 4448x3840→2:1 (1.7266)"` | Camera / format the frames come from; sets the pixel aspect ratio. custom = type it in pixel_aspect. |
 | `pixel_aspect` | `FLOAT` | default `1.7266`, range 0.1…4.0, step 0.0001 | Used when par_preset = custom. PAR>1 = pixels wider than tall. |
 | `method` | choice: `stretch_width`, `squash_height` | default `"stretch_width"` | stretch_width keeps every scanline (recommended); squash_height keeps the pixel count low. |
-| `filter` | choice: `bicubic`, `bilinear`, `nearest`, `area` | default `"bicubic"` | — |
+| `filter` | choice: `bicubic`, `bilinear`, `nearest`, `area` | default `"bicubic"` | How pixels are resampled: bicubic (sharp, default), bilinear (soft), nearest (no new values; for masks / IDs), area (best when shrinking). |
 
 **Outputs**
 
 | # | Name | Type | What it is |
 |---|---|---|---|
-| 0 | `image` | `IMAGE` | — |
-| 1 | `par_info` | `STRING` | — |
+| 0 | `image` | `IMAGE` | The frames with square pixels (wider with stretch_width, shorter with squash_height). |
+| 1 | `par_info` | `STRING` | What was done, as JSON - connect it to PAR Resqueeze to undo it exactly after processing. |
 
 
 ---
@@ -2740,16 +2740,16 @@ Return an AI-processed square-pixel frame to the plate's original pixel dimensio
 
 | Parameter | Type | Constraints | What it does |
 |---|---|---|---|
-| `image` | `IMAGE` |  | — |
-| `par_info` | `STRING` | default `""` | — |
-| `filter` | choice: `bicubic`, `bilinear`, `nearest`, `area` | default `"bicubic"` | — |
+| `image` | `IMAGE` |  | The processed square-pixel frames from after PAR Desqueeze. |
+| `par_info` | `STRING` | default `""` | PAR Desqueeze's par_info output: the original size and aspect. |
+| `filter` | choice: `bicubic`, `bilinear`, `nearest`, `area` | default `"bicubic"` | How pixels are resampled: bicubic (sharp, default), bilinear (soft), nearest (no new values; for masks / IDs), area (best when shrinking). |
 
 **Outputs**
 
 | # | Name | Type | What it is |
 |---|---|---|---|
-| 0 | `image` | `IMAGE` | — |
-| 1 | `info` | `STRING` | — |
+| 0 | `image` | `IMAGE` | The frames back at the plate's original width x height. |
+| 1 | `info` | `STRING` | What was restored, as JSON. |
 
 
 ---
@@ -2776,35 +2776,35 @@ All comparer presets in one node. Switch between them via the mode combo at any 
 |---|---|---|---|
 | `mode` | choice: `synced_player`, `wipe`, `onion`, `diff`, `side_by_side`, `per_channel`, `false_color`, `waveform_scope`, … (+7) | default `"synced_player"` | synced_player: dual <video> player with shared transport — play, pause, seek, frame-step (◀ 1f / 1f ▶), in/out points, loop, playback rate. Use this for real-time A/B comparison of two videos. Switch to wipe / onion / diff / side_by_side / false_color / bit_depth_crush for overlay analysis. |
 | `bit_depth` | choice: `8`, `10`, `12`, `16`, `32` | default `"32"` | Quantization for bit_depth_crush mode. |
-| `wipe_position` | `FLOAT` | default `0.5`, range 0.0…1.0, step 0.01 | — |
-| `onion_alpha` | `FLOAT` | default `0.5`, range 0.0…1.0, step 0.01 | — |
-| `diff_gain` | `FLOAT` | default `16.0`, range 1.0…1024.0, step 1.0 | — |
-| `diff_gamma` | `FLOAT` | default `1.0`, range 0.1…4.0, step 0.05 | — |
-| `diff_threshold` | `FLOAT` | default `0.0`, range 0.0…0.5, step 0.001 | — |
-| `diff_mode` | choice: `absolute`, `signed`, `luminance` | default `"absolute"` | — |
-| `false_color_lut` | choice: `viridis`, `plasma`, `inferno`, `magma`, `turbo`, `hot`, `coolwarm` | default `"turbo"` | — |
-| `scope_intensity` | `FLOAT` | default `0.35`, range 0.05…1.0, step 0.05 | — |
-| `frame_index` | `INT` | default `0`, range 0…100000, step 1 | — |
-| `label_a` | `STRING` | default `"A"` | — |
-| `label_b` | `STRING` | default `"B"` | — |
+| `wipe_position` | `FLOAT` | default `0.5`, range 0.0…1.0, step 0.01 | wipe: where the split sits, 0 = all B, 1 = all A (drag on the canvas too). |
+| `onion_alpha` | `FLOAT` | default `0.5`, range 0.0…1.0, step 0.01 | onion: how much of B shows over A. |
+| `diff_gain` | `FLOAT` | default `16.0`, range 1.0…1024.0, step 1.0 | diff / per_channel / false_color: multiply the difference so small changes show (16 = a 1/16 difference reads as white). |
+| `diff_gamma` | `FLOAT` | default `1.0`, range 0.1…4.0, step 0.05 | diff: above 1 lifts faint differences, below 1 hides them (applied after the gain). |
+| `diff_threshold` | `FLOAT` | default `0.0`, range 0.0…0.5, step 0.001 | diff: differences smaller than this count as none (hides noise / compression). |
+| `diff_mode` | choice: `absolute`, `signed`, `luminance` | default `"absolute"` | diff: absolute = \|A - B\| per channel; signed = grey 0.5 is equal, brighter where B is brighter; luminance = brightness difference only. |
+| `false_color_lut` | choice: `viridis`, `plasma`, `inferno`, `magma`, `turbo`, `hot`, `coolwarm` | default `"turbo"` | false_color: the colour ramp the difference is painted with (dark = equal). |
+| `scope_intensity` | `FLOAT` | default `0.35`, range 0.05…1.0, step 0.05 | Scopes (waveform, parade, vectorscope, histogram): brightness of the traces. |
+| `frame_index` | `INT` | default `0`, range 0…100000, step 1 | Queue-time modes (scopes, diff mask output): which frame to analyse. |
+| `label_a` | `STRING` | default `"A"` | Name shown for A in the viewer and the info. |
+| `label_b` | `STRING` | default `"B"` | Name shown for B in the viewer and the info. |
 
 **Optional inputs**
 
 | Parameter | Type | Constraints | What it does |
 |---|---|---|---|
-| `image_a` | `IMAGE` |  | — |
-| `image_b` | `IMAGE` |  | — |
-| `audio_a` | `AUDIO` |  | — |
-| `audio_b` | `AUDIO` |  | — |
-| `file_a` | choice: ``, `example.png` | default `""` | — |
-| `file_b` | choice: ``, `example.png` | default `""` | — |
+| `image_a` | `IMAGE` |  | A: frames from the graph (or pick file_a instead). |
+| `image_b` | `IMAGE` |  | B: frames from the graph (or pick file_b instead). |
+| `audio_a` | `AUDIO` |  | A's audio, for the audio views. |
+| `audio_b` | `AUDIO` |  | B's audio, for the audio views. |
+| `file_a` | choice: ``, `example.png` | default `""` | A: a video / image / EXR from the input folder, when image_a is not wired. |
+| `file_b` | choice: ``, `example.png` | default `""` | B: a video / image / EXR from the input folder, when image_b is not wired. |
 | `preview_fps` | `FLOAT` | default `24.0`, range 1.0…240.0, step 0.001 | Playback rate of the browser preview made from image_a / image_b batches after a run (the tensors carry no frame rate). The preview is downscaled to 1280 px and keeps every frame; the server-side modes always use the full-precision frames. |
-| `image_c` | `IMAGE` |  | — |
-| `image_d` | `IMAGE` |  | — |
-| `file_c` | choice: ``, `example.png` | default `""` | — |
-| `file_d` | choice: ``, `example.png` | default `""` | — |
-| `label_c` | `STRING` | default `"C"` | — |
-| `label_d` | `STRING` | default `"D"` | — |
+| `image_c` | `IMAGE` |  | Optional third clip for the player's 2 x 2 grid. |
+| `image_d` | `IMAGE` |  | Optional fourth clip for the player's 2 x 2 grid. |
+| `file_c` | choice: ``, `example.png` | default `""` | C from the input folder, when image_c is not wired. |
+| `file_d` | choice: ``, `example.png` | default `""` | D from the input folder, when image_d is not wired. |
+| `label_c` | `STRING` | default `"C"` | Name shown for C. |
+| `label_d` | `STRING` | default `"D"` | Name shown for D. |
 | `b_offset` | `INT` | default `0`, range -100000…100000 | B starts this many frames after A (negative: before). The player and the metrics both use it, so frame i of A is compared with frame i - b_offset of B. |
 | `metrics` | `BOOLEAN` | default `True` | Per-frame PSNR, SSIM (luma) and colour difference (CIEDE2000) of A against B, drawn under the player's scrubber; click the worst frame to go there. Computed when the node runs. |
 
@@ -2812,10 +2812,10 @@ All comparer presets in one node. Switch between them via the mode combo at any 
 
 | # | Name | Type | What it is |
 |---|---|---|---|
-| 0 | `preview` | `IMAGE` | — |
-| 1 | `diff_mask` | `MASK` | — |
-| 2 | `scope` | `IMAGE` | — |
-| 3 | `info` | `STRING` | — |
+| 0 | `preview` | `IMAGE` | The comparison picture of the current mode (frame_index). |
+| 1 | `diff_mask` | `MASK` | How different A and B are per pixel (mean over channels, before gain) - threshold it to find changes. |
+| 2 | `scope` | `IMAGE` | A histogram of A at frame_index (in histogram_scope mode, the same picture as preview). |
+| 3 | `info` | `STRING` | What was compared: sources, sizes, frame, metrics (JSON). |
 
 
 ---
@@ -2911,7 +2911,7 @@ Optional per-stream tuning for the Prompt Relay encoders.
 
 | # | Name | Type | What it is |
 |---|---|---|---|
-| 0 | `relay_options` | `RELAY_OPTIONS` | — |
+| 0 | `relay_options` | `RELAY_OPTIONS` | Wire to Prompt Relay Encode's relay_options input. |
 
 
 ---
@@ -2955,10 +2955,10 @@ Unified Prompt Relay encoder (native / smart / kijai). Dynamic sockets via the J
 
 | # | Name | Type | What it is |
 |---|---|---|---|
-| 0 | `model` | `MODEL` | — |
-| 1 | `positive` | `CONDITIONING` | — |
-| 2 | `wan_model` | `WANVIDEOMODEL` | — |
-| 3 | `wan_text_embeds` | `WANVIDEOTEXTEMBEDS` | — |
+| 0 | `model` | `MODEL` | native / smart: the MODEL with the segment masks patched in - wire it to the sampler. |
+| 1 | `positive` | `CONDITIONING` | native / smart: the prompt conditioning for the sampler's positive input. |
+| 2 | `wan_model` | `WANVIDEOMODEL` | kijai: the WanVideo model with the segment masks patched in (they stay until Prompt Relay Restore or a reload). |
+| 3 | `wan_text_embeds` | `WANVIDEOTEXTEMBEDS` | kijai: text embeds for the WanVideo sampler. |
 
 
 ---
@@ -2976,13 +2976,13 @@ Undo a Prompt Relay (Kijai) patch — restores the original cross_attn.forward.
 
 | Parameter | Type | Constraints | What it does |
 |---|---|---|---|
-| `model` | `WANVIDEOMODEL` |  | — |
+| `model` | `WANVIDEOMODEL` |  | A WanVideo model a Prompt Relay (kijai) encode patched. |
 
 **Outputs**
 
 | # | Name | Type | What it is |
 |---|---|---|---|
-| 0 | `model` | `WANVIDEOMODEL` | — |
+| 0 | `model` | `WANVIDEOMODEL` | The same model with its original cross-attention restored. |
 
 
 ---
@@ -3009,7 +3009,7 @@ Live render-farm capacity (queue depth, VRAM, reachability) as JSON.
 
 | # | Name | Type | What it is |
 |---|---|---|---|
-| 0 | `cluster_json` | `STRING` | — |
+| 0 | `cluster_json` | `STRING` | Per backend: reachable, queue depth, VRAM (or the error), as JSON. Refreshes about every 5 s. |
 
 
 ---
@@ -3027,7 +3027,7 @@ Render-farm audit log: per-user/status stats + recent jobs table.
 
 | Parameter | Type | Constraints | What it does |
 |---|---|---|---|
-| `limit` | `INT` | default `50`, range 1…1000 | — |
+| `limit` | `INT` | default `50`, range 1…1000 | Most recent jobs to list. |
 | `user_filter` | `STRING` | default `""` | Empty = all users. |
 | `project_filter` | `STRING` | default `""` | Empty = all projects. |
 
@@ -3035,8 +3035,8 @@ Render-farm audit log: per-user/status stats + recent jobs table.
 
 | # | Name | Type | What it is |
 |---|---|---|---|
-| 0 | `stats_json` | `STRING` | — |
-| 1 | `jobs_table` | `STRING` | — |
+| 0 | `stats_json` | `STRING` | Job counts per user and per status plus total / average duration, over ALL jobs (the filters do not apply), as JSON. |
+| 1 | `jobs_table` | `STRING` | The most recent jobs (up to limit) as a text table. |
 
 
 ---
@@ -3060,7 +3060,7 @@ Dispatch a full workflow JSON to a remote ComfyUI render-farm backend.
 | `priority` | `INT` | default `5`, range 1…10 | Spool priority — higher dispatches first. |
 | `project_name` | `STRING` | default `""` | Audit-log project tag. |
 | `wait_for_completion` | `BOOLEAN` | default `True` | On: block until the remote render finishes and pull outputs back into input/c2c_farm_results/<job>/. Off: return the job id immediately and track it in the C2C Farm dashboard. |
-| `timeout_minutes` | `INT` | default `120`, range 1…1440 | — |
+| `timeout_minutes` | `INT` | default `120`, range 1…1440 | How long to wait before the node fails. The job itself keeps running - follow it in the C2C Farm dashboard. |
 
 **Optional inputs**
 
@@ -3072,9 +3072,9 @@ Dispatch a full workflow JSON to a remote ComfyUI render-farm backend.
 
 | # | Name | Type | What it is |
 |---|---|---|---|
-| 0 | `job_id` | `STRING` | — |
-| 1 | `result_paths` | `STRING` | — |
-| 2 | `info` | `STRING` | — |
+| 0 | `job_id` | `STRING` | The farm job id (look it up in the C2C Farm dashboard or Job History). |
+| 1 | `result_paths` | `STRING` | Local paths of the fetched outputs, one per line (empty when not waiting). |
+| 2 | `info` | `STRING` | Backend, profile, status and results as JSON. |
 
 
 ---
@@ -3227,7 +3227,7 @@ Replace the model's flow-matching schedule with AsymFlow's shifted-signal-ratio 
 
 | Parameter | Type | Constraints | What it does |
 |---|---|---|---|
-| `model` | `MODEL` |  | — |
+| `model` | `MODEL` |  | A flow-matching model (SD3, Flux, AsymFlow-trained) whose noise schedule is replaced. |
 | `shift` | `FLOAT` | default `3.0`, range 0.05…20.0, step 0.05 | AsymFlow signal-shift. shift=1 -> linear flow. >1 spends more steps at high noise (recommended for high-resolution / Flux-like models). |
 | `multiplier` | `INT` | default `1000`, range 1…10000, step 1 | Discretization multiplier (timesteps scale). |
 
@@ -3235,7 +3235,7 @@ Replace the model's flow-matching schedule with AsymFlow's shifted-signal-ratio 
 
 | # | Name | Type | What it is |
 |---|---|---|---|
-| 0 | `model` | `MODEL` | — |
+| 0 | `model` | `MODEL` | The same model with the AsymFlow schedule - wire it to the sampler. |
 
 
 ---
@@ -3256,17 +3256,17 @@ Find things in an image by describing them in words - 'the person on the left', 
 
 | Parameter | Type | Constraints | What it does |
 |---|---|---|---|
-| `image` | `IMAGE` |  | — |
-| `prompt` | `STRING` | default `"person"`, multiline | — |
+| `image` | `IMAGE` |  | The picture(s) to search; each frame gets its own boxes. |
+| `prompt` | `STRING` | default `"person"`, multiline | What to find, in words: 'red car', 'the person on the left', 'coffee cup'. |
 
 **Optional inputs**
 
 | Parameter | Type | Constraints | What it does |
 |---|---|---|---|
-| `model_path` | `STRING` | default `"nvidia/LocateAnything-3B"` | — |
-| `generation_mode` | choice: `hybrid`, `fast`, `slow` | default `"hybrid"` | — |
-| `max_new_tokens` | `INT` | default `2048`, range 256…8192 | — |
-| `device` | choice: `cuda`, `cpu` | default `"cuda"` | — |
+| `model_path` | `STRING` | default `"nvidia/LocateAnything-3B"` | Hugging Face repo id or a local folder holding LocateAnything-3B. |
+| `generation_mode` | choice: `hybrid`, `fast`, `slow` | default `"hybrid"` | Passed unchanged to the model's own generate(); hybrid is its default. fast and slow are the model's other modes (see its model card). |
+| `max_new_tokens` | `INT` | default `2048`, range 256…8192 | Longest answer the model may write. Raise it when a crowded image returns too few boxes. |
+| `device` | choice: `cuda`, `cpu` | default `"cuda"` | Where the 3B model runs. cuda falls back to cpu when no GPU is available (cpu is very slow). |
 | `confidence_threshold` | `FLOAT` | default `0.0`, range 0.0…1.0, step 0.05 | Has no effect: LocateAnything-3B returns boxes without scores, so there is nothing to threshold. Kept so saved workflows load unchanged. |
 | `allow_download` | `BOOLEAN` | default `False` | Download LocateAnything-3B (about 7 GB) into models/LLM/LocateAnything-3B if it is not installed. Off: an installed copy is used (a local folder in model_path, models/*/LocateAnything-3B, or the Hugging Face cache); without one the node names the folder to put it in. There is no model-free way to read a text prompt. LICENCE: NVIDIA License, NON-COMMERCIAL (academic / non-profit research only). |
 
@@ -3274,9 +3274,9 @@ Find things in an image by describing them in words - 'the person on the left', 
 
 | # | Name | Type | What it is |
 |---|---|---|---|
-| 0 | `bboxes` | `BBOX_LIST` | — |
-| 1 | `annotated_image` | `IMAGE` | — |
-| 2 | `raw_response` | `STRING` | — |
+| 0 | `bboxes` | `BBOX_LIST` | Every box found, in pixels, with its label and frame - wire to Locate Anything To SAM. |
+| 1 | `annotated_image` | `IMAGE` | The image with the boxes and labels drawn on it. |
+| 2 | `raw_response` | `STRING` | The model's text answer (frames separated by ---), for checking what it read. |
 
 
 ---
@@ -3294,20 +3294,20 @@ Turn bounding boxes into filled rectangles a SAM node can take as box prompts. T
 
 | Parameter | Type | Constraints | What it does |
 |---|---|---|---|
-| `bboxes` | `BBOX_LIST` |  | — |
-| `image` | `IMAGE` |  | — |
+| `bboxes` | `BBOX_LIST` |  | Boxes from Locate Anything Grounding. |
+| `image` | `IMAGE` |  | The same image the boxes were found in (sets the mask size and frame count). |
 
 **Optional inputs**
 
 | Parameter | Type | Constraints | What it does |
 |---|---|---|---|
-| `expand_ratio` | `FLOAT` | default `0.05`, range 0.0…0.5, step 0.01 | — |
+| `expand_ratio` | `FLOAT` | default `0.05`, range 0.0…0.5, step 0.01 | Grow each box by this fraction of its width / height on every side, so SAM sees the whole object. |
 
 **Outputs**
 
 | # | Name | Type | What it is |
 |---|---|---|---|
-| 0 | `mask` | `MASK` | — |
+| 0 | `mask` | `MASK` | Filled rectangles, one mask per frame (a box only marks its own frame) - a box prompt for SAM, not a final matte. |
 
 
 ---
@@ -3408,17 +3408,17 @@ Video stabilizer: classic feature tracking, RAFT optical flow or OpenCV dense fl
 
 | Parameter | Type | Constraints | What it does |
 |---|---|---|---|
-| `frames` | `IMAGE` |  | — |
+| `frames` | `IMAGE` |  | The shaky clip (an IMAGE batch, one frame per image). |
 | `method` | choice: `auto`, `classic`, `raft_flow`, `dense_flow` | default `"auto"` | classic = feature tracking (fast; the most accurate in our tests). dense_flow = OpenCV DIS optical flow (no model). raft_flow = RAFT optical flow, experimental: in our tests it beat dense_flow on textured plates and did worst on near-featureless ones. auto = dense_flow on long clips with a free GPU, else classic. |
 | `preset` | choice: `handheld_light`, `handheld_heavy`, `vehicle`, `tripod_lock`, `manual` | default `"handheld_light"` | Preset overrides the manual widgets below unless set to 'manual'. |
-| `frame_rate` | `FLOAT` | default `16.0` | — |
-| `padding_color` | `STRING` | default `"127, 127, 127"` | — |
-| `framing_mode` | choice: `crop`, `crop_and_pad`, `expand` | default `"crop_and_pad"` | — |
-| `transform_mode` | choice: `translation`, `similarity`, `perspective` | default `"similarity"` | — |
-| `camera_lock` | `BOOLEAN` | default `False` | — |
-| `strength` | `FLOAT` | default `0.7`, range 0.0…1.0, step 0.05 | — |
-| `smooth` | `FLOAT` | default `0.5`, range 0.0…1.0, step 0.05 | — |
-| `keep_fov` | `FLOAT` | default `0.6`, range 0.0…1.0, step 0.05 | — |
+| `frame_rate` | `FLOAT` | default `16.0` | The clip's frame rate. The smoothing window is set in seconds, so this turns it into frames. |
+| `padding_color` | `STRING` | default `"127, 127, 127"` | Colour of the borders the stabilisation uncovers, as 'R, G, B' (0-255). padding_mask marks the same pixels. |
+| `framing_mode` | choice: `crop`, `crop_and_pad`, `expand` | default `"crop_and_pad"` | manual preset: crop = zoom in so no border shows (keep_fov limits how far); crop_and_pad = some zoom, the rest padded; expand = a bigger canvas, nothing cropped. |
+| `transform_mode` | choice: `translation`, `similarity`, `perspective` | default `"similarity"` | manual preset: which camera motion is removed - translation (shift only), similarity (shift, rotate, zoom), perspective (adds keystone; for heavy shake). |
+| `camera_lock` | `BOOLEAN` | default `False` | manual preset: hold the camera where it is on the first frame (a locked-off tripod look) instead of smoothing its path. |
+| `strength` | `FLOAT` | default `0.7`, range 0.0…1.0, step 0.05 | manual preset: how much of the shake is removed (0 = none, 1 = follow the smoothed path exactly). |
+| `smooth` | `FLOAT` | default `0.5`, range 0.0…1.0, step 0.05 | manual preset: smoothing window, 0.19 s at 0 to 0.81 s at 1. Higher removes slower wobble too. |
+| `keep_fov` | `FLOAT` | default `0.6`, range 0.0…1.0, step 0.05 | manual preset, framing crop: the least of the picture to keep (1 = never zoom in, so frames come back unchanged). |
 | `raft_iters` | `INT` | default `12`, range 4…32 | RAFT refinement iterations (num_flow_updates). Used only by method=raft_flow. |
 | `use_half` | `BOOLEAN` | default `True` | fp16 for RAFT on a CUDA GPU (ignored on CPU). Used only by method=raft_flow. |
 | `allow_download` | `BOOLEAN` | default `False` | Download the RAFT weights (21 MB large / 4 MB small, torchvision, BSD-3) into models/optical_flow/ when they are missing. Off: an installed copy is used, else dense_flow runs and the info says so. |
@@ -3470,8 +3470,8 @@ Selects exactly the frames that correspond to the ORIGINAL input frames using th
 
 | # | Name | Type | What it is |
 |---|---|---|---|
-| 0 | `images` | `IMAGE` | — |
-| 1 | `info` | `STRING` | — |
+| 0 | `images` | `IMAGE` | The processed frames at the original count and pacing. |
+| 1 | `info` | `STRING` | How the frames were picked; says how approximate the timing is when the count changed. |
 
 
 ---
@@ -3496,8 +3496,8 @@ Analyzes optical-flow speed and inserts in-between frames on fast sections so mo
 
 | # | Name | Type | What it is |
 |---|---|---|---|
-| 0 | `normalized_images` | `IMAGE` | — |
-| 1 | `time_map` | `TIMEMAP` | — |
+| 0 | `normalized_images` | `IMAGE` | The frames with flow-warped in-betweens on fast sections (more frames than the input). |
+| 1 | `time_map` | `TIMEMAP` | Where each original frame sits in the new batch - wire to Fluid Shot Decoder. |
 
 
 ---
@@ -3535,10 +3535,10 @@ Refine every pixel without letting anything move. Keeps the plate's low frequenc
 
 | # | Name | Type | What it is |
 |---|---|---|---|
-| 0 | `image` | `IMAGE` | — |
-| 1 | `drift_map` | `MASK` | — |
-| 2 | `drift` | `FLOAT` | — |
-| 3 | `info` | `STRING` | — |
+| 0 | `image` | `IMAGE` | The refined detail on the plate's structure. |
+| 1 | `drift_map` | `MASK` | Where structure moved (bright = moved); all black unless want_drift_map is on. |
+| 2 | `drift` | `FLOAT` | How much structure the refinement moved (lower = closer to the plate). |
+| 3 | `info` | `STRING` | Settings used and the drift numbers, as text. |
 
 
 ---
@@ -3556,8 +3556,8 @@ Blend the tiles back into one clip, in float32, with no seam.
 
 | Parameter | Type | Constraints | What it does |
 |---|---|---|---|
-| `tiles` | `IMAGE` |  | — |
-| `tile_plan` | `TILE_PLAN` |  | — |
+| `tiles` | `IMAGE` |  | The tiles after processing, in the order Tile Split gave them (they may be enlarged). |
+| `tile_plan` | `TILE_PLAN` |  | The same plan Tile Split used. |
 
 **Optional inputs**
 
@@ -3569,8 +3569,8 @@ Blend the tiles back into one clip, in float32, with no seam.
 
 | # | Name | Type | What it is |
 |---|---|---|---|
-| 0 | `image` | `IMAGE` | — |
-| 1 | `info` | `STRING` | — |
+| 0 | `image` | `IMAGE` | The clip put back together, seams blended. |
+| 1 | `info` | `STRING` | What was merged and at what scale. |
 
 
 ---
@@ -3589,10 +3589,10 @@ Decide the tiles once for a whole clip. Reusing one plan for every frame is what
 | Parameter | Type | Constraints | What it does |
 |---|---|---|---|
 | `image` | `IMAGE` |  | Any frame at the size you will be tiling. Only its dimensions are read. |
-| `mode` | choice: `tile size`, `tile count` | default `"tile size"` | — |
+| `mode` | choice: `tile size`, `tile count` | default `"tile size"` | tile size: the largest equal tiles up to tile_size. tile count: a fixed rows x cols grid. |
 | `tile_size` | `INT` | default `1024`, range 128…8192, step 64 | A MAXIMUM, not a target. Tiles are equal-sized and must cover the frame exactly, so the size chosen is the largest at or below this that does. The report says what it picked. |
-| `rows` | `INT` | default `2`, range 1…16 | — |
-| `cols` | `INT` | default `2`, range 1…16 | — |
+| `rows` | `INT` | default `2`, range 1…16 | tile count: tiles down the frame. |
+| `cols` | `INT` | default `2`, range 1…16 | tile count: tiles across the frame. |
 | `overlap` | `INT` | default `96`, range 0…512, step 8 | How far neighbouring tiles share pixels. The blend has to hide any difference between two tiles inside this band, so too narrow shows a seam. 64-128px is usual. |
 | `blend` | choice: `cosine`, `linear`, `none` | default `"cosine"` | cosine is the right answer: the fade-in and fade-out sum to exactly 1 across the overlap, so there is no seam and no brightness dip. 'none' is for checking where the tiles are. |
 
@@ -3600,8 +3600,8 @@ Decide the tiles once for a whole clip. Reusing one plan for every frame is what
 
 | # | Name | Type | What it is |
 |---|---|---|---|
-| 0 | `tile_plan` | `TILE_PLAN` | — |
-| 1 | `info` | `STRING` | — |
+| 0 | `tile_plan` | `TILE_PLAN` | The plan: connect it to Tile Split and Tile Merge (the same plan for both). |
+| 1 | `info` | `STRING` | What it chose: tile size, grid, overlap. |
 
 
 ---
@@ -3619,16 +3619,16 @@ Split a clip into overlapping tiles, emitted as a batch so any refiner can proce
 
 | Parameter | Type | Constraints | What it does |
 |---|---|---|---|
-| `image` | `IMAGE` |  | — |
-| `tile_plan` | `TILE_PLAN` |  | — |
+| `image` | `IMAGE` |  | The clip to cut up (the size the plan was made for). |
+| `tile_plan` | `TILE_PLAN` |  | Tile Plan's output. |
 
 **Outputs**
 
 | # | Name | Type | What it is |
 |---|---|---|---|
-| 0 | `tiles` | `IMAGE` | — |
-| 1 | `tile_count` | `INT` | — |
-| 2 | `info` | `STRING` | — |
+| 0 | `tiles` | `IMAGE` | Every tile of every frame as one batch, frame by frame, tiles in plan order. |
+| 1 | `tile_count` | `INT` | How many tiles came out (frames x tiles per frame). |
+| 2 | `info` | `STRING` | What was split, as text. |
 
 
 ---
@@ -3955,25 +3955,25 @@ Dense optical flow re-vector. RAFT primary, LK pyramid fallback. Re-vectoring is
 
 | Parameter | Type | Constraints | What it does |
 |---|---|---|---|
-| `frame_a` | `IMAGE` |  | — |
-| `frame_b` | `IMAGE` |  | — |
-| `iters` | `INT` | default `20`, range 1…100 | — |
-| `consistency_thr` | `FLOAT` | default `1.5`, range 0.0…20.0, step 0.05 | — |
+| `frame_a` | `IMAGE` |  | The frame to move (one frame or a batch). |
+| `frame_b` | `IMAGE` |  | The frame to move it toward (same size and count). |
+| `iters` | `INT` | default `20`, range 1…100 | RAFT refinement passes: more = finer flow, slower (the Lucas-Kanade fallback without RAFT uses its own 5). |
+| `consistency_thr` | `FLOAT` | default `1.5`, range 0.0…20.0, step 0.05 | Pixels: where the forward and backward flows disagree by more than this, 'consistency' is 0. |
 
 **Optional inputs**
 
 | Parameter | Type | Constraints | What it does |
 |---|---|---|---|
-| `mask` | `MASK` |  | — |
-| `scale` | `FLOAT` | default `1.0`, range -4.0…4.0, step 0.05 | — |
+| `mask` | `MASK` |  | Only re-vector inside this mask; the rest of frame_a stays. |
+| `scale` | `FLOAT` | default `1.0`, range -4.0…4.0, step 0.05 | Multiply the motion: 1 = all the way to frame_b, 0.5 = half way, -1 = the opposite way. |
 
 **Outputs**
 
 | # | Name | Type | What it is |
 |---|---|---|---|
-| 0 | `re_vectored` | `IMAGE` | — |
-| 1 | `flow_rgb` | `IMAGE` | — |
-| 2 | `consistency` | `MASK` | — |
+| 0 | `re_vectored` | `IMAGE` | frame_a moved along the flow toward frame_b (only inside the mask when one is wired). |
+| 1 | `flow_rgb` | `IMAGE` | The a -> b flow as a picture: red = horizontal, green = vertical (0.5 = still), blue = speed. |
+| 2 | `consistency` | `MASK` | 1 where the forward and backward flows agree (reliable), 0 where they do not (occlusion, errors). |
 
 
 ---
@@ -3994,269 +3994,269 @@ A C2C Vault: a subgraph whose inside is encrypted. It runs with ComfyUI's own sc
 
 | Parameter | Type | Constraints | What it does |
 |---|---|---|---|
-| `vault_id` | `STRING` | default `""` | — |
-| `vault_payload` | `STRING` | default `""` | — |
+| `vault_id` | `STRING` | default `""` | Which vault this is - written when the vault is created; do not edit. |
+| `vault_payload` | `STRING` | default `""` | The encrypted inside of the vault - written when it is locked or sealed; editing it breaks the vault. |
 
 **Outputs**
 
 | # | Name | Type | What it is |
 |---|---|---|---|
-| 0 | `out_0` | `*` | — |
-| 1 | `out_1` | `*` | — |
-| 2 | `out_2` | `*` | — |
-| 3 | `out_3` | `*` | — |
-| 4 | `out_4` | `*` | — |
-| 5 | `out_5` | `*` | — |
-| 6 | `out_6` | `*` | — |
-| 7 | `out_7` | `*` | — |
-| 8 | `out_8` | `*` | — |
-| 9 | `out_9` | `*` | — |
-| 10 | `out_10` | `*` | — |
-| 11 | `out_11` | `*` | — |
-| 12 | `out_12` | `*` | — |
-| 13 | `out_13` | `*` | — |
-| 14 | `out_14` | `*` | — |
-| 15 | `out_15` | `*` | — |
-| 16 | `out_16` | `*` | — |
-| 17 | `out_17` | `*` | — |
-| 18 | `out_18` | `*` | — |
-| 19 | `out_19` | `*` | — |
-| 20 | `out_20` | `*` | — |
-| 21 | `out_21` | `*` | — |
-| 22 | `out_22` | `*` | — |
-| 23 | `out_23` | `*` | — |
-| 24 | `out_24` | `*` | — |
-| 25 | `out_25` | `*` | — |
-| 26 | `out_26` | `*` | — |
-| 27 | `out_27` | `*` | — |
-| 28 | `out_28` | `*` | — |
-| 29 | `out_29` | `*` | — |
-| 30 | `out_30` | `*` | — |
-| 31 | `out_31` | `*` | — |
-| 32 | `out_32` | `*` | — |
-| 33 | `out_33` | `*` | — |
-| 34 | `out_34` | `*` | — |
-| 35 | `out_35` | `*` | — |
-| 36 | `out_36` | `*` | — |
-| 37 | `out_37` | `*` | — |
-| 38 | `out_38` | `*` | — |
-| 39 | `out_39` | `*` | — |
-| 40 | `out_40` | `*` | — |
-| 41 | `out_41` | `*` | — |
-| 42 | `out_42` | `*` | — |
-| 43 | `out_43` | `*` | — |
-| 44 | `out_44` | `*` | — |
-| 45 | `out_45` | `*` | — |
-| 46 | `out_46` | `*` | — |
-| 47 | `out_47` | `*` | — |
-| 48 | `out_48` | `*` | — |
-| 49 | `out_49` | `*` | — |
-| 50 | `out_50` | `*` | — |
-| 51 | `out_51` | `*` | — |
-| 52 | `out_52` | `*` | — |
-| 53 | `out_53` | `*` | — |
-| 54 | `out_54` | `*` | — |
-| 55 | `out_55` | `*` | — |
-| 56 | `out_56` | `*` | — |
-| 57 | `out_57` | `*` | — |
-| 58 | `out_58` | `*` | — |
-| 59 | `out_59` | `*` | — |
-| 60 | `out_60` | `*` | — |
-| 61 | `out_61` | `*` | — |
-| 62 | `out_62` | `*` | — |
-| 63 | `out_63` | `*` | — |
-| 64 | `out_64` | `*` | — |
-| 65 | `out_65` | `*` | — |
-| 66 | `out_66` | `*` | — |
-| 67 | `out_67` | `*` | — |
-| 68 | `out_68` | `*` | — |
-| 69 | `out_69` | `*` | — |
-| 70 | `out_70` | `*` | — |
-| 71 | `out_71` | `*` | — |
-| 72 | `out_72` | `*` | — |
-| 73 | `out_73` | `*` | — |
-| 74 | `out_74` | `*` | — |
-| 75 | `out_75` | `*` | — |
-| 76 | `out_76` | `*` | — |
-| 77 | `out_77` | `*` | — |
-| 78 | `out_78` | `*` | — |
-| 79 | `out_79` | `*` | — |
-| 80 | `out_80` | `*` | — |
-| 81 | `out_81` | `*` | — |
-| 82 | `out_82` | `*` | — |
-| 83 | `out_83` | `*` | — |
-| 84 | `out_84` | `*` | — |
-| 85 | `out_85` | `*` | — |
-| 86 | `out_86` | `*` | — |
-| 87 | `out_87` | `*` | — |
-| 88 | `out_88` | `*` | — |
-| 89 | `out_89` | `*` | — |
-| 90 | `out_90` | `*` | — |
-| 91 | `out_91` | `*` | — |
-| 92 | `out_92` | `*` | — |
-| 93 | `out_93` | `*` | — |
-| 94 | `out_94` | `*` | — |
-| 95 | `out_95` | `*` | — |
-| 96 | `out_96` | `*` | — |
-| 97 | `out_97` | `*` | — |
-| 98 | `out_98` | `*` | — |
-| 99 | `out_99` | `*` | — |
-| 100 | `out_100` | `*` | — |
-| 101 | `out_101` | `*` | — |
-| 102 | `out_102` | `*` | — |
-| 103 | `out_103` | `*` | — |
-| 104 | `out_104` | `*` | — |
-| 105 | `out_105` | `*` | — |
-| 106 | `out_106` | `*` | — |
-| 107 | `out_107` | `*` | — |
-| 108 | `out_108` | `*` | — |
-| 109 | `out_109` | `*` | — |
-| 110 | `out_110` | `*` | — |
-| 111 | `out_111` | `*` | — |
-| 112 | `out_112` | `*` | — |
-| 113 | `out_113` | `*` | — |
-| 114 | `out_114` | `*` | — |
-| 115 | `out_115` | `*` | — |
-| 116 | `out_116` | `*` | — |
-| 117 | `out_117` | `*` | — |
-| 118 | `out_118` | `*` | — |
-| 119 | `out_119` | `*` | — |
-| 120 | `out_120` | `*` | — |
-| 121 | `out_121` | `*` | — |
-| 122 | `out_122` | `*` | — |
-| 123 | `out_123` | `*` | — |
-| 124 | `out_124` | `*` | — |
-| 125 | `out_125` | `*` | — |
-| 126 | `out_126` | `*` | — |
-| 127 | `out_127` | `*` | — |
-| 128 | `out_128` | `*` | — |
-| 129 | `out_129` | `*` | — |
-| 130 | `out_130` | `*` | — |
-| 131 | `out_131` | `*` | — |
-| 132 | `out_132` | `*` | — |
-| 133 | `out_133` | `*` | — |
-| 134 | `out_134` | `*` | — |
-| 135 | `out_135` | `*` | — |
-| 136 | `out_136` | `*` | — |
-| 137 | `out_137` | `*` | — |
-| 138 | `out_138` | `*` | — |
-| 139 | `out_139` | `*` | — |
-| 140 | `out_140` | `*` | — |
-| 141 | `out_141` | `*` | — |
-| 142 | `out_142` | `*` | — |
-| 143 | `out_143` | `*` | — |
-| 144 | `out_144` | `*` | — |
-| 145 | `out_145` | `*` | — |
-| 146 | `out_146` | `*` | — |
-| 147 | `out_147` | `*` | — |
-| 148 | `out_148` | `*` | — |
-| 149 | `out_149` | `*` | — |
-| 150 | `out_150` | `*` | — |
-| 151 | `out_151` | `*` | — |
-| 152 | `out_152` | `*` | — |
-| 153 | `out_153` | `*` | — |
-| 154 | `out_154` | `*` | — |
-| 155 | `out_155` | `*` | — |
-| 156 | `out_156` | `*` | — |
-| 157 | `out_157` | `*` | — |
-| 158 | `out_158` | `*` | — |
-| 159 | `out_159` | `*` | — |
-| 160 | `out_160` | `*` | — |
-| 161 | `out_161` | `*` | — |
-| 162 | `out_162` | `*` | — |
-| 163 | `out_163` | `*` | — |
-| 164 | `out_164` | `*` | — |
-| 165 | `out_165` | `*` | — |
-| 166 | `out_166` | `*` | — |
-| 167 | `out_167` | `*` | — |
-| 168 | `out_168` | `*` | — |
-| 169 | `out_169` | `*` | — |
-| 170 | `out_170` | `*` | — |
-| 171 | `out_171` | `*` | — |
-| 172 | `out_172` | `*` | — |
-| 173 | `out_173` | `*` | — |
-| 174 | `out_174` | `*` | — |
-| 175 | `out_175` | `*` | — |
-| 176 | `out_176` | `*` | — |
-| 177 | `out_177` | `*` | — |
-| 178 | `out_178` | `*` | — |
-| 179 | `out_179` | `*` | — |
-| 180 | `out_180` | `*` | — |
-| 181 | `out_181` | `*` | — |
-| 182 | `out_182` | `*` | — |
-| 183 | `out_183` | `*` | — |
-| 184 | `out_184` | `*` | — |
-| 185 | `out_185` | `*` | — |
-| 186 | `out_186` | `*` | — |
-| 187 | `out_187` | `*` | — |
-| 188 | `out_188` | `*` | — |
-| 189 | `out_189` | `*` | — |
-| 190 | `out_190` | `*` | — |
-| 191 | `out_191` | `*` | — |
-| 192 | `out_192` | `*` | — |
-| 193 | `out_193` | `*` | — |
-| 194 | `out_194` | `*` | — |
-| 195 | `out_195` | `*` | — |
-| 196 | `out_196` | `*` | — |
-| 197 | `out_197` | `*` | — |
-| 198 | `out_198` | `*` | — |
-| 199 | `out_199` | `*` | — |
-| 200 | `out_200` | `*` | — |
-| 201 | `out_201` | `*` | — |
-| 202 | `out_202` | `*` | — |
-| 203 | `out_203` | `*` | — |
-| 204 | `out_204` | `*` | — |
-| 205 | `out_205` | `*` | — |
-| 206 | `out_206` | `*` | — |
-| 207 | `out_207` | `*` | — |
-| 208 | `out_208` | `*` | — |
-| 209 | `out_209` | `*` | — |
-| 210 | `out_210` | `*` | — |
-| 211 | `out_211` | `*` | — |
-| 212 | `out_212` | `*` | — |
-| 213 | `out_213` | `*` | — |
-| 214 | `out_214` | `*` | — |
-| 215 | `out_215` | `*` | — |
-| 216 | `out_216` | `*` | — |
-| 217 | `out_217` | `*` | — |
-| 218 | `out_218` | `*` | — |
-| 219 | `out_219` | `*` | — |
-| 220 | `out_220` | `*` | — |
-| 221 | `out_221` | `*` | — |
-| 222 | `out_222` | `*` | — |
-| 223 | `out_223` | `*` | — |
-| 224 | `out_224` | `*` | — |
-| 225 | `out_225` | `*` | — |
-| 226 | `out_226` | `*` | — |
-| 227 | `out_227` | `*` | — |
-| 228 | `out_228` | `*` | — |
-| 229 | `out_229` | `*` | — |
-| 230 | `out_230` | `*` | — |
-| 231 | `out_231` | `*` | — |
-| 232 | `out_232` | `*` | — |
-| 233 | `out_233` | `*` | — |
-| 234 | `out_234` | `*` | — |
-| 235 | `out_235` | `*` | — |
-| 236 | `out_236` | `*` | — |
-| 237 | `out_237` | `*` | — |
-| 238 | `out_238` | `*` | — |
-| 239 | `out_239` | `*` | — |
-| 240 | `out_240` | `*` | — |
-| 241 | `out_241` | `*` | — |
-| 242 | `out_242` | `*` | — |
-| 243 | `out_243` | `*` | — |
-| 244 | `out_244` | `*` | — |
-| 245 | `out_245` | `*` | — |
-| 246 | `out_246` | `*` | — |
-| 247 | `out_247` | `*` | — |
-| 248 | `out_248` | `*` | — |
-| 249 | `out_249` | `*` | — |
-| 250 | `out_250` | `*` | — |
-| 251 | `out_251` | `*` | — |
-| 252 | `out_252` | `*` | — |
-| 253 | `out_253` | `*` | — |
-| 254 | `out_254` | `*` | — |
-| 255 | `out_255` | `*` | — |
+| 0 | `out_0` | `*` | Output 1 of the protected subgraph (the value its inside sends out here). |
+| 1 | `out_1` | `*` | Output 2 of the protected subgraph (the value its inside sends out here). |
+| 2 | `out_2` | `*` | Output 3 of the protected subgraph (the value its inside sends out here). |
+| 3 | `out_3` | `*` | Output 4 of the protected subgraph (the value its inside sends out here). |
+| 4 | `out_4` | `*` | Output 5 of the protected subgraph (the value its inside sends out here). |
+| 5 | `out_5` | `*` | Output 6 of the protected subgraph (the value its inside sends out here). |
+| 6 | `out_6` | `*` | Output 7 of the protected subgraph (the value its inside sends out here). |
+| 7 | `out_7` | `*` | Output 8 of the protected subgraph (the value its inside sends out here). |
+| 8 | `out_8` | `*` | Output 9 of the protected subgraph (the value its inside sends out here). |
+| 9 | `out_9` | `*` | Output 10 of the protected subgraph (the value its inside sends out here). |
+| 10 | `out_10` | `*` | Output 11 of the protected subgraph (the value its inside sends out here). |
+| 11 | `out_11` | `*` | Output 12 of the protected subgraph (the value its inside sends out here). |
+| 12 | `out_12` | `*` | Output 13 of the protected subgraph (the value its inside sends out here). |
+| 13 | `out_13` | `*` | Output 14 of the protected subgraph (the value its inside sends out here). |
+| 14 | `out_14` | `*` | Output 15 of the protected subgraph (the value its inside sends out here). |
+| 15 | `out_15` | `*` | Output 16 of the protected subgraph (the value its inside sends out here). |
+| 16 | `out_16` | `*` | Output 17 of the protected subgraph (the value its inside sends out here). |
+| 17 | `out_17` | `*` | Output 18 of the protected subgraph (the value its inside sends out here). |
+| 18 | `out_18` | `*` | Output 19 of the protected subgraph (the value its inside sends out here). |
+| 19 | `out_19` | `*` | Output 20 of the protected subgraph (the value its inside sends out here). |
+| 20 | `out_20` | `*` | Output 21 of the protected subgraph (the value its inside sends out here). |
+| 21 | `out_21` | `*` | Output 22 of the protected subgraph (the value its inside sends out here). |
+| 22 | `out_22` | `*` | Output 23 of the protected subgraph (the value its inside sends out here). |
+| 23 | `out_23` | `*` | Output 24 of the protected subgraph (the value its inside sends out here). |
+| 24 | `out_24` | `*` | Output 25 of the protected subgraph (the value its inside sends out here). |
+| 25 | `out_25` | `*` | Output 26 of the protected subgraph (the value its inside sends out here). |
+| 26 | `out_26` | `*` | Output 27 of the protected subgraph (the value its inside sends out here). |
+| 27 | `out_27` | `*` | Output 28 of the protected subgraph (the value its inside sends out here). |
+| 28 | `out_28` | `*` | Output 29 of the protected subgraph (the value its inside sends out here). |
+| 29 | `out_29` | `*` | Output 30 of the protected subgraph (the value its inside sends out here). |
+| 30 | `out_30` | `*` | Output 31 of the protected subgraph (the value its inside sends out here). |
+| 31 | `out_31` | `*` | Output 32 of the protected subgraph (the value its inside sends out here). |
+| 32 | `out_32` | `*` | Output 33 of the protected subgraph (the value its inside sends out here). |
+| 33 | `out_33` | `*` | Output 34 of the protected subgraph (the value its inside sends out here). |
+| 34 | `out_34` | `*` | Output 35 of the protected subgraph (the value its inside sends out here). |
+| 35 | `out_35` | `*` | Output 36 of the protected subgraph (the value its inside sends out here). |
+| 36 | `out_36` | `*` | Output 37 of the protected subgraph (the value its inside sends out here). |
+| 37 | `out_37` | `*` | Output 38 of the protected subgraph (the value its inside sends out here). |
+| 38 | `out_38` | `*` | Output 39 of the protected subgraph (the value its inside sends out here). |
+| 39 | `out_39` | `*` | Output 40 of the protected subgraph (the value its inside sends out here). |
+| 40 | `out_40` | `*` | Output 41 of the protected subgraph (the value its inside sends out here). |
+| 41 | `out_41` | `*` | Output 42 of the protected subgraph (the value its inside sends out here). |
+| 42 | `out_42` | `*` | Output 43 of the protected subgraph (the value its inside sends out here). |
+| 43 | `out_43` | `*` | Output 44 of the protected subgraph (the value its inside sends out here). |
+| 44 | `out_44` | `*` | Output 45 of the protected subgraph (the value its inside sends out here). |
+| 45 | `out_45` | `*` | Output 46 of the protected subgraph (the value its inside sends out here). |
+| 46 | `out_46` | `*` | Output 47 of the protected subgraph (the value its inside sends out here). |
+| 47 | `out_47` | `*` | Output 48 of the protected subgraph (the value its inside sends out here). |
+| 48 | `out_48` | `*` | Output 49 of the protected subgraph (the value its inside sends out here). |
+| 49 | `out_49` | `*` | Output 50 of the protected subgraph (the value its inside sends out here). |
+| 50 | `out_50` | `*` | Output 51 of the protected subgraph (the value its inside sends out here). |
+| 51 | `out_51` | `*` | Output 52 of the protected subgraph (the value its inside sends out here). |
+| 52 | `out_52` | `*` | Output 53 of the protected subgraph (the value its inside sends out here). |
+| 53 | `out_53` | `*` | Output 54 of the protected subgraph (the value its inside sends out here). |
+| 54 | `out_54` | `*` | Output 55 of the protected subgraph (the value its inside sends out here). |
+| 55 | `out_55` | `*` | Output 56 of the protected subgraph (the value its inside sends out here). |
+| 56 | `out_56` | `*` | Output 57 of the protected subgraph (the value its inside sends out here). |
+| 57 | `out_57` | `*` | Output 58 of the protected subgraph (the value its inside sends out here). |
+| 58 | `out_58` | `*` | Output 59 of the protected subgraph (the value its inside sends out here). |
+| 59 | `out_59` | `*` | Output 60 of the protected subgraph (the value its inside sends out here). |
+| 60 | `out_60` | `*` | Output 61 of the protected subgraph (the value its inside sends out here). |
+| 61 | `out_61` | `*` | Output 62 of the protected subgraph (the value its inside sends out here). |
+| 62 | `out_62` | `*` | Output 63 of the protected subgraph (the value its inside sends out here). |
+| 63 | `out_63` | `*` | Output 64 of the protected subgraph (the value its inside sends out here). |
+| 64 | `out_64` | `*` | Output 65 of the protected subgraph (the value its inside sends out here). |
+| 65 | `out_65` | `*` | Output 66 of the protected subgraph (the value its inside sends out here). |
+| 66 | `out_66` | `*` | Output 67 of the protected subgraph (the value its inside sends out here). |
+| 67 | `out_67` | `*` | Output 68 of the protected subgraph (the value its inside sends out here). |
+| 68 | `out_68` | `*` | Output 69 of the protected subgraph (the value its inside sends out here). |
+| 69 | `out_69` | `*` | Output 70 of the protected subgraph (the value its inside sends out here). |
+| 70 | `out_70` | `*` | Output 71 of the protected subgraph (the value its inside sends out here). |
+| 71 | `out_71` | `*` | Output 72 of the protected subgraph (the value its inside sends out here). |
+| 72 | `out_72` | `*` | Output 73 of the protected subgraph (the value its inside sends out here). |
+| 73 | `out_73` | `*` | Output 74 of the protected subgraph (the value its inside sends out here). |
+| 74 | `out_74` | `*` | Output 75 of the protected subgraph (the value its inside sends out here). |
+| 75 | `out_75` | `*` | Output 76 of the protected subgraph (the value its inside sends out here). |
+| 76 | `out_76` | `*` | Output 77 of the protected subgraph (the value its inside sends out here). |
+| 77 | `out_77` | `*` | Output 78 of the protected subgraph (the value its inside sends out here). |
+| 78 | `out_78` | `*` | Output 79 of the protected subgraph (the value its inside sends out here). |
+| 79 | `out_79` | `*` | Output 80 of the protected subgraph (the value its inside sends out here). |
+| 80 | `out_80` | `*` | Output 81 of the protected subgraph (the value its inside sends out here). |
+| 81 | `out_81` | `*` | Output 82 of the protected subgraph (the value its inside sends out here). |
+| 82 | `out_82` | `*` | Output 83 of the protected subgraph (the value its inside sends out here). |
+| 83 | `out_83` | `*` | Output 84 of the protected subgraph (the value its inside sends out here). |
+| 84 | `out_84` | `*` | Output 85 of the protected subgraph (the value its inside sends out here). |
+| 85 | `out_85` | `*` | Output 86 of the protected subgraph (the value its inside sends out here). |
+| 86 | `out_86` | `*` | Output 87 of the protected subgraph (the value its inside sends out here). |
+| 87 | `out_87` | `*` | Output 88 of the protected subgraph (the value its inside sends out here). |
+| 88 | `out_88` | `*` | Output 89 of the protected subgraph (the value its inside sends out here). |
+| 89 | `out_89` | `*` | Output 90 of the protected subgraph (the value its inside sends out here). |
+| 90 | `out_90` | `*` | Output 91 of the protected subgraph (the value its inside sends out here). |
+| 91 | `out_91` | `*` | Output 92 of the protected subgraph (the value its inside sends out here). |
+| 92 | `out_92` | `*` | Output 93 of the protected subgraph (the value its inside sends out here). |
+| 93 | `out_93` | `*` | Output 94 of the protected subgraph (the value its inside sends out here). |
+| 94 | `out_94` | `*` | Output 95 of the protected subgraph (the value its inside sends out here). |
+| 95 | `out_95` | `*` | Output 96 of the protected subgraph (the value its inside sends out here). |
+| 96 | `out_96` | `*` | Output 97 of the protected subgraph (the value its inside sends out here). |
+| 97 | `out_97` | `*` | Output 98 of the protected subgraph (the value its inside sends out here). |
+| 98 | `out_98` | `*` | Output 99 of the protected subgraph (the value its inside sends out here). |
+| 99 | `out_99` | `*` | Output 100 of the protected subgraph (the value its inside sends out here). |
+| 100 | `out_100` | `*` | Output 101 of the protected subgraph (the value its inside sends out here). |
+| 101 | `out_101` | `*` | Output 102 of the protected subgraph (the value its inside sends out here). |
+| 102 | `out_102` | `*` | Output 103 of the protected subgraph (the value its inside sends out here). |
+| 103 | `out_103` | `*` | Output 104 of the protected subgraph (the value its inside sends out here). |
+| 104 | `out_104` | `*` | Output 105 of the protected subgraph (the value its inside sends out here). |
+| 105 | `out_105` | `*` | Output 106 of the protected subgraph (the value its inside sends out here). |
+| 106 | `out_106` | `*` | Output 107 of the protected subgraph (the value its inside sends out here). |
+| 107 | `out_107` | `*` | Output 108 of the protected subgraph (the value its inside sends out here). |
+| 108 | `out_108` | `*` | Output 109 of the protected subgraph (the value its inside sends out here). |
+| 109 | `out_109` | `*` | Output 110 of the protected subgraph (the value its inside sends out here). |
+| 110 | `out_110` | `*` | Output 111 of the protected subgraph (the value its inside sends out here). |
+| 111 | `out_111` | `*` | Output 112 of the protected subgraph (the value its inside sends out here). |
+| 112 | `out_112` | `*` | Output 113 of the protected subgraph (the value its inside sends out here). |
+| 113 | `out_113` | `*` | Output 114 of the protected subgraph (the value its inside sends out here). |
+| 114 | `out_114` | `*` | Output 115 of the protected subgraph (the value its inside sends out here). |
+| 115 | `out_115` | `*` | Output 116 of the protected subgraph (the value its inside sends out here). |
+| 116 | `out_116` | `*` | Output 117 of the protected subgraph (the value its inside sends out here). |
+| 117 | `out_117` | `*` | Output 118 of the protected subgraph (the value its inside sends out here). |
+| 118 | `out_118` | `*` | Output 119 of the protected subgraph (the value its inside sends out here). |
+| 119 | `out_119` | `*` | Output 120 of the protected subgraph (the value its inside sends out here). |
+| 120 | `out_120` | `*` | Output 121 of the protected subgraph (the value its inside sends out here). |
+| 121 | `out_121` | `*` | Output 122 of the protected subgraph (the value its inside sends out here). |
+| 122 | `out_122` | `*` | Output 123 of the protected subgraph (the value its inside sends out here). |
+| 123 | `out_123` | `*` | Output 124 of the protected subgraph (the value its inside sends out here). |
+| 124 | `out_124` | `*` | Output 125 of the protected subgraph (the value its inside sends out here). |
+| 125 | `out_125` | `*` | Output 126 of the protected subgraph (the value its inside sends out here). |
+| 126 | `out_126` | `*` | Output 127 of the protected subgraph (the value its inside sends out here). |
+| 127 | `out_127` | `*` | Output 128 of the protected subgraph (the value its inside sends out here). |
+| 128 | `out_128` | `*` | Output 129 of the protected subgraph (the value its inside sends out here). |
+| 129 | `out_129` | `*` | Output 130 of the protected subgraph (the value its inside sends out here). |
+| 130 | `out_130` | `*` | Output 131 of the protected subgraph (the value its inside sends out here). |
+| 131 | `out_131` | `*` | Output 132 of the protected subgraph (the value its inside sends out here). |
+| 132 | `out_132` | `*` | Output 133 of the protected subgraph (the value its inside sends out here). |
+| 133 | `out_133` | `*` | Output 134 of the protected subgraph (the value its inside sends out here). |
+| 134 | `out_134` | `*` | Output 135 of the protected subgraph (the value its inside sends out here). |
+| 135 | `out_135` | `*` | Output 136 of the protected subgraph (the value its inside sends out here). |
+| 136 | `out_136` | `*` | Output 137 of the protected subgraph (the value its inside sends out here). |
+| 137 | `out_137` | `*` | Output 138 of the protected subgraph (the value its inside sends out here). |
+| 138 | `out_138` | `*` | Output 139 of the protected subgraph (the value its inside sends out here). |
+| 139 | `out_139` | `*` | Output 140 of the protected subgraph (the value its inside sends out here). |
+| 140 | `out_140` | `*` | Output 141 of the protected subgraph (the value its inside sends out here). |
+| 141 | `out_141` | `*` | Output 142 of the protected subgraph (the value its inside sends out here). |
+| 142 | `out_142` | `*` | Output 143 of the protected subgraph (the value its inside sends out here). |
+| 143 | `out_143` | `*` | Output 144 of the protected subgraph (the value its inside sends out here). |
+| 144 | `out_144` | `*` | Output 145 of the protected subgraph (the value its inside sends out here). |
+| 145 | `out_145` | `*` | Output 146 of the protected subgraph (the value its inside sends out here). |
+| 146 | `out_146` | `*` | Output 147 of the protected subgraph (the value its inside sends out here). |
+| 147 | `out_147` | `*` | Output 148 of the protected subgraph (the value its inside sends out here). |
+| 148 | `out_148` | `*` | Output 149 of the protected subgraph (the value its inside sends out here). |
+| 149 | `out_149` | `*` | Output 150 of the protected subgraph (the value its inside sends out here). |
+| 150 | `out_150` | `*` | Output 151 of the protected subgraph (the value its inside sends out here). |
+| 151 | `out_151` | `*` | Output 152 of the protected subgraph (the value its inside sends out here). |
+| 152 | `out_152` | `*` | Output 153 of the protected subgraph (the value its inside sends out here). |
+| 153 | `out_153` | `*` | Output 154 of the protected subgraph (the value its inside sends out here). |
+| 154 | `out_154` | `*` | Output 155 of the protected subgraph (the value its inside sends out here). |
+| 155 | `out_155` | `*` | Output 156 of the protected subgraph (the value its inside sends out here). |
+| 156 | `out_156` | `*` | Output 157 of the protected subgraph (the value its inside sends out here). |
+| 157 | `out_157` | `*` | Output 158 of the protected subgraph (the value its inside sends out here). |
+| 158 | `out_158` | `*` | Output 159 of the protected subgraph (the value its inside sends out here). |
+| 159 | `out_159` | `*` | Output 160 of the protected subgraph (the value its inside sends out here). |
+| 160 | `out_160` | `*` | Output 161 of the protected subgraph (the value its inside sends out here). |
+| 161 | `out_161` | `*` | Output 162 of the protected subgraph (the value its inside sends out here). |
+| 162 | `out_162` | `*` | Output 163 of the protected subgraph (the value its inside sends out here). |
+| 163 | `out_163` | `*` | Output 164 of the protected subgraph (the value its inside sends out here). |
+| 164 | `out_164` | `*` | Output 165 of the protected subgraph (the value its inside sends out here). |
+| 165 | `out_165` | `*` | Output 166 of the protected subgraph (the value its inside sends out here). |
+| 166 | `out_166` | `*` | Output 167 of the protected subgraph (the value its inside sends out here). |
+| 167 | `out_167` | `*` | Output 168 of the protected subgraph (the value its inside sends out here). |
+| 168 | `out_168` | `*` | Output 169 of the protected subgraph (the value its inside sends out here). |
+| 169 | `out_169` | `*` | Output 170 of the protected subgraph (the value its inside sends out here). |
+| 170 | `out_170` | `*` | Output 171 of the protected subgraph (the value its inside sends out here). |
+| 171 | `out_171` | `*` | Output 172 of the protected subgraph (the value its inside sends out here). |
+| 172 | `out_172` | `*` | Output 173 of the protected subgraph (the value its inside sends out here). |
+| 173 | `out_173` | `*` | Output 174 of the protected subgraph (the value its inside sends out here). |
+| 174 | `out_174` | `*` | Output 175 of the protected subgraph (the value its inside sends out here). |
+| 175 | `out_175` | `*` | Output 176 of the protected subgraph (the value its inside sends out here). |
+| 176 | `out_176` | `*` | Output 177 of the protected subgraph (the value its inside sends out here). |
+| 177 | `out_177` | `*` | Output 178 of the protected subgraph (the value its inside sends out here). |
+| 178 | `out_178` | `*` | Output 179 of the protected subgraph (the value its inside sends out here). |
+| 179 | `out_179` | `*` | Output 180 of the protected subgraph (the value its inside sends out here). |
+| 180 | `out_180` | `*` | Output 181 of the protected subgraph (the value its inside sends out here). |
+| 181 | `out_181` | `*` | Output 182 of the protected subgraph (the value its inside sends out here). |
+| 182 | `out_182` | `*` | Output 183 of the protected subgraph (the value its inside sends out here). |
+| 183 | `out_183` | `*` | Output 184 of the protected subgraph (the value its inside sends out here). |
+| 184 | `out_184` | `*` | Output 185 of the protected subgraph (the value its inside sends out here). |
+| 185 | `out_185` | `*` | Output 186 of the protected subgraph (the value its inside sends out here). |
+| 186 | `out_186` | `*` | Output 187 of the protected subgraph (the value its inside sends out here). |
+| 187 | `out_187` | `*` | Output 188 of the protected subgraph (the value its inside sends out here). |
+| 188 | `out_188` | `*` | Output 189 of the protected subgraph (the value its inside sends out here). |
+| 189 | `out_189` | `*` | Output 190 of the protected subgraph (the value its inside sends out here). |
+| 190 | `out_190` | `*` | Output 191 of the protected subgraph (the value its inside sends out here). |
+| 191 | `out_191` | `*` | Output 192 of the protected subgraph (the value its inside sends out here). |
+| 192 | `out_192` | `*` | Output 193 of the protected subgraph (the value its inside sends out here). |
+| 193 | `out_193` | `*` | Output 194 of the protected subgraph (the value its inside sends out here). |
+| 194 | `out_194` | `*` | Output 195 of the protected subgraph (the value its inside sends out here). |
+| 195 | `out_195` | `*` | Output 196 of the protected subgraph (the value its inside sends out here). |
+| 196 | `out_196` | `*` | Output 197 of the protected subgraph (the value its inside sends out here). |
+| 197 | `out_197` | `*` | Output 198 of the protected subgraph (the value its inside sends out here). |
+| 198 | `out_198` | `*` | Output 199 of the protected subgraph (the value its inside sends out here). |
+| 199 | `out_199` | `*` | Output 200 of the protected subgraph (the value its inside sends out here). |
+| 200 | `out_200` | `*` | Output 201 of the protected subgraph (the value its inside sends out here). |
+| 201 | `out_201` | `*` | Output 202 of the protected subgraph (the value its inside sends out here). |
+| 202 | `out_202` | `*` | Output 203 of the protected subgraph (the value its inside sends out here). |
+| 203 | `out_203` | `*` | Output 204 of the protected subgraph (the value its inside sends out here). |
+| 204 | `out_204` | `*` | Output 205 of the protected subgraph (the value its inside sends out here). |
+| 205 | `out_205` | `*` | Output 206 of the protected subgraph (the value its inside sends out here). |
+| 206 | `out_206` | `*` | Output 207 of the protected subgraph (the value its inside sends out here). |
+| 207 | `out_207` | `*` | Output 208 of the protected subgraph (the value its inside sends out here). |
+| 208 | `out_208` | `*` | Output 209 of the protected subgraph (the value its inside sends out here). |
+| 209 | `out_209` | `*` | Output 210 of the protected subgraph (the value its inside sends out here). |
+| 210 | `out_210` | `*` | Output 211 of the protected subgraph (the value its inside sends out here). |
+| 211 | `out_211` | `*` | Output 212 of the protected subgraph (the value its inside sends out here). |
+| 212 | `out_212` | `*` | Output 213 of the protected subgraph (the value its inside sends out here). |
+| 213 | `out_213` | `*` | Output 214 of the protected subgraph (the value its inside sends out here). |
+| 214 | `out_214` | `*` | Output 215 of the protected subgraph (the value its inside sends out here). |
+| 215 | `out_215` | `*` | Output 216 of the protected subgraph (the value its inside sends out here). |
+| 216 | `out_216` | `*` | Output 217 of the protected subgraph (the value its inside sends out here). |
+| 217 | `out_217` | `*` | Output 218 of the protected subgraph (the value its inside sends out here). |
+| 218 | `out_218` | `*` | Output 219 of the protected subgraph (the value its inside sends out here). |
+| 219 | `out_219` | `*` | Output 220 of the protected subgraph (the value its inside sends out here). |
+| 220 | `out_220` | `*` | Output 221 of the protected subgraph (the value its inside sends out here). |
+| 221 | `out_221` | `*` | Output 222 of the protected subgraph (the value its inside sends out here). |
+| 222 | `out_222` | `*` | Output 223 of the protected subgraph (the value its inside sends out here). |
+| 223 | `out_223` | `*` | Output 224 of the protected subgraph (the value its inside sends out here). |
+| 224 | `out_224` | `*` | Output 225 of the protected subgraph (the value its inside sends out here). |
+| 225 | `out_225` | `*` | Output 226 of the protected subgraph (the value its inside sends out here). |
+| 226 | `out_226` | `*` | Output 227 of the protected subgraph (the value its inside sends out here). |
+| 227 | `out_227` | `*` | Output 228 of the protected subgraph (the value its inside sends out here). |
+| 228 | `out_228` | `*` | Output 229 of the protected subgraph (the value its inside sends out here). |
+| 229 | `out_229` | `*` | Output 230 of the protected subgraph (the value its inside sends out here). |
+| 230 | `out_230` | `*` | Output 231 of the protected subgraph (the value its inside sends out here). |
+| 231 | `out_231` | `*` | Output 232 of the protected subgraph (the value its inside sends out here). |
+| 232 | `out_232` | `*` | Output 233 of the protected subgraph (the value its inside sends out here). |
+| 233 | `out_233` | `*` | Output 234 of the protected subgraph (the value its inside sends out here). |
+| 234 | `out_234` | `*` | Output 235 of the protected subgraph (the value its inside sends out here). |
+| 235 | `out_235` | `*` | Output 236 of the protected subgraph (the value its inside sends out here). |
+| 236 | `out_236` | `*` | Output 237 of the protected subgraph (the value its inside sends out here). |
+| 237 | `out_237` | `*` | Output 238 of the protected subgraph (the value its inside sends out here). |
+| 238 | `out_238` | `*` | Output 239 of the protected subgraph (the value its inside sends out here). |
+| 239 | `out_239` | `*` | Output 240 of the protected subgraph (the value its inside sends out here). |
+| 240 | `out_240` | `*` | Output 241 of the protected subgraph (the value its inside sends out here). |
+| 241 | `out_241` | `*` | Output 242 of the protected subgraph (the value its inside sends out here). |
+| 242 | `out_242` | `*` | Output 243 of the protected subgraph (the value its inside sends out here). |
+| 243 | `out_243` | `*` | Output 244 of the protected subgraph (the value its inside sends out here). |
+| 244 | `out_244` | `*` | Output 245 of the protected subgraph (the value its inside sends out here). |
+| 245 | `out_245` | `*` | Output 246 of the protected subgraph (the value its inside sends out here). |
+| 246 | `out_246` | `*` | Output 247 of the protected subgraph (the value its inside sends out here). |
+| 247 | `out_247` | `*` | Output 248 of the protected subgraph (the value its inside sends out here). |
+| 248 | `out_248` | `*` | Output 249 of the protected subgraph (the value its inside sends out here). |
+| 249 | `out_249` | `*` | Output 250 of the protected subgraph (the value its inside sends out here). |
+| 250 | `out_250` | `*` | Output 251 of the protected subgraph (the value its inside sends out here). |
+| 251 | `out_251` | `*` | Output 252 of the protected subgraph (the value its inside sends out here). |
+| 252 | `out_252` | `*` | Output 253 of the protected subgraph (the value its inside sends out here). |
+| 253 | `out_253` | `*` | Output 254 of the protected subgraph (the value its inside sends out here). |
+| 254 | `out_254` | `*` | Output 255 of the protected subgraph (the value its inside sends out here). |
+| 255 | `out_255` | `*` | Output 256 of the protected subgraph (the value its inside sends out here). |
 
 
 ---
@@ -4274,269 +4274,269 @@ A C2C Vault: a subgraph whose inside is encrypted. It runs with ComfyUI's own sc
 
 | Parameter | Type | Constraints | What it does |
 |---|---|---|---|
-| `vault_id` | `STRING` | default `""` | — |
-| `vault_payload` | `STRING` | default `""` | — |
+| `vault_id` | `STRING` | default `""` | Which vault this is - written when the vault is created; do not edit. |
+| `vault_payload` | `STRING` | default `""` | The encrypted inside of the vault - written when it is locked or sealed; editing it breaks the vault. |
 
 **Outputs**
 
 | # | Name | Type | What it is |
 |---|---|---|---|
-| 0 | `out_0` | `*` | — |
-| 1 | `out_1` | `*` | — |
-| 2 | `out_2` | `*` | — |
-| 3 | `out_3` | `*` | — |
-| 4 | `out_4` | `*` | — |
-| 5 | `out_5` | `*` | — |
-| 6 | `out_6` | `*` | — |
-| 7 | `out_7` | `*` | — |
-| 8 | `out_8` | `*` | — |
-| 9 | `out_9` | `*` | — |
-| 10 | `out_10` | `*` | — |
-| 11 | `out_11` | `*` | — |
-| 12 | `out_12` | `*` | — |
-| 13 | `out_13` | `*` | — |
-| 14 | `out_14` | `*` | — |
-| 15 | `out_15` | `*` | — |
-| 16 | `out_16` | `*` | — |
-| 17 | `out_17` | `*` | — |
-| 18 | `out_18` | `*` | — |
-| 19 | `out_19` | `*` | — |
-| 20 | `out_20` | `*` | — |
-| 21 | `out_21` | `*` | — |
-| 22 | `out_22` | `*` | — |
-| 23 | `out_23` | `*` | — |
-| 24 | `out_24` | `*` | — |
-| 25 | `out_25` | `*` | — |
-| 26 | `out_26` | `*` | — |
-| 27 | `out_27` | `*` | — |
-| 28 | `out_28` | `*` | — |
-| 29 | `out_29` | `*` | — |
-| 30 | `out_30` | `*` | — |
-| 31 | `out_31` | `*` | — |
-| 32 | `out_32` | `*` | — |
-| 33 | `out_33` | `*` | — |
-| 34 | `out_34` | `*` | — |
-| 35 | `out_35` | `*` | — |
-| 36 | `out_36` | `*` | — |
-| 37 | `out_37` | `*` | — |
-| 38 | `out_38` | `*` | — |
-| 39 | `out_39` | `*` | — |
-| 40 | `out_40` | `*` | — |
-| 41 | `out_41` | `*` | — |
-| 42 | `out_42` | `*` | — |
-| 43 | `out_43` | `*` | — |
-| 44 | `out_44` | `*` | — |
-| 45 | `out_45` | `*` | — |
-| 46 | `out_46` | `*` | — |
-| 47 | `out_47` | `*` | — |
-| 48 | `out_48` | `*` | — |
-| 49 | `out_49` | `*` | — |
-| 50 | `out_50` | `*` | — |
-| 51 | `out_51` | `*` | — |
-| 52 | `out_52` | `*` | — |
-| 53 | `out_53` | `*` | — |
-| 54 | `out_54` | `*` | — |
-| 55 | `out_55` | `*` | — |
-| 56 | `out_56` | `*` | — |
-| 57 | `out_57` | `*` | — |
-| 58 | `out_58` | `*` | — |
-| 59 | `out_59` | `*` | — |
-| 60 | `out_60` | `*` | — |
-| 61 | `out_61` | `*` | — |
-| 62 | `out_62` | `*` | — |
-| 63 | `out_63` | `*` | — |
-| 64 | `out_64` | `*` | — |
-| 65 | `out_65` | `*` | — |
-| 66 | `out_66` | `*` | — |
-| 67 | `out_67` | `*` | — |
-| 68 | `out_68` | `*` | — |
-| 69 | `out_69` | `*` | — |
-| 70 | `out_70` | `*` | — |
-| 71 | `out_71` | `*` | — |
-| 72 | `out_72` | `*` | — |
-| 73 | `out_73` | `*` | — |
-| 74 | `out_74` | `*` | — |
-| 75 | `out_75` | `*` | — |
-| 76 | `out_76` | `*` | — |
-| 77 | `out_77` | `*` | — |
-| 78 | `out_78` | `*` | — |
-| 79 | `out_79` | `*` | — |
-| 80 | `out_80` | `*` | — |
-| 81 | `out_81` | `*` | — |
-| 82 | `out_82` | `*` | — |
-| 83 | `out_83` | `*` | — |
-| 84 | `out_84` | `*` | — |
-| 85 | `out_85` | `*` | — |
-| 86 | `out_86` | `*` | — |
-| 87 | `out_87` | `*` | — |
-| 88 | `out_88` | `*` | — |
-| 89 | `out_89` | `*` | — |
-| 90 | `out_90` | `*` | — |
-| 91 | `out_91` | `*` | — |
-| 92 | `out_92` | `*` | — |
-| 93 | `out_93` | `*` | — |
-| 94 | `out_94` | `*` | — |
-| 95 | `out_95` | `*` | — |
-| 96 | `out_96` | `*` | — |
-| 97 | `out_97` | `*` | — |
-| 98 | `out_98` | `*` | — |
-| 99 | `out_99` | `*` | — |
-| 100 | `out_100` | `*` | — |
-| 101 | `out_101` | `*` | — |
-| 102 | `out_102` | `*` | — |
-| 103 | `out_103` | `*` | — |
-| 104 | `out_104` | `*` | — |
-| 105 | `out_105` | `*` | — |
-| 106 | `out_106` | `*` | — |
-| 107 | `out_107` | `*` | — |
-| 108 | `out_108` | `*` | — |
-| 109 | `out_109` | `*` | — |
-| 110 | `out_110` | `*` | — |
-| 111 | `out_111` | `*` | — |
-| 112 | `out_112` | `*` | — |
-| 113 | `out_113` | `*` | — |
-| 114 | `out_114` | `*` | — |
-| 115 | `out_115` | `*` | — |
-| 116 | `out_116` | `*` | — |
-| 117 | `out_117` | `*` | — |
-| 118 | `out_118` | `*` | — |
-| 119 | `out_119` | `*` | — |
-| 120 | `out_120` | `*` | — |
-| 121 | `out_121` | `*` | — |
-| 122 | `out_122` | `*` | — |
-| 123 | `out_123` | `*` | — |
-| 124 | `out_124` | `*` | — |
-| 125 | `out_125` | `*` | — |
-| 126 | `out_126` | `*` | — |
-| 127 | `out_127` | `*` | — |
-| 128 | `out_128` | `*` | — |
-| 129 | `out_129` | `*` | — |
-| 130 | `out_130` | `*` | — |
-| 131 | `out_131` | `*` | — |
-| 132 | `out_132` | `*` | — |
-| 133 | `out_133` | `*` | — |
-| 134 | `out_134` | `*` | — |
-| 135 | `out_135` | `*` | — |
-| 136 | `out_136` | `*` | — |
-| 137 | `out_137` | `*` | — |
-| 138 | `out_138` | `*` | — |
-| 139 | `out_139` | `*` | — |
-| 140 | `out_140` | `*` | — |
-| 141 | `out_141` | `*` | — |
-| 142 | `out_142` | `*` | — |
-| 143 | `out_143` | `*` | — |
-| 144 | `out_144` | `*` | — |
-| 145 | `out_145` | `*` | — |
-| 146 | `out_146` | `*` | — |
-| 147 | `out_147` | `*` | — |
-| 148 | `out_148` | `*` | — |
-| 149 | `out_149` | `*` | — |
-| 150 | `out_150` | `*` | — |
-| 151 | `out_151` | `*` | — |
-| 152 | `out_152` | `*` | — |
-| 153 | `out_153` | `*` | — |
-| 154 | `out_154` | `*` | — |
-| 155 | `out_155` | `*` | — |
-| 156 | `out_156` | `*` | — |
-| 157 | `out_157` | `*` | — |
-| 158 | `out_158` | `*` | — |
-| 159 | `out_159` | `*` | — |
-| 160 | `out_160` | `*` | — |
-| 161 | `out_161` | `*` | — |
-| 162 | `out_162` | `*` | — |
-| 163 | `out_163` | `*` | — |
-| 164 | `out_164` | `*` | — |
-| 165 | `out_165` | `*` | — |
-| 166 | `out_166` | `*` | — |
-| 167 | `out_167` | `*` | — |
-| 168 | `out_168` | `*` | — |
-| 169 | `out_169` | `*` | — |
-| 170 | `out_170` | `*` | — |
-| 171 | `out_171` | `*` | — |
-| 172 | `out_172` | `*` | — |
-| 173 | `out_173` | `*` | — |
-| 174 | `out_174` | `*` | — |
-| 175 | `out_175` | `*` | — |
-| 176 | `out_176` | `*` | — |
-| 177 | `out_177` | `*` | — |
-| 178 | `out_178` | `*` | — |
-| 179 | `out_179` | `*` | — |
-| 180 | `out_180` | `*` | — |
-| 181 | `out_181` | `*` | — |
-| 182 | `out_182` | `*` | — |
-| 183 | `out_183` | `*` | — |
-| 184 | `out_184` | `*` | — |
-| 185 | `out_185` | `*` | — |
-| 186 | `out_186` | `*` | — |
-| 187 | `out_187` | `*` | — |
-| 188 | `out_188` | `*` | — |
-| 189 | `out_189` | `*` | — |
-| 190 | `out_190` | `*` | — |
-| 191 | `out_191` | `*` | — |
-| 192 | `out_192` | `*` | — |
-| 193 | `out_193` | `*` | — |
-| 194 | `out_194` | `*` | — |
-| 195 | `out_195` | `*` | — |
-| 196 | `out_196` | `*` | — |
-| 197 | `out_197` | `*` | — |
-| 198 | `out_198` | `*` | — |
-| 199 | `out_199` | `*` | — |
-| 200 | `out_200` | `*` | — |
-| 201 | `out_201` | `*` | — |
-| 202 | `out_202` | `*` | — |
-| 203 | `out_203` | `*` | — |
-| 204 | `out_204` | `*` | — |
-| 205 | `out_205` | `*` | — |
-| 206 | `out_206` | `*` | — |
-| 207 | `out_207` | `*` | — |
-| 208 | `out_208` | `*` | — |
-| 209 | `out_209` | `*` | — |
-| 210 | `out_210` | `*` | — |
-| 211 | `out_211` | `*` | — |
-| 212 | `out_212` | `*` | — |
-| 213 | `out_213` | `*` | — |
-| 214 | `out_214` | `*` | — |
-| 215 | `out_215` | `*` | — |
-| 216 | `out_216` | `*` | — |
-| 217 | `out_217` | `*` | — |
-| 218 | `out_218` | `*` | — |
-| 219 | `out_219` | `*` | — |
-| 220 | `out_220` | `*` | — |
-| 221 | `out_221` | `*` | — |
-| 222 | `out_222` | `*` | — |
-| 223 | `out_223` | `*` | — |
-| 224 | `out_224` | `*` | — |
-| 225 | `out_225` | `*` | — |
-| 226 | `out_226` | `*` | — |
-| 227 | `out_227` | `*` | — |
-| 228 | `out_228` | `*` | — |
-| 229 | `out_229` | `*` | — |
-| 230 | `out_230` | `*` | — |
-| 231 | `out_231` | `*` | — |
-| 232 | `out_232` | `*` | — |
-| 233 | `out_233` | `*` | — |
-| 234 | `out_234` | `*` | — |
-| 235 | `out_235` | `*` | — |
-| 236 | `out_236` | `*` | — |
-| 237 | `out_237` | `*` | — |
-| 238 | `out_238` | `*` | — |
-| 239 | `out_239` | `*` | — |
-| 240 | `out_240` | `*` | — |
-| 241 | `out_241` | `*` | — |
-| 242 | `out_242` | `*` | — |
-| 243 | `out_243` | `*` | — |
-| 244 | `out_244` | `*` | — |
-| 245 | `out_245` | `*` | — |
-| 246 | `out_246` | `*` | — |
-| 247 | `out_247` | `*` | — |
-| 248 | `out_248` | `*` | — |
-| 249 | `out_249` | `*` | — |
-| 250 | `out_250` | `*` | — |
-| 251 | `out_251` | `*` | — |
-| 252 | `out_252` | `*` | — |
-| 253 | `out_253` | `*` | — |
-| 254 | `out_254` | `*` | — |
-| 255 | `out_255` | `*` | — |
+| 0 | `out_0` | `*` | Output 1 of the protected subgraph (the value its inside sends out here). |
+| 1 | `out_1` | `*` | Output 2 of the protected subgraph (the value its inside sends out here). |
+| 2 | `out_2` | `*` | Output 3 of the protected subgraph (the value its inside sends out here). |
+| 3 | `out_3` | `*` | Output 4 of the protected subgraph (the value its inside sends out here). |
+| 4 | `out_4` | `*` | Output 5 of the protected subgraph (the value its inside sends out here). |
+| 5 | `out_5` | `*` | Output 6 of the protected subgraph (the value its inside sends out here). |
+| 6 | `out_6` | `*` | Output 7 of the protected subgraph (the value its inside sends out here). |
+| 7 | `out_7` | `*` | Output 8 of the protected subgraph (the value its inside sends out here). |
+| 8 | `out_8` | `*` | Output 9 of the protected subgraph (the value its inside sends out here). |
+| 9 | `out_9` | `*` | Output 10 of the protected subgraph (the value its inside sends out here). |
+| 10 | `out_10` | `*` | Output 11 of the protected subgraph (the value its inside sends out here). |
+| 11 | `out_11` | `*` | Output 12 of the protected subgraph (the value its inside sends out here). |
+| 12 | `out_12` | `*` | Output 13 of the protected subgraph (the value its inside sends out here). |
+| 13 | `out_13` | `*` | Output 14 of the protected subgraph (the value its inside sends out here). |
+| 14 | `out_14` | `*` | Output 15 of the protected subgraph (the value its inside sends out here). |
+| 15 | `out_15` | `*` | Output 16 of the protected subgraph (the value its inside sends out here). |
+| 16 | `out_16` | `*` | Output 17 of the protected subgraph (the value its inside sends out here). |
+| 17 | `out_17` | `*` | Output 18 of the protected subgraph (the value its inside sends out here). |
+| 18 | `out_18` | `*` | Output 19 of the protected subgraph (the value its inside sends out here). |
+| 19 | `out_19` | `*` | Output 20 of the protected subgraph (the value its inside sends out here). |
+| 20 | `out_20` | `*` | Output 21 of the protected subgraph (the value its inside sends out here). |
+| 21 | `out_21` | `*` | Output 22 of the protected subgraph (the value its inside sends out here). |
+| 22 | `out_22` | `*` | Output 23 of the protected subgraph (the value its inside sends out here). |
+| 23 | `out_23` | `*` | Output 24 of the protected subgraph (the value its inside sends out here). |
+| 24 | `out_24` | `*` | Output 25 of the protected subgraph (the value its inside sends out here). |
+| 25 | `out_25` | `*` | Output 26 of the protected subgraph (the value its inside sends out here). |
+| 26 | `out_26` | `*` | Output 27 of the protected subgraph (the value its inside sends out here). |
+| 27 | `out_27` | `*` | Output 28 of the protected subgraph (the value its inside sends out here). |
+| 28 | `out_28` | `*` | Output 29 of the protected subgraph (the value its inside sends out here). |
+| 29 | `out_29` | `*` | Output 30 of the protected subgraph (the value its inside sends out here). |
+| 30 | `out_30` | `*` | Output 31 of the protected subgraph (the value its inside sends out here). |
+| 31 | `out_31` | `*` | Output 32 of the protected subgraph (the value its inside sends out here). |
+| 32 | `out_32` | `*` | Output 33 of the protected subgraph (the value its inside sends out here). |
+| 33 | `out_33` | `*` | Output 34 of the protected subgraph (the value its inside sends out here). |
+| 34 | `out_34` | `*` | Output 35 of the protected subgraph (the value its inside sends out here). |
+| 35 | `out_35` | `*` | Output 36 of the protected subgraph (the value its inside sends out here). |
+| 36 | `out_36` | `*` | Output 37 of the protected subgraph (the value its inside sends out here). |
+| 37 | `out_37` | `*` | Output 38 of the protected subgraph (the value its inside sends out here). |
+| 38 | `out_38` | `*` | Output 39 of the protected subgraph (the value its inside sends out here). |
+| 39 | `out_39` | `*` | Output 40 of the protected subgraph (the value its inside sends out here). |
+| 40 | `out_40` | `*` | Output 41 of the protected subgraph (the value its inside sends out here). |
+| 41 | `out_41` | `*` | Output 42 of the protected subgraph (the value its inside sends out here). |
+| 42 | `out_42` | `*` | Output 43 of the protected subgraph (the value its inside sends out here). |
+| 43 | `out_43` | `*` | Output 44 of the protected subgraph (the value its inside sends out here). |
+| 44 | `out_44` | `*` | Output 45 of the protected subgraph (the value its inside sends out here). |
+| 45 | `out_45` | `*` | Output 46 of the protected subgraph (the value its inside sends out here). |
+| 46 | `out_46` | `*` | Output 47 of the protected subgraph (the value its inside sends out here). |
+| 47 | `out_47` | `*` | Output 48 of the protected subgraph (the value its inside sends out here). |
+| 48 | `out_48` | `*` | Output 49 of the protected subgraph (the value its inside sends out here). |
+| 49 | `out_49` | `*` | Output 50 of the protected subgraph (the value its inside sends out here). |
+| 50 | `out_50` | `*` | Output 51 of the protected subgraph (the value its inside sends out here). |
+| 51 | `out_51` | `*` | Output 52 of the protected subgraph (the value its inside sends out here). |
+| 52 | `out_52` | `*` | Output 53 of the protected subgraph (the value its inside sends out here). |
+| 53 | `out_53` | `*` | Output 54 of the protected subgraph (the value its inside sends out here). |
+| 54 | `out_54` | `*` | Output 55 of the protected subgraph (the value its inside sends out here). |
+| 55 | `out_55` | `*` | Output 56 of the protected subgraph (the value its inside sends out here). |
+| 56 | `out_56` | `*` | Output 57 of the protected subgraph (the value its inside sends out here). |
+| 57 | `out_57` | `*` | Output 58 of the protected subgraph (the value its inside sends out here). |
+| 58 | `out_58` | `*` | Output 59 of the protected subgraph (the value its inside sends out here). |
+| 59 | `out_59` | `*` | Output 60 of the protected subgraph (the value its inside sends out here). |
+| 60 | `out_60` | `*` | Output 61 of the protected subgraph (the value its inside sends out here). |
+| 61 | `out_61` | `*` | Output 62 of the protected subgraph (the value its inside sends out here). |
+| 62 | `out_62` | `*` | Output 63 of the protected subgraph (the value its inside sends out here). |
+| 63 | `out_63` | `*` | Output 64 of the protected subgraph (the value its inside sends out here). |
+| 64 | `out_64` | `*` | Output 65 of the protected subgraph (the value its inside sends out here). |
+| 65 | `out_65` | `*` | Output 66 of the protected subgraph (the value its inside sends out here). |
+| 66 | `out_66` | `*` | Output 67 of the protected subgraph (the value its inside sends out here). |
+| 67 | `out_67` | `*` | Output 68 of the protected subgraph (the value its inside sends out here). |
+| 68 | `out_68` | `*` | Output 69 of the protected subgraph (the value its inside sends out here). |
+| 69 | `out_69` | `*` | Output 70 of the protected subgraph (the value its inside sends out here). |
+| 70 | `out_70` | `*` | Output 71 of the protected subgraph (the value its inside sends out here). |
+| 71 | `out_71` | `*` | Output 72 of the protected subgraph (the value its inside sends out here). |
+| 72 | `out_72` | `*` | Output 73 of the protected subgraph (the value its inside sends out here). |
+| 73 | `out_73` | `*` | Output 74 of the protected subgraph (the value its inside sends out here). |
+| 74 | `out_74` | `*` | Output 75 of the protected subgraph (the value its inside sends out here). |
+| 75 | `out_75` | `*` | Output 76 of the protected subgraph (the value its inside sends out here). |
+| 76 | `out_76` | `*` | Output 77 of the protected subgraph (the value its inside sends out here). |
+| 77 | `out_77` | `*` | Output 78 of the protected subgraph (the value its inside sends out here). |
+| 78 | `out_78` | `*` | Output 79 of the protected subgraph (the value its inside sends out here). |
+| 79 | `out_79` | `*` | Output 80 of the protected subgraph (the value its inside sends out here). |
+| 80 | `out_80` | `*` | Output 81 of the protected subgraph (the value its inside sends out here). |
+| 81 | `out_81` | `*` | Output 82 of the protected subgraph (the value its inside sends out here). |
+| 82 | `out_82` | `*` | Output 83 of the protected subgraph (the value its inside sends out here). |
+| 83 | `out_83` | `*` | Output 84 of the protected subgraph (the value its inside sends out here). |
+| 84 | `out_84` | `*` | Output 85 of the protected subgraph (the value its inside sends out here). |
+| 85 | `out_85` | `*` | Output 86 of the protected subgraph (the value its inside sends out here). |
+| 86 | `out_86` | `*` | Output 87 of the protected subgraph (the value its inside sends out here). |
+| 87 | `out_87` | `*` | Output 88 of the protected subgraph (the value its inside sends out here). |
+| 88 | `out_88` | `*` | Output 89 of the protected subgraph (the value its inside sends out here). |
+| 89 | `out_89` | `*` | Output 90 of the protected subgraph (the value its inside sends out here). |
+| 90 | `out_90` | `*` | Output 91 of the protected subgraph (the value its inside sends out here). |
+| 91 | `out_91` | `*` | Output 92 of the protected subgraph (the value its inside sends out here). |
+| 92 | `out_92` | `*` | Output 93 of the protected subgraph (the value its inside sends out here). |
+| 93 | `out_93` | `*` | Output 94 of the protected subgraph (the value its inside sends out here). |
+| 94 | `out_94` | `*` | Output 95 of the protected subgraph (the value its inside sends out here). |
+| 95 | `out_95` | `*` | Output 96 of the protected subgraph (the value its inside sends out here). |
+| 96 | `out_96` | `*` | Output 97 of the protected subgraph (the value its inside sends out here). |
+| 97 | `out_97` | `*` | Output 98 of the protected subgraph (the value its inside sends out here). |
+| 98 | `out_98` | `*` | Output 99 of the protected subgraph (the value its inside sends out here). |
+| 99 | `out_99` | `*` | Output 100 of the protected subgraph (the value its inside sends out here). |
+| 100 | `out_100` | `*` | Output 101 of the protected subgraph (the value its inside sends out here). |
+| 101 | `out_101` | `*` | Output 102 of the protected subgraph (the value its inside sends out here). |
+| 102 | `out_102` | `*` | Output 103 of the protected subgraph (the value its inside sends out here). |
+| 103 | `out_103` | `*` | Output 104 of the protected subgraph (the value its inside sends out here). |
+| 104 | `out_104` | `*` | Output 105 of the protected subgraph (the value its inside sends out here). |
+| 105 | `out_105` | `*` | Output 106 of the protected subgraph (the value its inside sends out here). |
+| 106 | `out_106` | `*` | Output 107 of the protected subgraph (the value its inside sends out here). |
+| 107 | `out_107` | `*` | Output 108 of the protected subgraph (the value its inside sends out here). |
+| 108 | `out_108` | `*` | Output 109 of the protected subgraph (the value its inside sends out here). |
+| 109 | `out_109` | `*` | Output 110 of the protected subgraph (the value its inside sends out here). |
+| 110 | `out_110` | `*` | Output 111 of the protected subgraph (the value its inside sends out here). |
+| 111 | `out_111` | `*` | Output 112 of the protected subgraph (the value its inside sends out here). |
+| 112 | `out_112` | `*` | Output 113 of the protected subgraph (the value its inside sends out here). |
+| 113 | `out_113` | `*` | Output 114 of the protected subgraph (the value its inside sends out here). |
+| 114 | `out_114` | `*` | Output 115 of the protected subgraph (the value its inside sends out here). |
+| 115 | `out_115` | `*` | Output 116 of the protected subgraph (the value its inside sends out here). |
+| 116 | `out_116` | `*` | Output 117 of the protected subgraph (the value its inside sends out here). |
+| 117 | `out_117` | `*` | Output 118 of the protected subgraph (the value its inside sends out here). |
+| 118 | `out_118` | `*` | Output 119 of the protected subgraph (the value its inside sends out here). |
+| 119 | `out_119` | `*` | Output 120 of the protected subgraph (the value its inside sends out here). |
+| 120 | `out_120` | `*` | Output 121 of the protected subgraph (the value its inside sends out here). |
+| 121 | `out_121` | `*` | Output 122 of the protected subgraph (the value its inside sends out here). |
+| 122 | `out_122` | `*` | Output 123 of the protected subgraph (the value its inside sends out here). |
+| 123 | `out_123` | `*` | Output 124 of the protected subgraph (the value its inside sends out here). |
+| 124 | `out_124` | `*` | Output 125 of the protected subgraph (the value its inside sends out here). |
+| 125 | `out_125` | `*` | Output 126 of the protected subgraph (the value its inside sends out here). |
+| 126 | `out_126` | `*` | Output 127 of the protected subgraph (the value its inside sends out here). |
+| 127 | `out_127` | `*` | Output 128 of the protected subgraph (the value its inside sends out here). |
+| 128 | `out_128` | `*` | Output 129 of the protected subgraph (the value its inside sends out here). |
+| 129 | `out_129` | `*` | Output 130 of the protected subgraph (the value its inside sends out here). |
+| 130 | `out_130` | `*` | Output 131 of the protected subgraph (the value its inside sends out here). |
+| 131 | `out_131` | `*` | Output 132 of the protected subgraph (the value its inside sends out here). |
+| 132 | `out_132` | `*` | Output 133 of the protected subgraph (the value its inside sends out here). |
+| 133 | `out_133` | `*` | Output 134 of the protected subgraph (the value its inside sends out here). |
+| 134 | `out_134` | `*` | Output 135 of the protected subgraph (the value its inside sends out here). |
+| 135 | `out_135` | `*` | Output 136 of the protected subgraph (the value its inside sends out here). |
+| 136 | `out_136` | `*` | Output 137 of the protected subgraph (the value its inside sends out here). |
+| 137 | `out_137` | `*` | Output 138 of the protected subgraph (the value its inside sends out here). |
+| 138 | `out_138` | `*` | Output 139 of the protected subgraph (the value its inside sends out here). |
+| 139 | `out_139` | `*` | Output 140 of the protected subgraph (the value its inside sends out here). |
+| 140 | `out_140` | `*` | Output 141 of the protected subgraph (the value its inside sends out here). |
+| 141 | `out_141` | `*` | Output 142 of the protected subgraph (the value its inside sends out here). |
+| 142 | `out_142` | `*` | Output 143 of the protected subgraph (the value its inside sends out here). |
+| 143 | `out_143` | `*` | Output 144 of the protected subgraph (the value its inside sends out here). |
+| 144 | `out_144` | `*` | Output 145 of the protected subgraph (the value its inside sends out here). |
+| 145 | `out_145` | `*` | Output 146 of the protected subgraph (the value its inside sends out here). |
+| 146 | `out_146` | `*` | Output 147 of the protected subgraph (the value its inside sends out here). |
+| 147 | `out_147` | `*` | Output 148 of the protected subgraph (the value its inside sends out here). |
+| 148 | `out_148` | `*` | Output 149 of the protected subgraph (the value its inside sends out here). |
+| 149 | `out_149` | `*` | Output 150 of the protected subgraph (the value its inside sends out here). |
+| 150 | `out_150` | `*` | Output 151 of the protected subgraph (the value its inside sends out here). |
+| 151 | `out_151` | `*` | Output 152 of the protected subgraph (the value its inside sends out here). |
+| 152 | `out_152` | `*` | Output 153 of the protected subgraph (the value its inside sends out here). |
+| 153 | `out_153` | `*` | Output 154 of the protected subgraph (the value its inside sends out here). |
+| 154 | `out_154` | `*` | Output 155 of the protected subgraph (the value its inside sends out here). |
+| 155 | `out_155` | `*` | Output 156 of the protected subgraph (the value its inside sends out here). |
+| 156 | `out_156` | `*` | Output 157 of the protected subgraph (the value its inside sends out here). |
+| 157 | `out_157` | `*` | Output 158 of the protected subgraph (the value its inside sends out here). |
+| 158 | `out_158` | `*` | Output 159 of the protected subgraph (the value its inside sends out here). |
+| 159 | `out_159` | `*` | Output 160 of the protected subgraph (the value its inside sends out here). |
+| 160 | `out_160` | `*` | Output 161 of the protected subgraph (the value its inside sends out here). |
+| 161 | `out_161` | `*` | Output 162 of the protected subgraph (the value its inside sends out here). |
+| 162 | `out_162` | `*` | Output 163 of the protected subgraph (the value its inside sends out here). |
+| 163 | `out_163` | `*` | Output 164 of the protected subgraph (the value its inside sends out here). |
+| 164 | `out_164` | `*` | Output 165 of the protected subgraph (the value its inside sends out here). |
+| 165 | `out_165` | `*` | Output 166 of the protected subgraph (the value its inside sends out here). |
+| 166 | `out_166` | `*` | Output 167 of the protected subgraph (the value its inside sends out here). |
+| 167 | `out_167` | `*` | Output 168 of the protected subgraph (the value its inside sends out here). |
+| 168 | `out_168` | `*` | Output 169 of the protected subgraph (the value its inside sends out here). |
+| 169 | `out_169` | `*` | Output 170 of the protected subgraph (the value its inside sends out here). |
+| 170 | `out_170` | `*` | Output 171 of the protected subgraph (the value its inside sends out here). |
+| 171 | `out_171` | `*` | Output 172 of the protected subgraph (the value its inside sends out here). |
+| 172 | `out_172` | `*` | Output 173 of the protected subgraph (the value its inside sends out here). |
+| 173 | `out_173` | `*` | Output 174 of the protected subgraph (the value its inside sends out here). |
+| 174 | `out_174` | `*` | Output 175 of the protected subgraph (the value its inside sends out here). |
+| 175 | `out_175` | `*` | Output 176 of the protected subgraph (the value its inside sends out here). |
+| 176 | `out_176` | `*` | Output 177 of the protected subgraph (the value its inside sends out here). |
+| 177 | `out_177` | `*` | Output 178 of the protected subgraph (the value its inside sends out here). |
+| 178 | `out_178` | `*` | Output 179 of the protected subgraph (the value its inside sends out here). |
+| 179 | `out_179` | `*` | Output 180 of the protected subgraph (the value its inside sends out here). |
+| 180 | `out_180` | `*` | Output 181 of the protected subgraph (the value its inside sends out here). |
+| 181 | `out_181` | `*` | Output 182 of the protected subgraph (the value its inside sends out here). |
+| 182 | `out_182` | `*` | Output 183 of the protected subgraph (the value its inside sends out here). |
+| 183 | `out_183` | `*` | Output 184 of the protected subgraph (the value its inside sends out here). |
+| 184 | `out_184` | `*` | Output 185 of the protected subgraph (the value its inside sends out here). |
+| 185 | `out_185` | `*` | Output 186 of the protected subgraph (the value its inside sends out here). |
+| 186 | `out_186` | `*` | Output 187 of the protected subgraph (the value its inside sends out here). |
+| 187 | `out_187` | `*` | Output 188 of the protected subgraph (the value its inside sends out here). |
+| 188 | `out_188` | `*` | Output 189 of the protected subgraph (the value its inside sends out here). |
+| 189 | `out_189` | `*` | Output 190 of the protected subgraph (the value its inside sends out here). |
+| 190 | `out_190` | `*` | Output 191 of the protected subgraph (the value its inside sends out here). |
+| 191 | `out_191` | `*` | Output 192 of the protected subgraph (the value its inside sends out here). |
+| 192 | `out_192` | `*` | Output 193 of the protected subgraph (the value its inside sends out here). |
+| 193 | `out_193` | `*` | Output 194 of the protected subgraph (the value its inside sends out here). |
+| 194 | `out_194` | `*` | Output 195 of the protected subgraph (the value its inside sends out here). |
+| 195 | `out_195` | `*` | Output 196 of the protected subgraph (the value its inside sends out here). |
+| 196 | `out_196` | `*` | Output 197 of the protected subgraph (the value its inside sends out here). |
+| 197 | `out_197` | `*` | Output 198 of the protected subgraph (the value its inside sends out here). |
+| 198 | `out_198` | `*` | Output 199 of the protected subgraph (the value its inside sends out here). |
+| 199 | `out_199` | `*` | Output 200 of the protected subgraph (the value its inside sends out here). |
+| 200 | `out_200` | `*` | Output 201 of the protected subgraph (the value its inside sends out here). |
+| 201 | `out_201` | `*` | Output 202 of the protected subgraph (the value its inside sends out here). |
+| 202 | `out_202` | `*` | Output 203 of the protected subgraph (the value its inside sends out here). |
+| 203 | `out_203` | `*` | Output 204 of the protected subgraph (the value its inside sends out here). |
+| 204 | `out_204` | `*` | Output 205 of the protected subgraph (the value its inside sends out here). |
+| 205 | `out_205` | `*` | Output 206 of the protected subgraph (the value its inside sends out here). |
+| 206 | `out_206` | `*` | Output 207 of the protected subgraph (the value its inside sends out here). |
+| 207 | `out_207` | `*` | Output 208 of the protected subgraph (the value its inside sends out here). |
+| 208 | `out_208` | `*` | Output 209 of the protected subgraph (the value its inside sends out here). |
+| 209 | `out_209` | `*` | Output 210 of the protected subgraph (the value its inside sends out here). |
+| 210 | `out_210` | `*` | Output 211 of the protected subgraph (the value its inside sends out here). |
+| 211 | `out_211` | `*` | Output 212 of the protected subgraph (the value its inside sends out here). |
+| 212 | `out_212` | `*` | Output 213 of the protected subgraph (the value its inside sends out here). |
+| 213 | `out_213` | `*` | Output 214 of the protected subgraph (the value its inside sends out here). |
+| 214 | `out_214` | `*` | Output 215 of the protected subgraph (the value its inside sends out here). |
+| 215 | `out_215` | `*` | Output 216 of the protected subgraph (the value its inside sends out here). |
+| 216 | `out_216` | `*` | Output 217 of the protected subgraph (the value its inside sends out here). |
+| 217 | `out_217` | `*` | Output 218 of the protected subgraph (the value its inside sends out here). |
+| 218 | `out_218` | `*` | Output 219 of the protected subgraph (the value its inside sends out here). |
+| 219 | `out_219` | `*` | Output 220 of the protected subgraph (the value its inside sends out here). |
+| 220 | `out_220` | `*` | Output 221 of the protected subgraph (the value its inside sends out here). |
+| 221 | `out_221` | `*` | Output 222 of the protected subgraph (the value its inside sends out here). |
+| 222 | `out_222` | `*` | Output 223 of the protected subgraph (the value its inside sends out here). |
+| 223 | `out_223` | `*` | Output 224 of the protected subgraph (the value its inside sends out here). |
+| 224 | `out_224` | `*` | Output 225 of the protected subgraph (the value its inside sends out here). |
+| 225 | `out_225` | `*` | Output 226 of the protected subgraph (the value its inside sends out here). |
+| 226 | `out_226` | `*` | Output 227 of the protected subgraph (the value its inside sends out here). |
+| 227 | `out_227` | `*` | Output 228 of the protected subgraph (the value its inside sends out here). |
+| 228 | `out_228` | `*` | Output 229 of the protected subgraph (the value its inside sends out here). |
+| 229 | `out_229` | `*` | Output 230 of the protected subgraph (the value its inside sends out here). |
+| 230 | `out_230` | `*` | Output 231 of the protected subgraph (the value its inside sends out here). |
+| 231 | `out_231` | `*` | Output 232 of the protected subgraph (the value its inside sends out here). |
+| 232 | `out_232` | `*` | Output 233 of the protected subgraph (the value its inside sends out here). |
+| 233 | `out_233` | `*` | Output 234 of the protected subgraph (the value its inside sends out here). |
+| 234 | `out_234` | `*` | Output 235 of the protected subgraph (the value its inside sends out here). |
+| 235 | `out_235` | `*` | Output 236 of the protected subgraph (the value its inside sends out here). |
+| 236 | `out_236` | `*` | Output 237 of the protected subgraph (the value its inside sends out here). |
+| 237 | `out_237` | `*` | Output 238 of the protected subgraph (the value its inside sends out here). |
+| 238 | `out_238` | `*` | Output 239 of the protected subgraph (the value its inside sends out here). |
+| 239 | `out_239` | `*` | Output 240 of the protected subgraph (the value its inside sends out here). |
+| 240 | `out_240` | `*` | Output 241 of the protected subgraph (the value its inside sends out here). |
+| 241 | `out_241` | `*` | Output 242 of the protected subgraph (the value its inside sends out here). |
+| 242 | `out_242` | `*` | Output 243 of the protected subgraph (the value its inside sends out here). |
+| 243 | `out_243` | `*` | Output 244 of the protected subgraph (the value its inside sends out here). |
+| 244 | `out_244` | `*` | Output 245 of the protected subgraph (the value its inside sends out here). |
+| 245 | `out_245` | `*` | Output 246 of the protected subgraph (the value its inside sends out here). |
+| 246 | `out_246` | `*` | Output 247 of the protected subgraph (the value its inside sends out here). |
+| 247 | `out_247` | `*` | Output 248 of the protected subgraph (the value its inside sends out here). |
+| 248 | `out_248` | `*` | Output 249 of the protected subgraph (the value its inside sends out here). |
+| 249 | `out_249` | `*` | Output 250 of the protected subgraph (the value its inside sends out here). |
+| 250 | `out_250` | `*` | Output 251 of the protected subgraph (the value its inside sends out here). |
+| 251 | `out_251` | `*` | Output 252 of the protected subgraph (the value its inside sends out here). |
+| 252 | `out_252` | `*` | Output 253 of the protected subgraph (the value its inside sends out here). |
+| 253 | `out_253` | `*` | Output 254 of the protected subgraph (the value its inside sends out here). |
+| 254 | `out_254` | `*` | Output 255 of the protected subgraph (the value its inside sends out here). |
+| 255 | `out_255` | `*` | Output 256 of the protected subgraph (the value its inside sends out here). |
 
 
 ---
@@ -4728,8 +4728,8 @@ Add repeated frames at the head (or tail) to stabilise a video model, then trim 
 
 | Parameter | Type | Constraints | What it does |
 |---|---|---|---|
-| `images` | `IMAGE` |  | — |
-| `audio` | `AUDIO` |  | — |
+| `images` | `IMAGE` |  | The clip to pad or trim (fit mode needs it). Wire images, audio or both. |
+| `audio` | `AUDIO` |  | Audio moved by the same duration as the frames, so it stays in sync. |
 | `target_frames` | `INT` | default `0`, range 0…100000, step 1 | FIT mode: how many frames you want OUT. The model's own grid is an implementation detail — ask for 64 and you get 64, whatever the model needs to render to make them. 0 in fit mode means 'use the clip's current length as the target', which pads it to something the model accepts and trims straight back. |
 | `model` | choice: `none (any frame count)`, `MiniMax H3 (17n+5)`, `Wan 2.x (4n+1)`, `LTX / LTX-2 (8n+1)`, `Hunyuan Video (4n+1)`, `CogVideoX (8n+1)`, `Mochi (6n+1)`, `custom (step / plus)` | default `"MiniMax H3 (17n+5)"` | FIT, and ADD with padding_mode 'model preset': which model's frame grid to land on. Every video model wants step*n + plus frames and they disagree only on the numbers: H3 is 17n+5, Wan is 4n+1, LTX is 8n+1. Hand a model a count it does not accept and it does not complain — it reinterprets the clip, and the result comes out at the wrong speed. |
 | `custom_step` | `INT` | default `4`, range 1…1000 | Only used when model is 'custom'. |
@@ -4757,6 +4757,8 @@ Add repeated frames at the head (or tail) to stabilise a video model, then trim 
 
 **Shown in the menu as:** Load Images Path (C2C)
 
+Load a folder of numbered images as frames, in name order, with a cap, a skip and every-Nth selection. The folder must be inside ComfyUI's input / output / media roots.
+
 **Source:** `ComfyUI-CustomNodePacks/nodes/c2c_video/nodes_load.py`  
 **Provenance:** ComfyUI-4K-Video-Save-Load — HallettVisual (Matthew Hallett) (https://github.com/HallettVisual/ComfyUI-4K-Video-Save-Load) - per CREDITS.md
 
@@ -4778,10 +4780,10 @@ Add repeated frames at the head (or tail) to stabilise a video model, then trim 
 
 | # | Name | Type | What it is |
 |---|---|---|---|
-| 0 | `IMAGE` | `IMAGE` | — |
-| 1 | `MASK` | `MASK` | — |
-| 2 | `frame_count` | `INT` | — |
-| 3 | `video` | `C2C_VIDEO` | — |
+| 0 | `IMAGE` | `IMAGE` | The frames. |
+| 1 | `MASK` | `MASK` | 1 - alpha of each frame when the images have alpha. |
+| 2 | `frame_count` | `INT` | Frames loaded. |
+| 3 | `video` | `C2C_VIDEO` | The lazy media handle for the C2C video nodes. |
 
 
 ---
@@ -4789,6 +4791,8 @@ Add repeated frames at the head (or tail) to stabilise a video model, then trim 
 ### LoadVideoC2C
 
 **Shown in the menu as:** Load Video (C2C)
+
+Load a video, an image sequence or an EXR sequence as frames - streamed, not decoded all at once - with VHS-style frame rate, size, cap, skip and every-Nth controls, audio, alpha as a mask, and a frame map back to the source frame numbers. With a VAE connected it returns a LATENT.
 
 **Source:** `ComfyUI-CustomNodePacks/nodes/c2c_video/nodes_load.py`  
 **Provenance:** ComfyUI-4K-Video-Save-Load — HallettVisual (Matthew Hallett) (https://github.com/HallettVisual/ComfyUI-4K-Video-Save-Load) - per CREDITS.md
@@ -4966,7 +4970,7 @@ Save an IMAGE batch as H.264/H.265/ProRes/DNxHR/FFV1/WebM/GIF/WebP or 16-bit PNG
 |---|---|---|---|
 | `format` | choice: `custom (container / codec)`, `MP4 H.264`, `MP4 H.265 10-bit`, `MOV ProRes 422`, `MOV ProRes 422 HQ`, `MOV ProRes 4444`, `MOV ProRes 4444 XQ`, `MOV DNxHR HQ`, … (+14) | default `"custom (container / codec)"` | custom: choose container, codec, profile, bit depth and chroma below. The other entries are the old single list, kept so saved workflows encode as before. |
 | `fps` | `FLOAT` | default `24.0`, range 0.001…240.0, step 0.001 | Frame rate for the written file. When video_info is wired and fps is left at 24, loaded_fps from the loader is used. |
-| `filename_prefix` | `STRING` | default `"C2C/video"` | — |
+| `filename_prefix` | `STRING` | default `"C2C/video"` | File name start; may include folders. Folder Version Incrementer naming uses the version name instead. 'auto (from Load)' = the followed Load Video's name. |
 | `quality` | `INT` | default `80`, range 0…100, step 1 | Encoder quality where the format supports it (CRF / qscale / ProRes profile). Hidden for lossless formats. |
 
 **Optional inputs**
@@ -4974,14 +4978,14 @@ Save an IMAGE batch as H.264/H.265/ProRes/DNxHR/FFV1/WebM/GIF/WebP or 16-bit PNG
 | Parameter | Type | Constraints | What it does |
 |---|---|---|---|
 | `images` | `IMAGE` |  | The frames to save. Or wire latent + vae instead to decode and save as one stream. |
-| `audio` | `AUDIO` |  | — |
-| `video_info` | `VHS_VIDEOINFO` |  | — |
-| `colorspace_in` | choice: `auto (from Load)`, `ACES2065-1`, `ACEScc`, `ACEScct`, `ACEScg`, `ADX10`, `ADX16`, `ARRI LogC3 (EI800)`, … (+48) | default `"sRGB - Display"` | — |
-| `colorspace_out` | choice: `same as input`, `auto (from Load)`, `ACES2065-1`, `ACEScc`, `ACEScct`, `ACEScg`, `ADX10`, `ADX16`, … (+49) | default `"same as input"` | — |
+| `audio` | `AUDIO` |  | Muxed into the file when the container takes audio. |
+| `video_info` | `VHS_VIDEOINFO` |  | From Load Video (C2C): frame rate, handles and colour of the source. Without it the node follows the images back to their Load Video. |
+| `colorspace_in` | choice: `auto (from Load)`, `ACES2065-1`, `ACEScc`, `ACEScct`, `ACEScg`, `ADX10`, `ADX16`, `ARRI LogC3 (EI800)`, … (+48) | default `"sRGB - Display"` | OCIO colour space the frames are in. auto (from Load) = the space Load Video (C2C) gave them, so Save reverses exactly what Load did. |
+| `colorspace_out` | choice: `same as input`, `auto (from Load)`, `ACES2065-1`, `ACEScc`, `ACEScct`, `ACEScg`, `ADX10`, `ADX16`, … (+49) | default `"same as input"` | OCIO colour space written to the file. same as input = no conversion; auto (from Load) = the source file's own space. |
 | `naming` | choice: `default`, `ComfyUI counter`, `Folder Version Incrementer`, `Folder Version` | default `"default"` | Folder Version Incrementer: the version folder and name come from the Folder Version Incrementer node in this graph (no wire needed), or from the incrementer's defaults when there is none; a wired subfolder still wins. ComfyUI counter: prefix_00001 like Save Image. default: the C2C setting (Folder Version Incrementer unless you changed it). |
 | `naming_resolved` | `STRING` | default `""` | Set by the UI from c2c.saveVideo.naming. |
-| `subfolder` | `STRING` | default `""` | — |
-| `save_output` | `BOOLEAN` | default `True` | — |
+| `subfolder` | `STRING` | default `""` | Folder inside the output folder. When set it wins over the Folder Version Incrementer folder. |
+| `save_output` | `BOOLEAN` | default `True` | On: write to the output folder. Off: write a temp file for the preview only (no version folder). |
 | `latent` | `LATENT` |  | Stream save: a video latent decoded straight into the file, in order, keeping the VAE's causal state - the full frame batch is never held in RAM. Wire this and vae instead of images. |
 | `vae` | `VAE` |  | The VAE for latent (stream save). |
 | `tile_mode` | choice: `auto`, `off`, `manual` | default `"auto"` | Stream save, Wan VAEs: auto tiles only when the frame would not fit the GPU (2K on 8 GB -> 512 px). Each tile is decoded over the whole clip in one causal pass and blended on disk, so the clip never sits in RAM. off: no tiles. manual: tile_size. |
@@ -5019,8 +5023,8 @@ Save an IMAGE batch as H.264/H.265/ProRes/DNxHR/FFV1/WebM/GIF/WebP or 16-bit PNG
 
 | # | Name | Type | What it is |
 |---|---|---|---|
-| 0 | `filenames` | `STRING` | — |
-| 1 | `preview` | `IMAGE` | — |
+| 0 | `filenames` | `STRING` | Full paths of the written file(s), one per line (empty in 'preview first' mode). |
+| 1 | `preview` | `IMAGE` | The saved frames (the last frame only when streaming a latent or previewing first). |
 
 
 ---
@@ -5028,6 +5032,8 @@ Save an IMAGE batch as H.264/H.265/ProRes/DNxHR/FFV1/WebM/GIF/WebP or 16-bit PNG
 ### VideoInfoC2C
 
 **Shown in the menu as:** Video Info (C2C)
+
+Read a loader's video_info as numbers: the source file's frame rate, frame count, duration (s) and size, and the same for what was actually loaded (after skipping, caps and resizing).
 
 **Source:** `ComfyUI-CustomNodePacks/nodes/c2c_video/nodes_load.py`  
 **Provenance:** ComfyUI-4K-Video-Save-Load — HallettVisual (Matthew Hallett) (https://github.com/HallettVisual/ComfyUI-4K-Video-Save-Load) - per CREDITS.md
@@ -5042,16 +5048,16 @@ Save an IMAGE batch as H.264/H.265/ProRes/DNxHR/FFV1/WebM/GIF/WebP or 16-bit PNG
 
 | # | Name | Type | What it is |
 |---|---|---|---|
-| 0 | `source_fps` | `FLOAT` | — |
-| 1 | `source_frame_count` | `INT` | — |
-| 2 | `source_duration` | `FLOAT` | — |
-| 3 | `source_width` | `INT` | — |
-| 4 | `source_height` | `INT` | — |
-| 5 | `loaded_fps` | `FLOAT` | — |
-| 6 | `loaded_frame_count` | `INT` | — |
-| 7 | `loaded_duration` | `FLOAT` | — |
-| 8 | `loaded_width` | `INT` | — |
-| 9 | `loaded_height` | `INT` | — |
+| 0 | `source_fps` | `FLOAT` | Source frame rate. |
+| 1 | `source_frame_count` | `INT` | Frames in the source. |
+| 2 | `source_duration` | `FLOAT` | Source duration in seconds. |
+| 3 | `source_width` | `INT` | Source width in pixels. |
+| 4 | `source_height` | `INT` | Source height in pixels. |
+| 5 | `loaded_fps` | `FLOAT` | Frame rate of the loaded frames. |
+| 6 | `loaded_frame_count` | `INT` | Frames loaded. |
+| 7 | `loaded_duration` | `FLOAT` | Duration of the loaded frames in seconds. |
+| 8 | `loaded_width` | `INT` | Loaded width in pixels. |
+| 9 | `loaded_height` | `INT` | Loaded height in pixels. |
 
 
 ---
@@ -5083,7 +5089,7 @@ Viewer helper (hidden): finds objects on one frame (text, points or boxes) for t
 | `text` | `STRING` | default `""` | What to find, comma-separated (person, dog). |
 | `points` | `STRING` | default `""` | Clicks: [{"x":0.4,"y":0.5,"label":1}] in 0..1. |
 | `boxes` | `STRING` | default `""` | Boxes: [[x0,y0,x1,y1]] in 0..1. |
-| `max_side` | `INT` | default `960`, range 64…2048, step 16 | — |
+| `max_side` | `INT` | default `960`, range 64…2048, step 16 | Longest side of the object masks the viewer gets, in pixels (detection itself runs on the full frame). |
 
 
 ---
@@ -5136,8 +5142,8 @@ Viewer helper (hidden): writes the rendered alpha and the plate as proxy frames 
 |---|---|---|---|
 | `coarse` | `MASK` |  | Mask + Matting's mask (the segmenter's coarse selection). |
 | `info` | `STRING` |  | Mask + Matting's info output (names the frames a run left empty). |
-| `max_side` | `INT` | default `960`, range 64…2048, step 16 | — |
-| `max_frames` | `INT` | default `120`, range 1…2000 | — |
+| `max_side` | `INT` | default `960`, range 64…2048, step 16 | Longest side of the preview images the viewer gets, in pixels (display only - the matte itself is untouched). |
+| `max_frames` | `INT` | default `120`, range 1…2000 | Most frames sent to the viewer; longer renders are sampled evenly. |
 
 
 ---
