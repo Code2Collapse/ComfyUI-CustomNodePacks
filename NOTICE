@@ -190,3 +190,9 @@ Vendored third-party packages (under third_party/):
       Source:   https://github.com/pixaroma/ComfyUI-Pixaroma
       License:  MIT (js/c2c_ui/LICENSE-PIXAROMA.txt)
       Usage:    Nodes 2.0 renderer detection / resize helpers. NOTICE line added 2026-11-07 (A24 audit).
+
+  * ComfyUI-AusBoss (nodes/c2c_video/save_delivery.py pingpong_frames)
+      Author:   ausboss
+      Source:   https://github.com/ausboss/ComfyUI-AusBoss (nodes/_video_save_helpers.py)
+      License:  MIT, Copyright (c) 2026 ausboss
+      Usage:    Save Video (C2C) pingpong loop, L9.171 (A25 AusBoss parity).

@@ -20,6 +20,7 @@ from .c2c_video import save_matrix as SM
 from .c2c_video import handles_io as HIO
 from .c2c_video import save_naming as SN
 from .c2c_video import save_encode as SE
+from .c2c_video import save_delivery as DL
 from .c2c_video.save_formats import (
     SaveVideoError,
     available_formats,
@@ -178,6 +179,19 @@ class SaveVideoC2C:
                     "Four corners, top-left | top-right | bottom-left | bottom-right, with {shot} {version} {frame} "
                     "{tc} {date} {artist} {colour}. The frame and timecode are the source's when Save carried them."}),
                 "burn_in_artist": ("STRING", {"default": "", "tooltip": "What {artist} writes in the custom template."}),
+                # L9.171 (A25: AusBoss Save Video pingpong; spec item 73.2 delivery manifest) - appended
+                "pingpong": ("BOOLEAN", {"default": False, "tooltip":
+                    "Bounce the clip for a seamless loop: forward, then backward without repeating the two "
+                    "turnaround frames (n frames -> 2n-2). Audio is bounced with the picture. Applied after the "
+                    "handles trim and the export range (the 'preview first' preview shows the clip unbounced). Needs "
+                    "an IMAGE batch, not a streamed latent save; source frame numbers and timecode are not carried "
+                    "into the file when on."}),
+                "write_manifest": ("BOOLEAN", {"default": False, "tooltip":
+                    "Also write '<name>.manifest.json' next to the file ('<folder>.manifest.json' for an image "
+                    "sequence): which source frames were written (after handles, range, pingpong), the audio, the "
+                    "codec / profile / encoder settings, the OCIO colour transform and colour tags, and an output "
+                    "check that reads the written file back (frame count, size, frame rate, audio stream). A failed "
+                    "check is also shown as a warning on the node."}),
             },
             "hidden": {"prompt": "PROMPT", "extra_pnginfo": "EXTRA_PNGINFO", "unique_id": "UNIQUE_ID"},
         }
@@ -194,7 +208,8 @@ class SaveVideoC2C:
             "naming_resolved": naming_resolved, "subfolder": subfolder,
             "save_output": save_output,
         }
-        settings.update({k: v for k, v in kw.items() if isinstance(v, (str, int, float, bool))})   # L9.40 widgets
+        settings.update({k: v for k, v in kw.items() if isinstance(v, (str, int, float, bool))
+                         and not (k in APPENDED_AFTER_A28 and v is False)})   # L9.40 widgets; L9.171 off = as before
         for k, v in sorted(settings.items()):
             h.update(f"{k}={v}".encode())
         if torch.is_tensor(images):
@@ -264,13 +279,16 @@ class SaveVideoC2C:
         burn_in="standard",
         burn_in_template=SR.STANDARD_TEMPLATE,
         burn_in_artist="",
+        pingpong=False,
+        write_manifest=False,
         prompt=None,
         extra_pnginfo=None,
         unique_id=None,
     ):
         settings = {k: v for k, v in locals().items()
                     if k not in ("self", "images", "audio", "latent", "vae", "prompt", "extra_pnginfo", "unique_id",
-                                 "write_token", "write_mode", "video_info", "range_in", "range_out")}
+                                 "write_token", "write_mode", "video_info", "range_in", "range_out")
+                    and not (k in APPENDED_AFTER_A28 and not v)}       # L9.171: off = the old fingerprint
         stream_info = None
         if latent is not None or vae is not None:
             if images is not None:
@@ -393,6 +411,26 @@ class SaveVideoC2C:
             trim_exact = (int(trim_rep.get("head", 0)), int(trim_rep.get("tail", 0))) == \
                 (int(hrec.get("head", 0)), int(hrec.get("tail", 0)))
             carry = SMETA.delivered(src_rec, int(r_in), int(images.shape[0]), trim_exact)
+        # L9.171: which frames of the arriving clip are written, for the manifest (pingpong reorders them)
+        src_index = [int(trim_rep.get("head", 0)) + int(r_in) + i for i in range(int(images.shape[0]))]
+        carry_numbers = list((carry or {}).get("numbers") or [])
+        pp_warn: list[str] = []
+        if pingpong:
+            if not torch.is_tensor(images):
+                raise SaveVideoError("pingpong needs an IMAGE batch: a streamed save (latent + vae) reads its frames "
+                                     "once, front to back, so it cannot play them backwards. Turn pingpong off or "
+                                     "decode to images first.")
+            n_before = int(images.shape[0])
+            images = DL.pingpong_frames(images)
+            audio = DL.pingpong_audio(audio, n_before, eff_fps)
+            if n_before >= 3:
+                src_index = src_index + src_index[::-1][1:-1]
+                if carry is not None:
+                    carry = None
+                    pp_warn.append("pingpong: source frame numbers and timecode are not carried (the frames run "
+                                   "backwards).")
+            else:
+                pp_warn.append(f"pingpong: {n_before} frame(s) have nothing to bounce through - written unchanged.")
 
         _, h, w, _ = images.shape
         naming_eff = effective_naming(str(naming), str(naming_resolved or ""))
@@ -478,6 +516,60 @@ class SaveVideoC2C:
                 first = getattr(images, "first_frame", None)
             workflow_png = write_workflow_png(first, path_info[0], prompt, extra_pnginfo)
 
+        manifest = None
+        if write_manifest:                      # L9.171 (A25 spec item 73.2): delivery manifest + output check
+            validation = DL.validate_output(result["paths"], spec, frames=int(result["frames"]),
+                                            width=int(result["width"]), height=int(result["height"]),
+                                            fps=float(result["fps"]), audio_expected=audio is not None)
+            aud = None
+            if isinstance(audio, dict) and audio.get("waveform") is not None:
+                wv = audio["waveform"]
+                sr = int(audio["sample_rate"])
+                takes = bool(spec.audio_codec) or bool(spec.sequence)      # sequences get a .wav beside them
+                aud = {"sample_rate": sr, "channels": int(wv.shape[-2]) if wv.ndim >= 2 else 1,
+                       "samples_in": int(wv.shape[-1]),
+                       "samples_written": int(round(int(result["frames"]) / float(result["fps"]) * sr)) if takes
+                       else 0,
+                       "duration_s": round(int(wv.shape[-1]) / float(sr), 6) if sr else 0.0,
+                       "written": takes,
+                       "codec": spec.audio_codec if not spec.sequence else "wav (pcm_s16le) sidecar"}
+            import datetime as _dt
+            data = {
+                "c2c_manifest": 1, "node": "SaveVideoC2C",
+                "written": _dt.datetime.now().astimezone().isoformat(timespec="seconds"),
+                "outputs": list(result["paths"]),
+                "format": {"label": spec.label, "container": spec.container, "codec": spec.codec,
+                           "profile": spec.profile, "ext": spec.ext, "bit_depth": spec.bit_depth,
+                           "pix_fmt": spec.pix_fmt_for(bool(result["alpha"])), "alpha": bool(result["alpha"]),
+                           "quality": int(quality), "format_from": format_how,
+                           "encoder": {"preset": extras.encoder_preset, "gop": extras.gop,
+                                       "bitrate_kbps": extras.bitrate_kbps, "channels": extras.channels,
+                                       "png_compression": extras.png_compression}},
+                "frames": int(result["frames"]), "fps": float(result["fps"]),
+                "width": int(result["width"]), "height": int(result["height"]),
+                "source": {"handles": trim_rep, "range": [int(r_in), int(r_out)], "pingpong": bool(pingpong),
+                           "frame_runs": DL.frame_runs(src_index),
+                           "source_numbers": DL.frame_runs(carry_numbers) if carry_numbers else None,
+                           "timecode": (carry or {}).get("timecode"),
+                           "streamed": stream_info is not None},
+                "audio": aud,
+                "colour": {"colorspace_in": cs_in, "colorspace_out": result.get("colorspace"),
+                           "tags": {"primaries": colour.primaries, "transfer": colour.transfer,
+                                    "range": colour.range},
+                           "plan": None if cm_plan is None else cm_plan.report(), "interop_id": exr_id},
+                "review": review, "workflow_png": workflow_png,
+                "warnings": pp_warn + list(result.get("warnings") or []),
+                "validation": validation,
+            }
+            try:
+                manifest = {"path": DL.write_manifest(DL.manifest_path(path_info[0], bool(spec.sequence)), data),
+                            "validation": validation}
+            except OSError as exc:
+                manifest = {"path": None, "validation": validation, "error": str(exc)}
+                pp_warn.append(f"the manifest could not be written: {exc}")
+            if not validation["ok"]:
+                pp_warn.append("output check: " + "; ".join(validation["problems"]))
+
         if stream_info is not None:
             result["warnings"] = list(result.get("warnings") or []) + list(stream_info.warnings)
             images.close()
@@ -496,7 +588,7 @@ class SaveVideoC2C:
             "colorspace": result["colorspace"],
             "alpha": result["alpha"],
             "preview": result["preview"],
-            "warnings": link_warn + list(result.get("warnings") or []),
+            "warnings": link_warn + list(result.get("warnings") or []) + pp_warn,
             "link": link_report,
             "name_from": name_note,
             "review": review,
@@ -520,6 +612,9 @@ class SaveVideoC2C:
             "source": source_proxy,
             **common,
         }
+        if manifest is not None:                 # L9.171: only when write_manifest is on
+            ui_entry["manifest"] = manifest["path"]
+            ui_entry["validation"] = manifest["validation"]
         return {
             "ui": {"c2c_save_video": [ui_entry]},
             "result": (filenames, images),
@@ -548,6 +643,9 @@ def _fingerprint(settings: dict, images, latent) -> str:
     return h.hexdigest()[:16]
 
 
+#: L9.171 inputs appended after the A28 signature pin (tests/test_a28_cnp_a_layout.py leaves these out of its hash).
+APPENDED_AFTER_A28 = ("pingpong", "write_manifest")
+
 NODE_CLASS_MAPPINGS = {"SaveVideoC2C": SaveVideoC2C}
 NODE_DISPLAY_NAME_MAPPINGS = {"SaveVideoC2C": "Save Video (C2C)"}
 
@@ -563,7 +661,7 @@ except ImportError:  # pragma: no cover - loaded outside the pack
 if declare_layout is not None:
     declare_layout(SaveVideoC2C, sections(
         Colour=["colorspace_in", "colorspace_out", "color_primaries", "color_transfer", "color_range"],
-        Output=["naming", "subfolder", "save_output", "save_metadata", "write_mode"],
+        Output=["naming", "subfolder", "save_output", "save_metadata", "write_mode", "pingpong", "write_manifest"],
         Handles=["handles_trim", "trim_frames", "trim_side"],
         Encoder=["encoder_preset", "gop", "bitrate_kbps", "channels", "png_compression"],
         Review=["review_copy", "burn_in", "burn_in_template", "burn_in_artist"]))

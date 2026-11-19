@@ -98,6 +98,11 @@ class Handle:
     #: (records made before "both" existed).
     head: int = -1
     tail: int = -1
+    #: L9.171 audio_sync "exact samples": the audio samples the add put on each end (-1 = not recorded), and their
+    #: sample rate, so the trim removes exactly those samples whatever fps it would compute.
+    audio_head_samples: int = -1
+    audio_tail_samples: int = -1
+    audio_sample_rate: int = 0
 
     def ends(self) -> tuple[int, int]:
         if self.head >= 0 and self.tail >= 0:
@@ -336,6 +341,58 @@ def shift_audio_ends(audio: dict, head: int, tail: int, fps: float, add: bool) -
     return audio
 
 
+AUDIO_SYNC = ("frame duration", "exact samples")     # L9.171: appended control; "frame duration" = shift_audio
+
+
+def end_samples(audio: dict, head: int, tail: int, fps: float) -> tuple[int, int, int]:
+    """(head samples, tail samples, sample rate) that shift_audio_ends moves for these frame counts."""
+    sr = int(audio["sample_rate"])
+
+    def n(k: int) -> int:
+        return int(round(k / float(fps) * sr)) if k > 0 and fps > 0 else 0
+    return n(head), n(tail), sr
+
+
+def shift_audio_samples(audio: dict, head_n: int, tail_n: int, add: bool) -> dict:
+    """shift_audio_ends by exact sample counts (L9.171, A25 spec item 70.2): silence put on / cut off each end."""
+    if audio is None or (head_n <= 0 and tail_n <= 0):
+        return audio
+    w, restore = _waveform_parts(audio)
+    sr = int(audio["sample_rate"])
+    head_n, tail_n = max(0, int(head_n)), max(0, int(tail_n))
+    if add:
+        out = torch.cat([torch.zeros(w.shape[0], head_n, dtype=w.dtype, device=w.device), w,
+                         torch.zeros(w.shape[0], tail_n, dtype=w.dtype, device=w.device)], dim=1)
+    else:
+        if head_n + tail_n >= w.shape[1]:
+            raise AVHandlesError(
+                f"Trimming the recorded {head_n} + {tail_n} audio samples would leave nothing of the "
+                f"{w.shape[1]}-sample clip. The recorded handles do not belong to this audio.")
+        out = w[:, head_n:w.shape[1] - tail_n]
+    return {"waveform": restore(out), "sample_rate": sr}
+
+
+def fade_audio(audio: dict, fade_in_at: int | None, fade_out_end: int | None, n: int) -> dict:
+    """Linear fade-in of n samples starting at fade_in_at, linear fade-out of n samples ending at fade_out_end
+    (None = no fade on that side). Clicks at a cut or at the edge of added silence go (L9.171)."""
+    if audio is None or n <= 0 or (fade_in_at is None and fade_out_end is None):
+        return audio
+    w, restore = _waveform_parts(audio)
+    w = w.clone()
+    length = int(w.shape[1])
+    if fade_in_at is not None:
+        a = max(0, min(int(fade_in_at), length))
+        k = min(n, length - a)
+        if k > 0:
+            w[:, a:a + k] *= torch.linspace(0.0, 1.0, k, dtype=w.dtype, device=w.device)
+    if fade_out_end is not None:
+        b = max(0, min(int(fade_out_end), length))
+        k = min(n, b)
+        if k > 0:
+            w[:, b - k:b] *= torch.linspace(1.0, 0.0, k, dtype=w.dtype, device=w.device)
+    return {"waveform": restore(w), "sample_rate": int(audio["sample_rate"])}
+
+
 def resolve_fps(images, audio, manual_fps: float, source_frames: int) -> tuple[float, str]:
     """fps, and where it came from.
 
@@ -520,6 +577,21 @@ class AVHandlesMEC:
                     "Only needed when two independent clips are being handled "
                     "in one workflow — give each its own name so their counts "
                     "do not overwrite each other. Empty is right for one clip."}),
+                # L9.171 (A25 spec item 70) - appended; the defaults give exactly the old result
+                "handle_align": ("BOOLEAN", {"default": False, "tooltip":
+                    "ADD only. Round each end's handle count UP to a whole multiple of the `model` grid step (Wan 4, "
+                    "LTX 8, H3 17, or custom_step), so the handles fill whole latent time blocks and a clip that was "
+                    "on the grid is on it again after the trim. If a padding grid is also on, its rounding frames "
+                    "go on the tail. Off: handle_frames exactly, as before."}),
+                "audio_sync": (list(AUDIO_SYNC), {"default": "frame duration", "tooltip":
+                    "frame duration: audio moves by frames / fps on each end (as before). exact samples: the add "
+                    "records the exact samples it inserted (in `handles` and the memory), and the trim removes "
+                    "exactly those when it undoes the same ends - the audio comes back sample for sample even when "
+                    "the trim side measures a slightly different fps. Set it on the add AND the trim."}),
+                "audio_fade_ms": ("FLOAT", {"default": 0.0, "min": 0.0, "max": 1000.0, "step": 1.0, "tooltip":
+                    "0 = off. Linear fades of this length at each audio edge the node makes: add / fit fade the "
+                    "original audio in after the head silence and out before the tail silence; trim fades in at "
+                    "the new start and out at the new end (only on ends that were changed). Removes clicks."}),
             },
         }
 
@@ -555,7 +627,11 @@ class AVHandlesMEC:
             target_frames=0, model="MiniMax H3 (17n+5)", custom_step=4,
             custom_plus=1, images=None, audio=None, side="head",
             padding_mode="disabled", manual_fps=0.0, handles=None,
-            memo_key=""):
+            memo_key="", handle_align=False, audio_sync="frame duration",
+            audio_fade_ms=0.0):
+        if audio_sync not in AUDIO_SYNC:
+            raise AVHandlesError(f"Unknown audio_sync {audio_sync!r}. Use 'frame duration' or 'exact samples'.")
+        fade_ms = max(0.0, float(audio_fade_ms or 0.0))
         if mode not in MODES:
             raise AVHandlesError(
                 f"Unknown mode {mode!r}. Use 'fit', 'add' or 'trim'.")
@@ -591,21 +667,26 @@ class AVHandlesMEC:
             fps, fps_from = resolve_fps(images, audio, manual_fps, src_frames)
             out_img = pad_ends(images, head, tail)
             out_aud = shift_audio_ends(audio, head, tail, fps, add=True)
+            out_aud, a_rec, a_notes = self._add_audio_extras(audio, out_aud, head, tail, fps, audio_sync, fade_ms)
             total = int(out_img.shape[0])
             remember(key, Handle(frames=used, side=side, fps=fps,
                                  source_frames=src_frames, run=_run_id(),
-                                 target=plan.target, head=head, tail=tail))
+                                 target=plan.target, head=head, tail=tail, **a_rec))
             info = (describe_fit(plan, model) + "\n" +
                     describe("add", used, src_frames, total, side, "disabled",
                              fps, fps_from, "recorded for the trim side",
                              audio is not None, head, tail))
+            if a_notes:
+                info += "\n" + "\n".join(a_notes)
             return (out_img, out_aud, total,
-                    {"frames": used, "side": side, "fps": fps,
-                     "source_frames": src_frames, "target": plan.target,
-                     "head": head, "tail": tail},
+                    dict({"frames": used, "side": side, "fps": fps,
+                          "source_frames": src_frames, "target": plan.target,
+                          "head": head, "tail": tail}, **a_rec),
                     info)
 
         model_grid, grid_label = None, ""
+        extra_notes: list[str] = []          # L9.171 report lines, only when a new control is on
+        a_rec: dict = {}
         if mode == "add":
             want = max(0, int(handle_frames))
             model_grid, grid_label = add_grid(padding_mode, model, custom_step, custom_plus)
@@ -626,15 +707,21 @@ class AVHandlesMEC:
                 head, tail = want, needed - want
             else:
                 head, tail = split_ends(planned(want), side)
+            if handle_align:
+                head, tail, align_note = self._align_ends(head, tail, src_frames, images is not None, padding_mode,
+                                                          model_grid, model, custom_step, custom_plus)
+                extra_notes.append(align_note)
             used = head + tail
             fps, fps_from = resolve_fps(images, audio, manual_fps, src_frames)
             out_img = pad_ends(images, head, tail) if images is not None else None
             out_aud = shift_audio_ends(audio, head, tail, fps, add=True)
+            out_aud, a_rec, a_notes = self._add_audio_extras(audio, out_aud, head, tail, fps, audio_sync, fade_ms)
+            extra_notes.extend(a_notes)
             total = int(out_img.shape[0]) if out_img is not None else used + src_frames
 
             rec = Handle(frames=used, side=side, fps=fps,
                          source_frames=src_frames, run=_run_id(), target=0,
-                         head=head, tail=tail)
+                         head=head, tail=tail, **a_rec)
             remember(key, rec)
             origin = "recorded for the trim side"
         else:
@@ -673,7 +760,20 @@ class AVHandlesMEC:
             if remembered and not manual_fps:
                 fps_from = "carried from the add side"
             out_img = trim_ends(images, head, tail) if images is not None else None
-            out_aud = shift_audio_ends(audio, head, tail, fps, add=False)
+            exact_aud, sync_note = None, None
+            if audio is not None and audio_sync == "exact samples":
+                exact_aud, sync_note = self._trim_exact_samples(audio, head, tail, trim_amount, handles, key)
+                extra_notes.append(sync_note)
+            out_aud = exact_aud if exact_aud is not None else shift_audio_ends(audio, head, tail, fps, add=False)
+            if audio is not None and fade_ms > 0:
+                n_fade = int(round(fade_ms / 1000.0 * int(audio["sample_rate"])))
+                length = int(_waveform_parts(out_aud)[0].shape[1])
+                out_aud = fade_audio(out_aud, 0 if head > 0 else None, length if tail > 0 else None, n_fade)
+                extra_notes.append(f"Audio fades: {fade_ms:g} ms ({n_fade} samples)"
+                                   + (" in at the new start" if head > 0 else "")
+                                   + (" and" if head > 0 and tail > 0 else "")
+                                   + (" out at the new end" if tail > 0 else "")
+                                   + ("" if head > 0 or tail > 0 else " - nothing was cut, so none applied") + ".")
             total = int(out_img.shape[0]) if out_img is not None else max(0, src_frames - used)
             if used == 0:
                 import logging
@@ -684,13 +784,91 @@ class AVHandlesMEC:
         info = describe(mode, used, src_frames, total, side, padding_mode,
                         fps, fps_from, origin, audio is not None, head, tail,
                         model_grid=model_grid, grid_label=grid_label)
+        if extra_notes:
+            info += "\n" + "\n".join(extra_notes)
         _rem = recall(key)
         return (out_img, out_aud, total,
-                {"frames": used, "side": side, "fps": fps,
-                 "source_frames": src_frames,
-                 "target": int(getattr(_rem, "target", 0) or 0) if _rem else 0,
-                 "head": head, "tail": tail},
+                dict({"frames": used, "side": side, "fps": fps,
+                      "source_frames": src_frames,
+                      "target": int(getattr(_rem, "target", 0) or 0) if _rem else 0,
+                      "head": head, "tail": tail}, **(a_rec if mode == "add" else {})),
                 info)
+
+    # ── L9.171 (A25 spec item 70) ───────────────────────────────────────────
+
+    @staticmethod
+    def _align_ends(head, tail, src_frames, has_images, padding_mode, model_grid, model, custom_step, custom_plus):
+        """Each end with handles rounded UP to a multiple of the model grid's step; a padding grid's rounding frames
+        then go on the tail so the padded clip still lands on that grid."""
+        g = resolve(model, int(custom_step), int(custom_plus))
+        step = int(getattr(g, "step", 1) or 1)
+        name = g.note if model == CUSTOM else model
+        if step <= 1:
+            return head, tail, f"handle_align: {name} has no frame step, so nothing was aligned."
+
+        def up(k: int) -> int:
+            return -(-int(k) // step) * step if k > 0 else 0
+        head, tail = up(head), up(tail)
+        if has_images:
+            total = src_frames + head + tail
+            if GRIDS.get(padding_mode):
+                tail += plan_add(total, 0, padding_mode)
+            elif model_grid is not None and not model_grid.accepts(total):
+                tail += model_grid.next_at_or_above(total) - total
+        return head, tail, f"Handles aligned to the {name} step of {step}: head {head}, tail {tail}."
+
+    @staticmethod
+    def _add_audio_extras(audio_in, out_aud, head, tail, fps, audio_sync, fade_ms):
+        """(audio, record for HANDLES / memory, report lines) after an add / fit put head + tail frames on."""
+        if audio_in is None or (audio_sync != "exact samples" and fade_ms <= 0):
+            return out_aud, {}, []
+        hn, tn, sr = end_samples(audio_in, head, tail, fps)
+        rec, notes = {}, []
+        if audio_sync == "exact samples":
+            rec = {"audio_head_samples": hn, "audio_tail_samples": tn, "audio_sample_rate": sr}
+            notes.append(f"Audio: exact samples recorded for the trim - {hn} on the head, {tn} on the tail "
+                         f"at {sr} Hz.")
+        if fade_ms > 0:
+            n = int(round(fade_ms / 1000.0 * sr))
+            length = int(_waveform_parts(out_aud)[0].shape[1])
+            out_aud = fade_audio(out_aud, hn if head > 0 else None, length - tn if tail > 0 else None, n)
+            notes.append(f"Audio fades: {fade_ms:g} ms ({n} samples)"
+                         + (" in after the head silence" if head > 0 else "")
+                         + (" and" if head > 0 and tail > 0 else "")
+                         + (" out before the tail silence" if tail > 0 else "")
+                         + ("" if head > 0 or tail > 0 else " - no handles were added, so none applied") + ".")
+        return out_aud, rec, notes
+
+    @staticmethod
+    def _trim_exact_samples(audio, head, tail, trim_amount, handles, key):
+        """(trimmed audio or None, report line): the recorded samples off each end when this trim undoes exactly
+        the recorded ends at the same sample rate; None = fall back to frame duration (the line says why)."""
+        if trim_amount == "manual":
+            return None, "Audio: exact samples not used - a manual count has no recorded samples (frame duration)."
+        if isinstance(handles, dict) and "frames" in handles:
+            src = handles if "audio_head_samples" in handles else None
+            r_ends = (int(handles.get("head", -1)), int(handles.get("tail", -1)))
+            where = "the `handles` wire"
+        else:
+            rem = recall(key)
+            src = None
+            if rem is not None and int(rem.audio_head_samples) >= 0:
+                src = {"audio_head_samples": rem.audio_head_samples, "audio_tail_samples": rem.audio_tail_samples,
+                       "audio_sample_rate": rem.audio_sample_rate}
+            r_ends = rem.ends() if rem is not None else (-1, -1)
+            where = "the memory"
+        if src is None:
+            return None, (f"Audio: exact samples not used - {where} has no recorded samples (set audio_sync to "
+                          "'exact samples' on the add side too); trimmed by frame duration.")
+        if (int(head), int(tail)) != tuple(r_ends):
+            return None, (f"Audio: exact samples not used - this trim ({head} + {tail} frames) is not the recorded "
+                          f"add ({r_ends[0]} + {r_ends[1]}); trimmed by frame duration.")
+        if int(src["audio_sample_rate"]) != int(audio["sample_rate"]):
+            return None, (f"Audio: exact samples not used - recorded at {src['audio_sample_rate']} Hz, this audio is "
+                          f"{int(audio['sample_rate'])} Hz; trimmed by frame duration.")
+        hn, tn = int(src["audio_head_samples"]), int(src["audio_tail_samples"])
+        return (shift_audio_samples(audio, hn, tn, add=False),
+                f"Audio: exactly the recorded {hn} head + {tn} tail samples removed ({where}).")
 
     @staticmethod
     def _trim_count(typed, source, wired, key, side="head"):
@@ -747,4 +925,11 @@ if declare_layout is not None:
         "custom_plus": {"c2c_show_if_any": [{"mode": ["fit"], "model": _AVH_CUSTOM},
                                             {"mode": ["add"], "padding_mode": ["model preset"], "model": _AVH_CUSTOM}]},
         "padding_mode": {"c2c_show_if": {"mode": ["add"]}},
+        # L9.171: appended controls
+        "handle_align": {"c2c_show_if": {"mode": ["add"]}},
+        "audio_sync": {"c2c_show_if_linked": ["audio"]},
+        "audio_fade_ms": {"c2c_show_if_linked": ["audio"]},
     }))
+
+#: L9.171 inputs appended after the A28 signature pin (tests/test_a28_cnp_a_layout.py leaves these out of its hash).
+APPENDED_AFTER_A28 = ("handle_align", "audio_sync", "audio_fade_ms")
