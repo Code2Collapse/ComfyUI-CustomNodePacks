@@ -8,7 +8,9 @@ costs ~21 dB (Wan 2.1, docs/evidence/L7.59).
 
 Engines - each produces exactly what core's own `VAE.decode` produces, only without holding every frame at once:
   * Wan 2.1 / Wan 2.2: the decoder is run one latent step at a time with ONE feature cache for the whole clip (the
-    same steps core takes in `WanVAE.decode`), and each step's frames are handed on as soon as they exist.
+    same steps core takes in `WanVAE.decode`), and each step's frames are handed on as soon as they exist. With
+    tile_px (Save Video tile_mode auto / manual) both are decoded in SPATIAL tiles, each tile over the whole clip in
+    one causal pass, blended on disk (L7.59 for 2.1, L7.76 for 2.2).
   * VAEs with core's chunked-output protocol (`comfy_has_chunked_io`: LTX, MiniMax H3): core's decoder writes its
     finished frame ranges, in order, into the buffer we pass - a sink that hands them on. Runs in a worker thread
     with a 2-chunk queue so the decoder never gets ahead of the encoder by more than that.
@@ -138,10 +140,13 @@ def _wan_steps(fsm, z: torch.Tensor, family: str) -> Iterator[torch.Tensor]:
         m = importlib.import_module(type(fsm).__module__)
         cache = [None] * m.count_conv3d(fsm.decoder)
         x = fsm.conv2(z)
+        # the model's own patch size (core: comfy/ldm/wan/vae2_2.py WanVAE.__init__ / decode). 2 for Wan 2.2; the
+        # Qwen Image 2.1 VAE uses the same class with patch_size 1 - a hard-coded 2 would scramble its channels.
+        patch = int(getattr(fsm, "patch_size", 2))
         for i in range(z.shape[2]):
             kw = {"first_chunk": True} if i == 0 else {}
             out = fsm.decoder(x[:, :, i:i + 1], feat_cache=cache, feat_idx=[0], **kw)
-            yield m.unpatchify(out, patch_size=2)
+            yield m.unpatchify(out, patch_size=patch)
 
 
 class _Sink:
@@ -216,6 +221,22 @@ def _chunked_steps(fsm, z: torch.Tensor) -> Iterator[torch.Tensor]:
         th.join(timeout=60)
 
 
+_ASSEMBLY_BYTES = 64 * 2**20        # RAM for one assembled chunk of frames in the tiled path (tests lower it)
+_TILED_FAMILIES = ("wan21", "wan22")
+
+
+def _frames_out(vae, t_lat: int) -> int:
+    """Decoded frame count for t_lat latent frames, from core's own upscale_ratio when it has the (frames_fn, h, w)
+    form (Wan 2.1 / 2.2: 1 + 4 (T - 1)); the causal Wan rule otherwise."""
+    ratio = getattr(vae, "upscale_ratio", None)
+    if isinstance(ratio, (tuple, list)) and ratio and callable(ratio[0]):
+        try:
+            return int(ratio[0](int(t_lat)))
+        except Exception:  # noqa: BLE001
+            pass
+    return 1 + 4 * (int(t_lat) - 1)
+
+
 def _wan_tiles_via_disk(vae, fsm, zb: torch.Tensor, fam: str, tile_px: int, tmp_dir: str) -> Iterator[torch.Tensor]:
     """Tile by tile, each tile decoded over the WHOLE clip in one causal pass and written to its own file; then the
     frames are assembled chunk by chunk from those files and handed on in order.
@@ -224,7 +245,13 @@ def _wan_tiles_via_disk(vae, fsm, zb: torch.Tensor, fam: str, tile_px: int, tmp_
     so all tiles of a 2K frame hold ~10-12 GB of state. One tile at a time needs one tile's cache. Plain sequential
     file writes and reads (not a memory map, whose touched pages count as resident RAM: measured 2.8 GB at 2K x 81).
     The arithmetic is decode_wan_spatial_tiled's - same tiles, same masks, tiles added in the same order - so the frames
-    are identical to it."""
+    are identical to it.
+
+    Wan 2.1 and Wan 2.2 (L7.76) take the same path: core's 2.2 decoder also keeps ALL its causal state in the
+    feat_cache list it is handed (comfy/ldm/wan/vae2_2.py Decoder3d.forward / WanVAE.decode), so a fresh cache per tile
+    is a complete, independent causal pass over that tile. The latent -> pixel scale is the model's own
+    (`vae.spacial_compression_decode()`: core sets 8 for 2.1, 16 for 2.2 - 8x upsampling x patch 2) and is checked
+    against the first decoded step of every tile, so a wrong scale fails loudly instead of misplacing tiles."""
     import os
     import uuid
 
@@ -233,16 +260,17 @@ def _wan_tiles_via_disk(vae, fsm, zb: torch.Tensor, fam: str, tile_px: int, tmp_
     from .._vae_tiled import _build_feather_mask, _plan_tile_spans
 
     _B, _C, T, H, W = zb.shape
-    factor = vae.spacial_compression_decode() if hasattr(vae, "spacial_compression_decode") else 8
+    factor = int(vae.spacial_compression_decode()) if hasattr(vae, "spacial_compression_decode") else 8
     tile_lat = max(1, tile_px // factor)
     eff = min(max(0, tile_lat // 4), (tile_lat - 1) // 2)
     h_tiles, w_tiles = _plan_tile_spans(H, tile_lat, eff), _plan_tile_spans(W, tile_lat, eff)
     out_h, out_w, ov_px = H * factor, W * factor, eff * factor
-    t_out = 1 + 4 * (T - 1)
+    t_out = _frames_out(vae, T)
     os.makedirs(tmp_dir, exist_ok=True)
     tag = uuid.uuid4().hex[:12]
     tiles = []                                                # (path, oh0, oh1, ow0, ow1, mask)
     weight = torch.zeros((1, out_h, out_w, 1), dtype=torch.float32)
+    chans = None
     try:
         for hs, he in h_tiles:
             for ws, we in w_tiles:
@@ -250,24 +278,36 @@ def _wan_tiles_via_disk(vae, fsm, zb: torch.Tensor, fam: str, tile_px: int, tmp_
                 mask = _build_feather_mask(oh1 - oh0, ow1 - ow0, ov_px, hs == 0, he == H, ws == 0, we == W,
                                            torch.float32, torch.device("cpu"))[0]          # [1, h, w, 1]
                 path = os.path.join(tmp_dir, f"c2c_stream_{tag}_{len(tiles)}.f32")
+                tiles.append((path, oh0, oh1, ow0, ow1, mask))       # listed first: removed even if a decode fails
                 written = 0
                 with open(path, "wb") as fh:
                     for raw in _wan_steps(fsm, zb[:, :, :, hs:he, ws:we], fam):
                         px = vae.process_output(raw.to(device="cpu", dtype=torch.float32, copy=True))[0].movedim(0, -1)
+                        if tuple(px.shape[1:3]) != (oh1 - oh0, ow1 - ow0):
+                            raise StreamDecodeError(
+                                f"{type(fsm).__name__}: a {he - hs}x{we - ws} latent tile decoded to "
+                                f"{px.shape[1]}x{px.shape[2]} px, but the VAE reports a scale of {factor} "
+                                f"({(he - hs) * factor}x{(we - ws) * factor} px expected); cannot place tiles. "
+                                f"Set tile_mode to off.")
+                        if chans is None:
+                            chans = int(px.shape[-1])
                         n = min(px.shape[0], t_out - written)
                         px[:n].contiguous().numpy().tofile(fh)
                         written += n
-                tiles.append((path, oh0, oh1, ow0, ow1, mask))
+                if written != t_out:
+                    raise StreamDecodeError(f"{type(fsm).__name__}: a tile decoded {written} frames, {t_out} were "
+                                            f"expected; cannot assemble tiles. Set tile_mode to off.")
                 weight[:, oh0:oh1, ow0:ow1, :] += mask
         weight = weight.clamp(min=1e-6)
-        step = max(1, int(64 * 2**20 // max(1, out_h * out_w * 3 * 4)))
+        c = chans or 3
+        step = max(1, int(_ASSEMBLY_BYTES // max(1, out_h * out_w * c * 4)))
         for t0 in range(0, t_out, step):
             k = min(step, t_out - t0)
-            out = torch.zeros((k, out_h, out_w, 3), dtype=torch.float32)
+            out = torch.zeros((k, out_h, out_w, c), dtype=torch.float32)
             for path, oh0, oh1, ow0, ow1, mask in tiles:
                 th, tw = oh1 - oh0, ow1 - ow0
-                per = th * tw * 3
-                part = np.fromfile(path, dtype=np.float32, count=k * per, offset=t0 * per * 4).reshape(k, th, tw, 3)
+                per = th * tw * c
+                part = np.fromfile(path, dtype=np.float32, count=k * per, offset=t0 * per * 4).reshape(k, th, tw, c)
                 out[:, oh0:oh1, ow0:ow1, :] += torch.from_numpy(part) * mask
             yield out / weight
     finally:
@@ -328,7 +368,8 @@ def stream_decode(vae, latent: dict, tile_px: int = 0) -> tuple[FrameStream, Str
             out_shape = None
 
     sf = vae.spacial_compression_decode() if hasattr(vae, "spacial_compression_decode") else 8
-    tiled = fam == "wan21" and tile_px > 0 and max(z.shape[3], z.shape[4]) * sf > tile_px
+    wants_tiles = tile_px > 0 and max(z.shape[3], z.shape[4]) * sf > tile_px
+    tiled = fam in _TILED_FAMILIES and wants_tiles
     tmp_dir = ""
     if tiled:
         try:
@@ -344,7 +385,7 @@ def stream_decode(vae, latent: dict, tile_px: int = 0) -> tuple[FrameStream, Str
             yield px.reshape(-1, *px.shape[-3:]).to(device="cpu", dtype=torch.float32)
             return
         zb = z[b:b + 1].to(device=vae.device, dtype=vae.vae_dtype)
-        if fam == "wan21" and tiled:
+        if tiled:
             yield from _wan_tiles_via_disk(vae, fsm, zb, fam, tile_px, tmp_dir)
             return
         steps = _wan_steps(fsm, zb, fam) if fam in ("wan21", "wan22") else _chunked_steps(fsm, zb)
@@ -370,11 +411,16 @@ def stream_decode(vae, latent: dict, tile_px: int = 0) -> tuple[FrameStream, Str
         method={"wan21": (f"Wan 2.1 VAE, {tile_px} px tiles, each decoded over the whole clip in one causal pass, "
                           f"blended on disk, streamed in order") if tiled
                 else "Wan 2.1 VAE, streamed step by step with one causal cache",
-                "wan22": "Wan 2.2 VAE, streamed step by step with one causal cache",
+                "wan22": (f"Wan 2.2 VAE, {tile_px} px tiles, each decoded over the whole clip in one causal pass, "
+                          f"blended on disk, streamed in order") if tiled
+                else "Wan 2.2 VAE, streamed step by step with one causal cache",
                 "chunked_io": f"{type(fsm).__name__}: core's chunked output, streamed in order",
                 "whole": f"{type(fsm).__name__}: decoded whole (no exact streaming for this VAE)"}[fam],
         exact=True, bounded=fam != "whole", frames=int(frames), height=int(h), width=int(w))
     if fam == "whole":
         info.warnings.append(f"{type(fsm).__name__} has no exact streaming decode, so the whole clip was decoded at "
                              f"once (not bounded in RAM). The frames are exact.")
+    if wants_tiles and not tiled:
+        info.warnings.append(f"{type(fsm).__name__}: {tile_px} px tiles were asked for, but only the Wan 2.1 / 2.2 "
+                             f"VAEs have a per-tile causal stream here, so this clip was decoded untiled.")
     return FrameStream(chunks(), frames, h, w, 3), info
