@@ -367,6 +367,9 @@ class C2C_SecureSubgraph:
     FUNCTION = "execute"
     RETURN_TYPES = tuple([ANY] * MAX_OUTPUTS)
     RETURN_NAMES = tuple(f"out_{i}" for i in range(MAX_OUTPUTS))
+    # L9.293: the slots are generated, so are their tooltips; the front end shows only the outputs the inside uses
+    OUTPUT_TOOLTIPS = tuple(f"Output {i + 1} of the protected subgraph (the value its inside sends out here)."
+                            for i in range(MAX_OUTPUTS))
     DESCRIPTION = ("A C2C Vault: a subgraph whose inside is encrypted. It runs with ComfyUI's own scheduler like any "
                    "subgraph; opening it needs the vault password and your second factor. Create one by "
                    "right-clicking a selection or a subgraph: Lock as C2C Vault / Seal as C2C Vault.")
@@ -374,8 +377,11 @@ class C2C_SecureSubgraph:
     @classmethod
     def INPUT_TYPES(cls):
         return {"required": {
-            "vault_id": ("STRING", {"default": ""}),
-            "vault_payload": ("STRING", {"default": "", "multiline": False}),
+            "vault_id": ("STRING", {"default": "", "tooltip": "Which vault this is - written when the vault is "
+                                                               "created; do not edit."}),
+            "vault_payload": ("STRING", {"default": "", "multiline": False,
+                                         "tooltip": "The encrypted inside of the vault - written when it is locked or "
+                                                    "sealed; editing it breaks the vault."}),
         }, "optional": _BoundaryInputs(), "hidden": {"unique_id": "UNIQUE_ID", "dynprompt": "DYNPROMPT"}}
 
     def check_lazy_status(self, **_kw):

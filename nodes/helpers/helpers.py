@@ -98,7 +98,7 @@ class ImageBatchSliceMEC:
     @classmethod
     def INPUT_TYPES(cls):
         return with_layout({"required": {
-            "images": ("IMAGE",),
+            "images": ("IMAGE", {"tooltip": "The frames to pick from (an IMAGE batch)."}),
             "start":  ("INT", {"default": 0,    "min": -100000, "max": 100000,
                                "tooltip": "Range mode: first frame. Negative counts from the end."}),
             "end":    ("INT", {"default": -1,   "min": -100000, "max": 100000,
@@ -183,6 +183,7 @@ class SeedListMEC:
     FUNCTION = "build"
     RETURN_TYPES = ("INT", "STRING")
     RETURN_NAMES = ("first_seed", "csv_all_seeds")
+    OUTPUT_TOOLTIPS = ("The first seed of the list.", "Every seed, comma separated (e.g. for a seed sweep).")
     DESCRIPTION = (
         "Generate N deterministic seeds from a base seed. Modes: "
         "increment (base, base+1, …), hash (sha256 of base+index, "
@@ -192,9 +193,12 @@ class SeedListMEC:
     @classmethod
     def INPUT_TYPES(cls):
         return {"required": {
-            "base_seed": ("INT", {"default": 0, "min": 0, "max": 0xFFFFFFFF}),
-            "count":     ("INT", {"default": 4, "min": 1, "max": 1024}),
-            "mode":      (["increment", "hash", "random"], {"default": "increment"}),
+            "base_seed": ("INT", {"default": 0, "min": 0, "max": 0xFFFFFFFF,
+                                  "tooltip": "The seed every other seed is derived from."}),
+            "count":     ("INT", {"default": 4, "min": 1, "max": 1024, "tooltip": "How many seeds to make."}),
+            "mode":      (["increment", "hash", "random"], {"default": "increment",
+                          "tooltip": "increment: base, base+1, ...; hash: sha256 of base and index (unrelated seeds); "
+                                     "random: a seeded random stream. All are repeatable for the same base."}),
         }}
 
     def build(self, base_seed, count, mode):
@@ -219,6 +223,7 @@ class ConditionalSwitchMEC:
     FUNCTION = "pick"
     RETURN_TYPES = (ANY,)
     RETURN_NAMES = ("out",)
+    OUTPUT_TOOLTIPS = ("value_true or value_false, whichever the condition chose.",)
     DESCRIPTION = (
         "Return value_true when condition is True, else value_false. "
         "Both inputs are wildcard (*) so it works for any type."
@@ -227,10 +232,10 @@ class ConditionalSwitchMEC:
     @classmethod
     def INPUT_TYPES(cls):
         return {"required": {
-            "condition":   ("BOOLEAN", {"default": True}),
+            "condition":   ("BOOLEAN", {"default": True, "tooltip": "On: pass value_true. Off: pass value_false."}),
             # L9.196: lazy - only the chosen branch is evaluated (both upstream branches always ran before)
-            "value_true":  (ANY, {"lazy": True}),
-            "value_false": (ANY, {"lazy": True}),
+            "value_true":  (ANY, {"lazy": True, "tooltip": "Passed on when condition is on (only this branch runs)."}),
+            "value_false": (ANY, {"lazy": True, "tooltip": "Passed on when condition is off (only this branch runs)."}),
         }}
 
     def check_lazy_status(self, condition, value_true=None, value_false=None):
@@ -246,6 +251,7 @@ class TextTemplateMEC:
     FUNCTION = "format"
     RETURN_TYPES = ("STRING",)
     RETURN_NAMES = ("text",)
+    OUTPUT_TOOLTIPS = ("The template with its placeholders filled in.",)
     DESCRIPTION = (
         "Substitute {a}{b}{c}{d} placeholders in a template string. "
         "Useful for building prompts from per-shot variables."
@@ -255,11 +261,12 @@ class TextTemplateMEC:
     def INPUT_TYPES(cls):
         return {"required": {
             "template": ("STRING", {"multiline": True,
-                "default": "a {a} of {b}, {c}, {d}"}),
-            "a": ("STRING", {"default": "", "multiline": False}),
-            "b": ("STRING", {"default": "", "multiline": False}),
-            "c": ("STRING", {"default": "", "multiline": False}),
-            "d": ("STRING", {"default": "", "multiline": False}),
+                "default": "a {a} of {b}, {c}, {d}",
+                "tooltip": "Text with {a} {b} {c} {d} placeholders; each is replaced by the input of that name."}),
+            "a": ("STRING", {"default": "", "multiline": False, "tooltip": "Replaces {a} in the template."}),
+            "b": ("STRING", {"default": "", "multiline": False, "tooltip": "Replaces {b} in the template."}),
+            "c": ("STRING", {"default": "", "multiline": False, "tooltip": "Replaces {c} in the template."}),
+            "d": ("STRING", {"default": "", "multiline": False, "tooltip": "Replaces {d} in the template."}),
         }}
 
     def format(self, template, a, b, c, d):
@@ -279,6 +286,7 @@ class NumberLerpMEC:
     FUNCTION = "lerp"
     RETURN_TYPES = ("FLOAT", "INT")
     RETURN_NAMES = ("float", "int")
+    OUTPUT_TOOLTIPS = ("The interpolated value.", "The interpolated value, rounded to the nearest whole number.")
     DESCRIPTION = (
         "Linear / smoothstep / cosine interpolation between two values. "
         "t is clamped to [0,1]."
@@ -287,10 +295,12 @@ class NumberLerpMEC:
     @classmethod
     def INPUT_TYPES(cls):
         return {"required": {
-            "a": ("FLOAT", {"default": 0.0, "min": -1e9, "max": 1e9, "step": 0.0001}),
-            "b": ("FLOAT", {"default": 1.0, "min": -1e9, "max": 1e9, "step": 0.0001}),
-            "t": ("FLOAT", {"default": 0.5, "min": 0.0,  "max": 1.0,  "step": 0.001}),
-            "curve": (["linear", "smoothstep", "cosine"], {"default": "linear"}),
+            "a": ("FLOAT", {"default": 0.0, "min": -1e9, "max": 1e9, "step": 0.0001, "tooltip": "The value at t = 0."}),
+            "b": ("FLOAT", {"default": 1.0, "min": -1e9, "max": 1e9, "step": 0.0001, "tooltip": "The value at t = 1."}),
+            "t": ("FLOAT", {"default": 0.5, "min": 0.0,  "max": 1.0,  "step": 0.001,
+                            "tooltip": "How far from a to b (0..1)."}),
+            "curve": (["linear", "smoothstep", "cosine"], {"default": "linear",
+                      "tooltip": "linear: straight; smoothstep and cosine ease in and out near a and b."}),
         }}
 
     def lerp(self, a, b, t, curve):
@@ -338,6 +348,7 @@ class AspectPresetMEC:
     FUNCTION = "pick"
     RETURN_TYPES = ("INT", "INT")
     RETURN_NAMES = ("width", "height")
+    OUTPUT_TOOLTIPS = ("Width in pixels, snapped to the multiple.", "Height in pixels, snapped to the multiple.")
     DESCRIPTION = (
         "Width and height for a render: a common aspect ratio scaled to a long edge (Wan 480p / 720p presets give "
         "Wan's native sizes), or your own width x height - snapped to a multiple of N, because Wan, Flux and SDXL "
@@ -347,7 +358,9 @@ class AspectPresetMEC:
     @classmethod
     def INPUT_TYPES(cls):
         return with_layout({"required": {
-            "preset":   ([*cls.PRESETS.keys(), cls.CUSTOM], {"default": "16:9 landscape"}),
+            "preset":   ([*cls.PRESETS.keys(), cls.CUSTOM], {"default": "16:9 landscape",
+                         "tooltip": "An aspect ratio scaled to 'base', a Wan native size, or Custom (width x height "
+                                    "below)."}),
             "base":     ("INT", {"default": 1024, "min": 64, "max": 8192,
                 "tooltip": "Long edge target (ignored for Wan presets and Custom)."}),
             "multiple": ("INT", {"default": 64, "min": 1, "max": 256,
@@ -456,8 +469,8 @@ class ImageStatsProbeMEC:
     @classmethod
     def INPUT_TYPES(cls):
         return with_layout({"required": {}, "optional": {
-            "images":    ("IMAGE",),
-            "mask":      ("MASK",),
+            "images":    ("IMAGE", {"tooltip": "An image to measure (passed on unchanged)."}),
+            "mask":      ("MASK", {"tooltip": "A mask to measure coverage of (passed on unchanged)."}),
             "latent":    ("LATENT", {"tooltip": "ComfyUI LATENT dict (must contain 'samples')."}),
             "threshold": ("FLOAT", {"default": 0.5, "min": 0.0, "max": 1.0, "step": 0.01,
                                     "tooltip": "Mask: a pixel counts as covered above this value."}),
@@ -504,6 +517,8 @@ class ExecutionTimerMEC:
     FUNCTION = "tick"
     RETURN_TYPES = (ANY, "STRING", "FLOAT")
     RETURN_NAMES = ("passthrough", "report", "elapsed_seconds")
+    OUTPUT_TOOLTIPS = ("The input, unchanged.", "'[label] +seconds' for this tick.",
+                       "Seconds since the previous tick with the same label (0 on the first).")
     DESCRIPTION = (
         "Stopwatch: returns seconds since the *previous* execution of the "
         "same label. First tick returns 0. Passes input through unchanged."
@@ -512,8 +527,9 @@ class ExecutionTimerMEC:
     @classmethod
     def INPUT_TYPES(cls):
         return {"required": {
-            "passthrough": (ANY,),
-            "label":       ("STRING", {"default": "stage_a", "multiline": False}),
+            "passthrough": (ANY, {"tooltip": "Anything: passed on unchanged; the timer ticks when it arrives."}),
+            "label":       ("STRING", {"default": "stage_a", "multiline": False,
+                            "tooltip": "Timers with the same label measure from each other's ticks."}),
             "reset":       ("BOOLEAN", {"default": False,
                 "tooltip": "If true, this tick is treated as the first."}),
         }}
