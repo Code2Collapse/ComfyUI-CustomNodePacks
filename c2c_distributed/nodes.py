@@ -49,6 +49,8 @@ class C2CGPUInventory:
 
     RETURN_TYPES = ("STRING", "STRING")
     RETURN_NAMES = ("summary", "report_json")
+    OUTPUT_TOOLTIPS = ("Readable summary: GPUs, links, working backends and usable multi-GPU modes.",
+                       "The full inventory (and qualification result when run) as JSON.")
     FUNCTION = "run"
     CATEGORY = CATEGORY
     OUTPUT_NODE = True
@@ -79,7 +81,7 @@ class C2CSequenceParallel:
     @classmethod
     def INPUT_TYPES(cls):
         return with_layout({"required": {
-            "model": ("MODEL",),
+            "model": ("MODEL", {"tooltip": "The diffusion model to split; put this node last in the model chain (after LoRA / attention nodes)."}),
             "gpus": ("INT", {"default": 0, "min": 0, "max": 64, "tooltip": "How many GPUs to use; 0 = all that "
                              "ComfyUI sees. Each GPU holds a full copy of the model."}),
             "strategy": (["auto", "ulysses", "ring"], {"default": "auto", "tooltip": "auto: Ulysses as far as the "
@@ -100,6 +102,8 @@ class C2CSequenceParallel:
 
     RETURN_TYPES = ("MODEL", "STRING")
     RETURN_NAMES = ("model", "plan")
+    OUTPUT_TOOLTIPS = ("The model with every call split over the GPUs (unchanged with one GPU).",
+                       "The chosen mode, devices, memory per GPU and communication path, as text.")
     FUNCTION = "run"
     CATEGORY = CATEGORY
     DESCRIPTION = ("Splits every model call over the GPUs of this machine. Any model: the call's batch items (cond "

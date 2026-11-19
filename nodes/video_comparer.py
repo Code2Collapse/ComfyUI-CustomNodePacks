@@ -479,36 +479,53 @@ class VideoComparerC2C:
                         "false_color / bit_depth_crush for overlay analysis."}),
                 "bit_depth": (_BIT_DEPTHS, {"default": "32",
                     "tooltip": "Quantization for bit_depth_crush mode."}),
-                "wipe_position": ("FLOAT", {"default": 0.5, "min": 0.0, "max": 1.0, "step": 0.01}),
-                "onion_alpha": ("FLOAT", {"default": 0.5, "min": 0.0, "max": 1.0, "step": 0.01}),
-                "diff_gain": ("FLOAT", {"default": 16.0, "min": 1.0, "max": 1024.0, "step": 1.0}),
-                "diff_gamma": ("FLOAT", {"default": 1.0, "min": 0.1, "max": 4.0, "step": 0.05}),
-                "diff_threshold": ("FLOAT", {"default": 0.0, "min": 0.0, "max": 0.5, "step": 0.001}),
-                "diff_mode": (_DIFF_MODES, {"default": "absolute"}),
-                "false_color_lut": (_LUTS, {"default": "turbo"}),
-                "scope_intensity": ("FLOAT", {"default": 0.35, "min": 0.05, "max": 1.0, "step": 0.05}),
-                "frame_index": ("INT", {"default": 0, "min": 0, "max": 100000, "step": 1}),
-                "label_a": ("STRING", {"default": "A"}),
-                "label_b": ("STRING", {"default": "B"}),
+                "wipe_position": ("FLOAT", {"default": 0.5, "min": 0.0, "max": 1.0, "step": 0.01,
+                    "tooltip": "wipe: where the split sits, 0 = all B, 1 = all A (drag on the canvas too)."}),
+                "onion_alpha": ("FLOAT", {"default": 0.5, "min": 0.0, "max": 1.0, "step": 0.01,
+                    "tooltip": "onion: how much of B shows over A."}),
+                "diff_gain": ("FLOAT", {"default": 16.0, "min": 1.0, "max": 1024.0, "step": 1.0,
+                    "tooltip": "diff / per_channel / false_color: multiply the difference so small changes show "
+                               "(16 = a 1/16 difference reads as white)."}),
+                "diff_gamma": ("FLOAT", {"default": 1.0, "min": 0.1, "max": 4.0, "step": 0.05,
+                    "tooltip": "diff: above 1 lifts faint differences, below 1 hides them (applied after the gain)."}),
+                "diff_threshold": ("FLOAT", {"default": 0.0, "min": 0.0, "max": 0.5, "step": 0.001,
+                    "tooltip": "diff: differences smaller than this count as none (hides noise / compression)."}),
+                "diff_mode": (_DIFF_MODES, {"default": "absolute",
+                    "tooltip": "diff: absolute = |A - B| per channel; signed = grey 0.5 is equal, brighter where B is "
+                               "brighter; luminance = brightness difference only."}),
+                "false_color_lut": (_LUTS, {"default": "turbo",
+                    "tooltip": "false_color: the colour ramp the difference is painted with (dark = equal)."}),
+                "scope_intensity": ("FLOAT", {"default": 0.35, "min": 0.05, "max": 1.0, "step": 0.05,
+                    "tooltip": "Scopes (waveform, parade, vectorscope, histogram): brightness of the traces."}),
+                "frame_index": ("INT", {"default": 0, "min": 0, "max": 100000, "step": 1,
+                    "tooltip": "Queue-time modes (scopes, diff mask output): which frame to analyse."}),
+                "label_a": ("STRING", {"default": "A", "tooltip": "Name shown for A in the viewer and the info."}),
+                "label_b": ("STRING", {"default": "B", "tooltip": "Name shown for B in the viewer and the info."}),
             },
             "optional": {
-                "image_a": ("IMAGE",),
-                "image_b": ("IMAGE",),
-                "audio_a": ("AUDIO",),
-                "audio_b": ("AUDIO",),
-                "file_a": (files, {"default": files[0] if files else ""}),
-                "file_b": (files, {"default": files[0] if files else ""}),
+                "image_a": ("IMAGE", {"tooltip": "A: frames from the graph (or pick file_a instead)."}),
+                "image_b": ("IMAGE", {"tooltip": "B: frames from the graph (or pick file_b instead)."}),
+                "audio_a": ("AUDIO", {"tooltip": "A's audio, for the audio views."}),
+                "audio_b": ("AUDIO", {"tooltip": "B's audio, for the audio views."}),
+                "file_a": (files, {"default": files[0] if files else "",
+                                   "tooltip": "A: a video / image / EXR from the input folder, when image_a is not "
+                                              "wired."}),
+                "file_b": (files, {"default": files[0] if files else "",
+                                   "tooltip": "B: a video / image / EXR from the input folder, when image_b is not "
+                                              "wired."}),
                 "preview_fps": ("FLOAT", {"default": 24.0, "min": 1.0, "max": 240.0, "step": 0.001, "tooltip":
                     "Playback rate of the browser preview made from image_a / image_b batches after a run (the "
                     "tensors carry no frame rate). The preview is downscaled to 1280 px and keeps every frame; "
                     "the server-side modes always use the full-precision frames."}),
                 # L9.40 (owner 2026-10-23: "give more power to video comparer") - appended
-                "image_c": ("IMAGE",),
-                "image_d": ("IMAGE",),
-                "file_c": (files, {"default": files[0] if files else ""}),
-                "file_d": (files, {"default": files[0] if files else ""}),
-                "label_c": ("STRING", {"default": "C"}),
-                "label_d": ("STRING", {"default": "D"}),
+                "image_c": ("IMAGE", {"tooltip": "Optional third clip for the player's 2 x 2 grid."}),
+                "image_d": ("IMAGE", {"tooltip": "Optional fourth clip for the player's 2 x 2 grid."}),
+                "file_c": (files, {"default": files[0] if files else "",
+                                   "tooltip": "C from the input folder, when image_c is not wired."}),
+                "file_d": (files, {"default": files[0] if files else "",
+                                   "tooltip": "D from the input folder, when image_d is not wired."}),
+                "label_c": ("STRING", {"default": "C", "tooltip": "Name shown for C."}),
+                "label_d": ("STRING", {"default": "D", "tooltip": "Name shown for D."}),
                 "b_offset": ("INT", {"default": 0, "min": -100000, "max": 100000, "tooltip":
                     "B starts this many frames after A (negative: before). The player and the metrics both use it, "
                     "so frame i of A is compared with frame i - b_offset of B."}),
@@ -520,6 +537,12 @@ class VideoComparerC2C:
 
     RETURN_TYPES = ("IMAGE", "MASK", "IMAGE", "STRING")
     RETURN_NAMES = ("preview", "diff_mask", "scope", "info")
+    OUTPUT_TOOLTIPS = (
+        "The comparison picture of the current mode (frame_index).",
+        "How different A and B are per pixel (mean over channels, before gain) - threshold it to find changes.",
+        "A histogram of A at frame_index (in histogram_scope mode, the same picture as preview).",
+        "What was compared: sources, sizes, frame, metrics (JSON).",
+    )
     FUNCTION = "execute"
     CATEGORY = "C2C/Preview"
     OUTPUT_NODE = True

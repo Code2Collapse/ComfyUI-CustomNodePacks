@@ -113,7 +113,7 @@ class C2CVAEQualityDecode:
                 }),
                 # sockets were required before L7.65; optional now so an already-decoded image can be cleaned
                 "samples": ("LATENT", {"tooltip": "The latent to decode (with vae). Leave empty to clean 'image'."}),
-                "vae": ("VAE",),
+                "vae": ("VAE", {"tooltip": "The VAE that made the latent (needed with samples)."}),
                 "image": ("IMAGE", {"tooltip": "An already-decoded picture to clean instead of decoding a latent."}),
                 # appended after tile_mode so saved VAE Quality Decode values keep their positions
                 "clean": ("BOOLEAN", {"default": False,

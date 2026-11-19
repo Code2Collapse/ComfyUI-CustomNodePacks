@@ -95,6 +95,8 @@ class FluidShotEncoderMEC:
 
     RETURN_TYPES = ("IMAGE", "TIMEMAP")
     RETURN_NAMES = ("normalized_images", "time_map")
+    OUTPUT_TOOLTIPS = ("The frames with flow-warped in-betweens on fast sections (more frames than the input).",
+                       "Where each original frame sits in the new batch - wire to Fluid Shot Decoder.")
     FUNCTION = "execute"
     CATEGORY = "MEC/Temporal"
     DESCRIPTION = ("Analyzes optical-flow speed and inserts in-between frames on fast "
@@ -198,6 +200,8 @@ class FluidShotDecoderMEC:
 
     RETURN_TYPES = ("IMAGE", "STRING")
     RETURN_NAMES = ("images", "info")
+    OUTPUT_TOOLTIPS = ("The processed frames at the original count and pacing.",
+                       "How the frames were picked; says how approximate the timing is when the count changed.")
     FUNCTION = "execute"
     CATEGORY = "MEC/Temporal"
     DESCRIPTION = ("Selects exactly the frames that correspond to the ORIGINAL input "
@@ -249,6 +253,8 @@ class AudioReverserMEC:
 
     RETURN_TYPES = ("AUDIO", "TIMEMAP")
     RETURN_NAMES = ("audio", "time_map")
+    OUTPUT_TOOLTIPS = ("The audio played backwards (same sample rate and channels).",
+                       "Maps original to reversed timestamps (t_new = duration - t_orig) for syncing video.")
     FUNCTION = "execute"
     CATEGORY = "MEC/Audio"
     DESCRIPTION = ("Reverses the audio waveform (torch.flip on the sample dim), "

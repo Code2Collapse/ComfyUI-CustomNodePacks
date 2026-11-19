@@ -103,13 +103,14 @@ class AsymFlowSamplerPatch:
     )
     RETURN_TYPES = ("MODEL",)
     RETURN_NAMES = ("model",)
+    OUTPUT_TOOLTIPS = ("The same model with the AsymFlow schedule - wire it to the sampler.",)
     FUNCTION = "patch"
 
     @classmethod
     def INPUT_TYPES(cls):  # noqa: N802 - ComfyUI convention
         return {
             "required": {
-                "model": ("MODEL",),
+                "model": ("MODEL", {"tooltip": "A flow-matching model (SD3, Flux, AsymFlow-trained) whose noise schedule is replaced."}),
                 "shift": (
                     "FLOAT",
                     {

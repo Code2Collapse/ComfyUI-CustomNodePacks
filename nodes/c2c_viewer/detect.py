@@ -228,7 +228,7 @@ class C2CViewerDetect:
                 "text": ("STRING", {"default": "", "tooltip": "What to find, comma-separated (person, dog)."}),
                 "points": ("STRING", {"default": "", "tooltip": 'Clicks: [{"x":0.4,"y":0.5,"label":1}] in 0..1.'}),
                 "boxes": ("STRING", {"default": "", "tooltip": "Boxes: [[x0,y0,x1,y1]] in 0..1."}),
-                "max_side": ("INT", {"default": C.MAX_SIDE, "min": 64, "max": 2048, "step": 16}),
+                "max_side": ("INT", {"default": C.MAX_SIDE, "min": 64, "max": 2048, "step": 16, "tooltip": "Longest side of the object masks the viewer gets, in pixels (detection itself runs on the full frame)."}),
             },
         }
 

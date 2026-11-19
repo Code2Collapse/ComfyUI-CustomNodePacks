@@ -117,7 +117,7 @@ class C2C_Submit:
                     "tooltip": "On: block until the remote render finishes and pull outputs "
                                "back into input/c2c_farm_results/<job>/. Off: return the job id "
                                "immediately and track it in the C2C Farm dashboard."}),
-                "timeout_minutes": ("INT", {"default": 120, "min": 1, "max": 1440}),
+                "timeout_minutes": ("INT", {"default": 120, "min": 1, "max": 1440, "tooltip": "How long to wait before the node fails. The job itself keeps running - follow it in the C2C Farm dashboard."}),
             },
             "optional": {
                 # A22 L9.135, appended: an identical submission reuses the earlier job (no second paid render)
@@ -132,6 +132,9 @@ class C2C_Submit:
 
     RETURN_TYPES = ("STRING", "STRING", "STRING")
     RETURN_NAMES = ("job_id", "result_paths", "info")
+    OUTPUT_TOOLTIPS = ("The farm job id (look it up in the C2C Farm dashboard or Job History).",
+                       "Local paths of the fetched outputs, one per line (empty when not waiting).",
+                       "Backend, profile, status and results as JSON.")
     FUNCTION = "submit"
     CATEGORY = "MEC/RenderFarm"
     DESCRIPTION = "Dispatch a full workflow JSON to a remote ComfyUI render-farm backend."
@@ -240,6 +243,7 @@ class C2C_ClusterStatus:
 
     RETURN_TYPES = ("STRING",)
     RETURN_NAMES = ("cluster_json",)
+    OUTPUT_TOOLTIPS = ("Per backend: reachable, queue depth, VRAM (or the error), as JSON. Refreshes about every 5 s.",)
     FUNCTION = "status"
     CATEGORY = "MEC/RenderFarm"
     DESCRIPTION = "Live render-farm capacity (queue depth, VRAM, reachability) as JSON."
@@ -273,13 +277,15 @@ class C2C_JobHistory:
     @classmethod
     def INPUT_TYPES(cls):
         return {"required": {
-            "limit": ("INT", {"default": 50, "min": 1, "max": 1000}),
+            "limit": ("INT", {"default": 50, "min": 1, "max": 1000, "tooltip": "Most recent jobs to list."}),
             "user_filter": ("STRING", {"default": "", "tooltip": "Empty = all users."}),
             "project_filter": ("STRING", {"default": "", "tooltip": "Empty = all projects."}),
         }}
 
     RETURN_TYPES = ("STRING", "STRING")
     RETURN_NAMES = ("stats_json", "jobs_table")
+    OUTPUT_TOOLTIPS = ("Job counts per user and per status plus total / average duration, over ALL jobs (the filters do not apply), as JSON.",
+                       "The most recent jobs (up to limit) as a text table.")
     FUNCTION = "history"
     CATEGORY = "MEC/RenderFarm"
     DESCRIPTION = "Render-farm audit log: per-user/status stats + recent jobs table."

@@ -95,14 +95,14 @@ class LocateAnythingGroundingMEC:
     def INPUT_TYPES(cls):
         return {
             "required": {
-                "image": ("IMAGE",),
-                "prompt": ("STRING", {"default": "person", "multiline": True}),
+                "image": ("IMAGE", {"tooltip": "The picture(s) to search; each frame gets its own boxes."}),
+                "prompt": ("STRING", {"default": "person", "multiline": True, "tooltip": "What to find, in words: 'red car', 'the person on the left', 'coffee cup'."}),
             },
             "optional": {
-                "model_path": ("STRING", {"default": "nvidia/LocateAnything-3B"}),
-                "generation_mode": (["hybrid", "fast", "slow"], {"default": "hybrid"}),
-                "max_new_tokens": ("INT", {"default": 2048, "min": 256, "max": 8192}),
-                "device": (["cuda", "cpu"], {"default": "cuda"}),
+                "model_path": ("STRING", {"default": "nvidia/LocateAnything-3B", "tooltip": "Hugging Face repo id or a local folder holding LocateAnything-3B."}),
+                "generation_mode": (["hybrid", "fast", "slow"], {"default": "hybrid", "tooltip": "Passed unchanged to the model's own generate(); hybrid is its default. fast and slow are the model's other modes (see its model card)."}),
+                "max_new_tokens": ("INT", {"default": 2048, "min": 256, "max": 8192, "tooltip": "Longest answer the model may write. Raise it when a crowded image returns too few boxes."}),
+                "device": (["cuda", "cpu"], {"default": "cuda", "tooltip": "Where the 3B model runs. cuda falls back to cpu when no GPU is available (cpu is very slow)."}),
                 "confidence_threshold": ("FLOAT", {
                     "default": 0.0, "min": 0.0, "max": 1.0, "step": 0.05,
                     "tooltip": "Has no effect: LocateAnything-3B returns boxes without scores, so there is nothing "
@@ -118,6 +118,9 @@ class LocateAnythingGroundingMEC:
 
     RETURN_TYPES = ("BBOX_LIST", "IMAGE", "STRING")
     RETURN_NAMES = ("bboxes", "annotated_image", "raw_response")
+    OUTPUT_TOOLTIPS = ("Every box found, in pixels, with its label and frame - wire to Locate Anything To SAM.",
+                       "The image with the boxes and labels drawn on it.",
+                       "The model's text answer (frames separated by ---), for checking what it read.")
     FUNCTION = "run"
     CATEGORY = "MaskEnhancedControl/Grounding"
 
@@ -342,18 +345,20 @@ class LocateAnythingToSAMMEC:
     def INPUT_TYPES(cls):
         return {
             "required": {
-                "bboxes": ("BBOX_LIST",),
-                "image": ("IMAGE",),
+                "bboxes": ("BBOX_LIST", {"tooltip": "Boxes from Locate Anything Grounding."}),
+                "image": ("IMAGE", {"tooltip": "The same image the boxes were found in (sets the mask size and frame count)."}),
             },
             "optional": {
                 "expand_ratio": ("FLOAT", {
                     "default": 0.05, "min": 0.0, "max": 0.5, "step": 0.01,
+                    "tooltip": "Grow each box by this fraction of its width / height on every side, so SAM sees the whole object.",
                 }),
             },
         }
 
     RETURN_TYPES = ("MASK",)
     RETURN_NAMES = ("mask",)
+    OUTPUT_TOOLTIPS = ("Filled rectangles, one mask per frame (a box only marks its own frame) - a box prompt for SAM, not a final matte.",)
     FUNCTION = "run"
     CATEGORY = "MaskEnhancedControl/Grounding"
 

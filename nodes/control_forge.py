@@ -436,7 +436,9 @@ class ControlAOVC2C:
 
     @classmethod
     def INPUT_TYPES(cls):
-        wf = lambda d: ("FLOAT", {"default": d, "min": 0.0, "max": 2.0, "step": 0.05})
+        wf = lambda d, name: ("FLOAT", {"default": d, "min": 0.0, "max": 2.0, "step": 0.05, "tooltip":
+                                        f"How much the {name} pass counts in the blended output (0 = left out). "
+                                        "The separate pass outputs are not scaled."})
         return with_layout({
             "required": {
                 "blend_mode": (_BLEND_MODES, {"default": "screen",
@@ -475,16 +477,16 @@ class ControlAOVC2C:
                 "edge_model": (["internal_canny", "off"] + list(_EDGE_MAP.keys()), {"default": "internal_canny",
                                "tooltip": "internal_canny = OpenCV (no model). Others delegate to controlnet_aux."}),
                 "run_canny": ("BOOLEAN", {"default": True, "tooltip": "Used only when edge_model = internal_canny."}),
-                "canny_low": ("INT", {"default": 100, "min": 0, "max": 255}),
-                "canny_high": ("INT", {"default": 200, "min": 0, "max": 255}),
+                "canny_low": ("INT", {"default": 100, "min": 0, "max": 255, "tooltip": "Canny lower threshold: weaker edges are kept only where they join a strong edge. Lower = more detail lines."}),
+                "canny_high": ("INT", {"default": 200, "min": 0, "max": 255, "tooltip": "Canny upper threshold: gradients above it are always edges. Lower = more edges."}),
                 "canny_aperture": ([3, 5, 7], {"default": 3, "tooltip": "Sobel aperture for internal Canny (odd 3/5/7)."}),
                 "depth_invert": ("BOOLEAN", {"default": False, "tooltip": "Invert depth (1 - depth). Use when source is 'far=bright' but the ControlNet expects 'near=bright'."}),
                 "preproc_resolution": ("INT", {"default": 512, "min": 64, "max": 4096, "step": 8,
                                "tooltip": "Resolution passed to delegated preprocessors."}),
                 "run_motion": ("BOOLEAN", {"default": False,
                                "tooltip": "Optical-flow motion-vector pass (needs an image batch ≥ 2 frames)."}),
-                "depth_weight": wf(1.0), "canny_weight": wf(1.0),
-                "pose_weight": wf(1.0), "normal_weight": wf(0.0),
+                "depth_weight": wf(1.0, "depth"), "canny_weight": wf(1.0, "canny"),
+                "pose_weight": wf(1.0, "pose"), "normal_weight": wf(0.0, "normal"),
                 "match_to": (("depth", "canny", "pose", "image", "largest"), {"default": "image",
                                 "tooltip": "Internal: align every AOV pass to this source's size before resize/output."}),
                 # ── In-node resize / scale / smart-resize (real LayerStyle code, MIT —

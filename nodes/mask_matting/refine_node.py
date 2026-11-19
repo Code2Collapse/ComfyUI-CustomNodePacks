@@ -520,17 +520,17 @@ class MaskRefineMEC:
 
                 # 11 stage toggles (one widget each — these are the only knobs
                 # most users touch).
-                "enable_hole_fill":       ("BOOLEAN",                                      {"default": False}),
-                "morph_op":               (["none", "close", "open", "dilate", "erode"],   {"default": "none"}),
-                "enable_thin_recover":    ("BOOLEAN",                                      {"default": False}),
-                "enable_joint_bilateral": ("BOOLEAN",                                      {"default": False}),
-                "enable_guided_filter":   ("BOOLEAN",                                      {"default": True}),
-                "enable_dense_crf":       ("BOOLEAN",                                      {"default": False}),
-                "enable_edge_snap":       ("BOOLEAN",                                      {"default": False}),
-                "cascade_passes":         ("INT",   {"default": 0, "min": 0, "max": 5}),
-                "feather_sigma":          ("FLOAT", {"default": 0.0, "min": 0.0, "max": 20.0, "step": 0.1}),
-                "gamma":                  ("FLOAT", {"default": 1.0, "min": 0.1, "max": 5.0,  "step": 0.05}),
-                "threshold":              ("FLOAT", {"default": 0.0, "min": 0.0, "max": 1.0,  "step": 0.01}),
+                "enable_hole_fill":       ("BOOLEAN",                                      {"default": False, "tooltip": "Stage 1: fill holes inside the mask (eyes, mouths, textures the segmenter punched through)."}),
+                "morph_op":               (["none", "close", "open", "dilate", "erode"],   {"default": "none", "tooltip": "Stage 2: morphology with a round brush. open removes specks, close fills slivers, dilate / erode grow / shrink."}),
+                "enable_thin_recover":    ("BOOLEAN",                                      {"default": False, "tooltip": "Stage 3: bring back thin strands (hair, wire, grass) the segmenter cut off."}),
+                "enable_joint_bilateral": ("BOOLEAN",                                      {"default": False, "tooltip": "Stage 4: edge-preserving smoothing guided by the image. Needs opencv-contrib-python; skipped without it."}),
+                "enable_guided_filter":   ("BOOLEAN",                                      {"default": True, "tooltip": "Stage 5: guided filter - snaps the soft edge to colour edges in the image (fast, no model)."}),
+                "enable_dense_crf":       ("BOOLEAN",                                      {"default": False, "tooltip": "Stage 6: DenseCRF boundary refinement (sharpest edges, slower). Needs pydensecrf; skipped without it."}),
+                "enable_edge_snap":       ("BOOLEAN",                                      {"default": False, "tooltip": "Stage 7: pull the edge band toward image gradients - a cheap alternative to DenseCRF."}),
+                "cascade_passes":         ("INT",   {"default": 0, "min": 0, "max": 5, "tooltip": "Extra refinement passes after stage 7: guided filter (plus joint bilateral / edge snap when on) again, radii halved each pass. 0 = none."}),
+                "feather_sigma":          ("FLOAT", {"default": 0.0, "min": 0.0, "max": 20.0, "step": 0.1, "tooltip": "Blur the final soft edge (Gaussian sigma, pixels). 0 = off."}),
+                "gamma":                  ("FLOAT", {"default": 1.0, "min": 0.1, "max": 5.0,  "step": 0.05, "tooltip": "Power curve on the soft alpha: above 1 thins semi-transparent edges, below 1 thickens them."}),
+                "threshold":              ("FLOAT", {"default": 0.0, "min": 0.0, "max": 1.0,  "step": 0.01, "tooltip": "Above 0: cut the result to a hard 0 / 1 mask at this value. 0 = keep it soft."}),
 
                 # ── NEW power-user stages ──────────────────────────────
                 "enable_domain_transform": ("BOOLEAN", {"default": False, "tooltip":

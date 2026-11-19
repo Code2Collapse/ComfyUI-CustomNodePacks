@@ -319,6 +319,10 @@ class PromptRelayEncodeC2C:
     # (wan_model, wan_text_embeds). The JS extension hides the unused pair.
     RETURN_TYPES = ("MODEL", "CONDITIONING", "WANVIDEOMODEL", "WANVIDEOTEXTEMBEDS")
     RETURN_NAMES = ("model", "positive", "wan_model", "wan_text_embeds")
+    OUTPUT_TOOLTIPS = ("native / smart: the MODEL with the segment masks patched in - wire it to the sampler.",
+                       "native / smart: the prompt conditioning for the sampler's positive input.",
+                       "kijai: the WanVideo model with the segment masks patched in (they stay until Prompt Relay Restore or a reload).",
+                       "kijai: text embeds for the WanVideo sampler.")
     FUNCTION = "execute"
     CATEGORY = _CATEGORY
     DESCRIPTION = (
@@ -376,10 +380,11 @@ class PromptRelayRestoreKijaiC2C:
 
     @classmethod
     def INPUT_TYPES(cls):
-        return {"required": {"model": ("WANVIDEOMODEL",)}}
+        return {"required": {"model": ("WANVIDEOMODEL", {"tooltip": "A WanVideo model a Prompt Relay (kijai) encode patched."})}}
 
     RETURN_TYPES = ("WANVIDEOMODEL",)
     RETURN_NAMES = ("model",)
+    OUTPUT_TOOLTIPS = ("The same model with its original cross-attention restored.",)
     FUNCTION = "execute"
     CATEGORY = _CATEGORY
     DESCRIPTION = "Undo a Prompt Relay (Kijai) patch — restores the original cross_attn.forward."
@@ -424,6 +429,7 @@ class PromptRelayAdvancedOptionsC2C:
 
     RETURN_TYPES = ("RELAY_OPTIONS",)
     RETURN_NAMES = ("relay_options",)
+    OUTPUT_TOOLTIPS = ("Wire to Prompt Relay Encode's relay_options input.",)
     FUNCTION = "execute"
     CATEGORY = _CATEGORY
     DESCRIPTION = "Optional per-stream tuning for the Prompt Relay encoders."

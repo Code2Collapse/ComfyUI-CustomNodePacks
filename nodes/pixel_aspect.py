@@ -99,7 +99,7 @@ class PARDesqueezeMEC:
         return with_layout({"required": {
             "image": ("IMAGE", {"tooltip": "Frames shot with non-square pixels (anamorphic lens, DV, HDV ...)."}),
             "par_preset": (tuple(PAR_PRESETS.keys()),
-                           {"default": "ARRI 4448x3840→2:1 (1.7266)"}),
+                           {"default": "ARRI 4448x3840→2:1 (1.7266)", "tooltip": "Camera / format the frames come from; sets the pixel aspect ratio. custom = type it in pixel_aspect."}),
             "pixel_aspect": ("FLOAT", {"default": 1.7266, "min": 0.1, "max": 4.0,
                              "step": 0.0001,
                              "tooltip": "Used when par_preset = custom. PAR>1 = pixels wider than tall."}),

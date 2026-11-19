@@ -168,15 +168,15 @@ class ProPainterMEC:
                     "tooltip": "Pick the ProPainter operation. Each mode reads a different subset of the optional inputs/widgets below."}),
 
                 # Common knobs (used by all flow-based modes).
-                "use_half":          ("BOOLEAN", {"default": True}),
+                "use_half":          ("BOOLEAN", {"default": True, "tooltip": "Run the flow-completion and inpainting networks in fp16 on CUDA (about half the VRAM). Ignored on CPU."}),
                 "color_match_mode":  (["off", "reinhard", "lab", "lab_transfer", "none"],
                                       {"default": "reinhard",
                                        "tooltip": "Per-frame masked colour match between fill and surroundings (ignored in 'flow' mode)."}),
 
                 # Shared ProPainter knobs.
-                "raft_iter":         ("INT", {"default": 12, "min": 1, "max": 100}),
-                "neighbor_stride":   ("INT", {"default": 5,  "min": 1, "max": 32}),
-                "ref_stride":        ("INT", {"default": 10, "min": 1, "max": 64}),
+                "raft_iter":         ("INT", {"default": 12, "min": 1, "max": 100, "tooltip": "RAFT optical-flow refinement steps. More = more accurate flow, slower."}),
+                "neighbor_stride":   ("INT", {"default": 5,  "min": 1, "max": 32, "tooltip": "Step between local windows of neighbouring frames that are inpainted together. Smaller = more overlap, smoother, slower."}),
+                "ref_stride":        ("INT", {"default": 10, "min": 1, "max": 64, "tooltip": "Spacing of the far-away reference frames each window also looks at. Smaller = more references (fills long occlusions better), more memory."}),
                 "subvideo_length":   ("INT", {"default": 8,  "min": 2, "max": 300,
                     "tooltip": "Frames per InpaintGenerator window. 8GB cards: 8-30. 12GB: 40-60. 24GB: 80+."}),
                 "raft_chunk":        ("INT", {"default": 16, "min": 1, "max": 64,

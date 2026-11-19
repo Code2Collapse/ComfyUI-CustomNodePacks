@@ -269,6 +269,9 @@ class NanoBananaC2C:
     FUNCTION = "generate"
     RETURN_TYPES = ("IMAGE", "STRING", "STRING")
     RETURN_NAMES = ("images", "text_response", "info")
+    OUTPUT_TOOLTIPS = ("The generated images, one per batch_count call, resized to the first one's size.",
+                       "The model's text reply (empty with response_modalities = IMAGE).",
+                       "Model, mode, size, reference count, latency and tokens used (JSON).")
     DESCRIPTION = (
         "Generate or edit images with Google's Nano Banana family "
         "(gemini-3-pro-image / gemini-2.5-flash-image). Modes: text-to-image, "
@@ -295,7 +298,7 @@ class NanoBananaC2C:
                                  "Wraps your prompt in a proven template: cinematic photo, "
                                  "structured JSON brief, character-consistency lock, or "
                                  "commercial product shot."}),
-                "aspect_ratio": (_ASPECTS, {"default": "auto"}),
+                "aspect_ratio": (_ASPECTS, {"default": "auto", "tooltip": "Shape of the generated image. auto = the model decides (for edits it usually keeps the reference's shape)."}),
                 "resolution": (_RESOLUTIONS, {"default": "auto", "tooltip":
                                "1K/2K/4K are Nano Banana **Pro** only; flash models "
                                "ignore this."}),
@@ -305,7 +308,7 @@ class NanoBananaC2C:
                 "response_modalities": (["IMAGE+TEXT", "IMAGE"], {"default": "IMAGE+TEXT", "tooltip":
                                         "IMAGE = picture only; IMAGE+TEXT also returns the model's "
                                         "commentary on the text_response output."}),
-                "temperature": ("FLOAT", {"default": 1.0, "min": 0.0, "max": 2.0, "step": 0.05}),
+                "temperature": ("FLOAT", {"default": 1.0, "min": 0.0, "max": 2.0, "step": 0.05, "tooltip": "Randomness of the model. Lower = closer to the prompt and more repeatable, higher = more varied."}),
                 "batch_count": ("INT", {"default": 1, "min": 1, "max": 4, "tooltip":
                                 "Sequential API calls; results are stacked into one batch."}),
                 "seed": ("INT", {"default": 0, "min": 0, "max": 0x7FFFFFFF, "tooltip":
@@ -322,8 +325,8 @@ class NanoBananaC2C:
                                        "Optional system-level art direction applied to every "
                                        "generation (brand style, banned elements, palette rules)."}),
                 "image_1": ("IMAGE", {"tooltip": "Reference image(s). Batches flatten in order."}),
-                "image_2": ("IMAGE", {}),
-                "image_3": ("IMAGE", {}),
+                "image_2": ("IMAGE", {"tooltip": "More reference image(s), after image_1."}),
+                "image_3": ("IMAGE", {"tooltip": "More reference image(s), after image_2."}),
                 "image_4": ("IMAGE", {"tooltip": "For style_transfer the LAST image is the style."}),
             },
         }, _NANO_LAYOUT)

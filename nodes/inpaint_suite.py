@@ -1155,16 +1155,26 @@ class InpaintCropProMEC:
             "required": {
                 # L7.65 P08: "image" is the first OPTIONAL input now (a migrated Mask Prepare has none); the sockets
                 # keep their slots because the front end adds socket inputs first, in definition order
-                "downscale_algorithm": (cls.RESIZE_ALGS, {"default": "bilinear"}),
-                "upscale_algorithm":   (cls.RESIZE_ALGS, {"default": "bicubic"}),
+                "downscale_algorithm": (cls.RESIZE_ALGS, {"default": "bilinear",
+                    "tooltip": "Resampling used when something is made smaller (pre-resize, fitting the crop to the "
+                               "target). area / box keep detail best when shrinking."}),
+                "upscale_algorithm":   (cls.RESIZE_ALGS, {"default": "bicubic",
+                    "tooltip": "Resampling used when something is made bigger. bicubic / lanczos are sharp; nearest "
+                               "keeps hard edges."}),
 
                 "preresize": ("BOOLEAN", {"default": False,
                     "tooltip": "Resize input image before processing (lquesada-style)."}),
-                "preresize_mode": (cls.PRERESIZE_MODES, {"default": "ensure minimum resolution"}),
-                "preresize_min_width":  ("INT", {"default": 1024, "min": 0, "max": 16384, "step": 1}),
-                "preresize_min_height": ("INT", {"default": 1024, "min": 0, "max": 16384, "step": 1}),
-                "preresize_max_width":  ("INT", {"default": 16384, "min": 0, "max": 16384, "step": 1}),
-                "preresize_max_height": ("INT", {"default": 16384, "min": 0, "max": 16384, "step": 1}),
+                "preresize_mode": (cls.PRERESIZE_MODES, {"default": "ensure minimum resolution",
+                    "tooltip": "preresize: scale the whole image up to at least the minimum, down to at most the "
+                               "maximum, or both (keeping its aspect)."}),
+                "preresize_min_width":  ("INT", {"default": 1024, "min": 0, "max": 16384, "step": 1,
+                    "tooltip": "preresize: smallest width the image is scaled up to."}),
+                "preresize_min_height": ("INT", {"default": 1024, "min": 0, "max": 16384, "step": 1,
+                    "tooltip": "preresize: smallest height the image is scaled up to."}),
+                "preresize_max_width":  ("INT", {"default": 16384, "min": 0, "max": 16384, "step": 1,
+                    "tooltip": "preresize: largest width the image is scaled down to."}),
+                "preresize_max_height": ("INT", {"default": 16384, "min": 0, "max": 16384, "step": 1,
+                    "tooltip": "preresize: largest height the image is scaled down to."}),
 
                 "mask_fill_holes":   ("BOOLEAN", {"default": True,
                     "tooltip": "Mark fully-enclosed regions as masked."}),
@@ -1179,10 +1189,14 @@ class InpaintCropProMEC:
 
                 "extend_for_outpainting": ("BOOLEAN", {"default": False,
                     "tooltip": "Extend image with edge-replicated padding for outpainting."}),
-                "extend_up_factor":    ("FLOAT", {"default": 1.0, "min": 0.01, "max": 100.0, "step": 0.01}),
-                "extend_down_factor":  ("FLOAT", {"default": 1.0, "min": 0.01, "max": 100.0, "step": 0.01}),
-                "extend_left_factor":  ("FLOAT", {"default": 1.0, "min": 0.01, "max": 100.0, "step": 0.01}),
-                "extend_right_factor": ("FLOAT", {"default": 1.0, "min": 0.01, "max": 100.0, "step": 0.01}),
+                "extend_up_factor":    ("FLOAT", {"default": 1.0, "min": 0.01, "max": 100.0, "step": 0.01,
+                    "tooltip": "extend_for_outpainting: grow the image upward by (factor - 1) x its height (1 = none, 1.5 = half the height more)."}),
+                "extend_down_factor":  ("FLOAT", {"default": 1.0, "min": 0.01, "max": 100.0, "step": 0.01,
+                    "tooltip": "extend_for_outpainting: grow the image downward by (factor - 1) x its height (1 = none, 1.5 = half the height more)."}),
+                "extend_left_factor":  ("FLOAT", {"default": 1.0, "min": 0.01, "max": 100.0, "step": 0.01,
+                    "tooltip": "extend_for_outpainting: grow the image to the left by (factor - 1) x its width (1 = none, 1.5 = half the width more)."}),
+                "extend_right_factor": ("FLOAT", {"default": 1.0, "min": 0.01, "max": 100.0, "step": 0.01,
+                    "tooltip": "extend_for_outpainting: grow the image to the right by (factor - 1) x its width (1 = none, 1.5 = half the width more)."}),
 
                 "context_from_mask_extend_factor": ("FLOAT", {
                     "default": 1.2, "min": 0.1, "max": 100.0, "step": 0.01,
@@ -1213,11 +1227,16 @@ class InpaintCropProMEC:
 
                 "output_resize_to_target_size": ("BOOLEAN", {"default": True,
                     "tooltip": "Force output to a specific resolution for sampling."}),
-                "output_target_width":  ("INT", {"default": 512, "min": 64, "max": 16384, "step": 1}),
-                "output_target_height": ("INT", {"default": 512, "min": 64, "max": 16384, "step": 1}),
-                "output_padding": (cls.OUTPUT_PADDING_CHOICES, {"default": "32"}),
+                "output_target_width":  ("INT", {"default": 512, "min": 64, "max": 16384, "step": 1,
+                    "tooltip": "output_resize_to_target_size: width of the crop handed to the sampler."}),
+                "output_target_height": ("INT", {"default": 512, "min": 64, "max": 16384, "step": 1,
+                    "tooltip": "output_resize_to_target_size: height of the crop handed to the sampler."}),
+                "output_padding": (cls.OUTPUT_PADDING_CHOICES, {"default": "32",
+                    "tooltip": "Round the crop size up to a multiple of this (models want sizes divisible by "
+                               "8 / 16 / 32 ...). 0 = no rounding."}),
 
-                "device_mode": (cls.DEVICE_MODES, {"default": "gpu (much faster)"}),
+                "device_mode": (cls.DEVICE_MODES, {"default": "gpu (much faster)",
+                    "tooltip": "Where the resizing and blending run. cpu when the GPU is busy or short of memory."}),
 
                 "wan_align_multiple": ("INT", {
                     "default": 16, "min": 1, "max": 256, "step": 1,
@@ -1258,9 +1277,10 @@ class InpaintCropProMEC:
                     "tooltip": "Fill masked region in the cropped image: none, edge_pad (Gaussian smear), neutral_gray, original."}),
             },
             "optional": {
-                "image": ("IMAGE",),
-                "mask": ("MASK",),
-                "optional_context_mask": ("MASK",),
+                "image": ("IMAGE", {"tooltip": "The frames to inpaint (a still or a clip)."}),
+                "mask": ("MASK", {"tooltip": "White = the area to regenerate."}),
+                "optional_context_mask": ("MASK", {"tooltip": "Extra area the crop must include as context, without "
+                                                              "being regenerated."}),
                 "roto_quality": ("BOOLEAN", {
                     "default": False,
                     "tooltip": ("Roto-Sync mode: tightens the inpaint seam for clean alpha edges. "
@@ -1291,6 +1311,14 @@ class InpaintCropProMEC:
 
     RETURN_TYPES = ("STITCHER", "IMAGE", "MASK", "MASK", "STRING", "IMAGE")
     RETURN_NAMES = ("stitcher", "cropped_image", "inpaint_mask", "stitch_blend_mask", "info", "preview")
+    OUTPUT_TOOLTIPS = (
+        "Everything Inpaint Stitch Pro needs to put the result back - connect it there.",
+        "The crop to inpaint (send it to your sampler / VAE encode).",
+        "The mask for the sampler, on the crop.",
+        "The feathered mask the stitch blends with.",
+        "Sizes, crop box and settings used, as text.",
+        "The picture the node shows: frame preview_frame with the crop window (the crop itself if it cannot be drawn).",
+    )
     FUNCTION = "inpaint_crop"
     CATEGORY = "C2C/Inpaint"
     DESCRIPTION = ("Crop around mask for inpainting (lquesada API + Wan 2.2 Animate aware). crop_mode 'smart aspect' "
@@ -2360,8 +2388,10 @@ class InpaintStitchProMEC:
                                 "Use with stitch_temporal_sigma > 0 for jittery video. 0 = off.")}),
             },
             "optional": {
-                "stitcher": ("STITCHER",),
-                "inpainted_image": ("IMAGE",),
+                "stitcher": ("STITCHER", {"tooltip": "Inpaint Crop Pro's stitcher output (where each crop came "
+                                                     "from)."}),
+                "inpainted_image": ("IMAGE", {"tooltip": "The crops after inpainting (same count as the crop "
+                                                         "node gave; they may be a different size)."}),
                 "roto_quality_override": (["from_crop", "force_on", "force_off"], {
                     "default": "from_crop",
                     "tooltip": ("Roto-Sync at stitch time. 'from_crop' honors the InpaintCropProMEC "
@@ -2393,6 +2423,9 @@ class InpaintStitchProMEC:
 
     RETURN_TYPES = ("IMAGE", "MASK", "STRING")
     RETURN_NAMES = ("image", "blend_mask_used", "info")
+    OUTPUT_TOOLTIPS = ("The full frames with the inpainted crops blended back in.",
+                       "The mask the blend actually used, at full-frame size.",
+                       "Blend mode and settings used, as text.")
     FUNCTION = "inpaint_stitch"
     CATEGORY = "C2C/Inpaint"
     DESCRIPTION = ("Stitch the inpainted crop back into the original (lquesada-compatible) with blend overrides + "

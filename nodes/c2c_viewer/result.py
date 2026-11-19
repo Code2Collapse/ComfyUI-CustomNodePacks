@@ -41,8 +41,8 @@ class C2CViewerResult:
                 "coarse": ("MASK", {"tooltip": "Mask + Matting's mask (the segmenter's coarse selection)."}),
                 "info": ("STRING", {"forceInput": True,
                                     "tooltip": "Mask + Matting's info output (names the frames a run left empty)."}),
-                "max_side": ("INT", {"default": C.MAX_SIDE, "min": 64, "max": 2048, "step": 16}),
-                "max_frames": ("INT", {"default": 120, "min": 1, "max": 2000}),
+                "max_side": ("INT", {"default": C.MAX_SIDE, "min": 64, "max": 2048, "step": 16, "tooltip": "Longest side of the preview images the viewer gets, in pixels (display only - the matte itself is untouched)."}),
+                "max_frames": ("INT", {"default": 120, "min": 1, "max": 2000, "tooltip": "Most frames sent to the viewer; longer renders are sampled evenly."}),
             },
         }
 

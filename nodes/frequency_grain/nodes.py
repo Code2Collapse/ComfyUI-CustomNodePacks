@@ -173,6 +173,10 @@ class FrequencySeparateMEC:
 
     RETURN_TYPES = ("IMAGE", "IMAGE", "IMAGE", "STRING")
     RETURN_NAMES = ("high_frequency", "low_frequency", "high_frequency_masked", "report")
+    OUTPUT_TOOLTIPS = ("The fine detail layer (no detail = 1.0 in Divide mode, 0.0 in Subtract). Wire to Frequency Combine.",
+                       "The soft base layer with the detail removed.",
+                       "The detail layer kept only inside the mask (neutral elsewhere); same as high_frequency without a mask.",
+                       "What ran: method, radius, mode and any notes, as text.")
     FUNCTION = "execute"
     CATEGORY = _CATEGORY
     DESCRIPTION = (
@@ -240,6 +244,8 @@ class FrequencyCombineMEC:
 
     RETURN_TYPES = ("IMAGE", "STRING")
     RETURN_NAMES = ("image", "report")
+    OUTPUT_TOOLTIPS = ("The base with the detail layer merged back on.",
+                       "What ran and any notes, as text.")
     FUNCTION = "execute"
     CATEGORY = _CATEGORY
     DESCRIPTION = (
@@ -326,6 +332,8 @@ class FilmGrainMEC:
 
     RETURN_TYPES = ("IMAGE", "STRING")
     RETURN_NAMES = ("image", "report")
+    OUTPUT_TOOLTIPS = ("The image with grain added (inside the mask only when one is wired).",
+                       "Settings used, the device, and any fallback (e.g. computed on the CPU after a GPU out-of-memory).")
     FUNCTION = "execute"
     CATEGORY = _CATEGORY
     DESCRIPTION = "Lightroom-style film grain with per-frame animation for video batches."

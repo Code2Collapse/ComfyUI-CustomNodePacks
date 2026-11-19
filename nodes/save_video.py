@@ -38,6 +38,8 @@ class SaveVideoC2C:
     OUTPUT_NODE = True
     RETURN_TYPES = ("STRING", "IMAGE")
     RETURN_NAMES = ("filenames", "preview")
+    OUTPUT_TOOLTIPS = ("Full paths of the written file(s), one per line (empty in 'preview first' mode).",
+                       "The saved frames (the last frame only when streaming a latent or previewing first).")
     FUNCTION = "execute"
     DESCRIPTION = (
         "Save an IMAGE batch as H.264/H.265/ProRes/DNxHR/FFV1/WebM/GIF/WebP "
@@ -63,7 +65,7 @@ class SaveVideoC2C:
                     "tooltip": "Frame rate for the written file. When video_info is "
                     "wired and fps is left at 24, loaded_fps from the loader is used.",
                 }),
-                "filename_prefix": ("STRING", {"default": "C2C/video"}),
+                "filename_prefix": ("STRING", {"default": "C2C/video", "tooltip": "File name start; may include folders. Folder Version Incrementer naming uses the version name instead. 'auto (from Load)' = the followed Load Video's name."}),
                 "quality": ("INT", {
                     "default": 80, "min": 0, "max": 100, "step": 1,
                     "tooltip": "Encoder quality where the format supports it "
@@ -74,12 +76,12 @@ class SaveVideoC2C:
                 # first optional slot: saved workflows keep images on input 0 (it used to be the only required socket)
                 "images": ("IMAGE", {"tooltip": "The frames to save. Or wire latent + vae instead to decode and save "
                                                 "as one stream."}),
-                "audio": ("AUDIO",),
-                "video_info": ("VHS_VIDEOINFO",),
+                "audio": ("AUDIO", {"tooltip": "Muxed into the file when the container takes audio."}),
+                "video_info": ("VHS_VIDEOINFO", {"tooltip": "From Load Video (C2C): frame rate, handles and colour of the source. Without it the node follows the images back to their Load Video."}),
                 # L9.53: "auto (from Load)" = the space Load Video (C2C) converted the frames to / the file's own
                 # space, so Save reverses exactly what Load did (a new node starts on it; saved values stay)
-                "colorspace_in": ([CM.FROM_LOAD] + list(spaces), {"default": default_in}),
-                "colorspace_out": (["same as input", CM.FROM_LOAD] + list(spaces), {"default": "same as input"}),
+                "colorspace_in": ([CM.FROM_LOAD] + list(spaces), {"default": default_in, "tooltip": "OCIO colour space the frames are in. auto (from Load) = the space Load Video (C2C) gave them, so Save reverses exactly what Load did."}),
+                "colorspace_out": (["same as input", CM.FROM_LOAD] + list(spaces), {"default": "same as input", "tooltip": "OCIO colour space written to the file. same as input = no conversion; auto (from Load) = the source file's own space."}),
                 # "Folder Version" (saved workflows) is the same as Folder Version Incrementer (L9.40)
                 "naming": (SN.NAMING_CHOICES + ["Folder Version"], {"default": "default", "tooltip":
                     "Folder Version Incrementer: the version folder and name come from the Folder Version "
@@ -87,8 +89,8 @@ class SaveVideoC2C:
                     "is none; a wired subfolder still wins. ComfyUI counter: prefix_00001 like Save Image. default: "
                     "the C2C setting (Folder Version Incrementer unless you changed it)."}),
                 "naming_resolved": ("STRING", {"default": "", "tooltip": "Set by the UI from c2c.saveVideo.naming."}),
-                "subfolder": ("STRING", {"default": ""}),
-                "save_output": ("BOOLEAN", {"default": True}),
+                "subfolder": ("STRING", {"default": "", "tooltip": "Folder inside the output folder. When set it wins over the Folder Version Incrementer folder."}),
+                "save_output": ("BOOLEAN", {"default": True, "tooltip": "On: write to the output folder. Off: write a temp file for the preview only (no version folder)."}),
                 "latent": ("LATENT", {"tooltip": "Stream save: a video latent decoded straight into the file, in order, "
                                                  "keeping the VAE's causal state - the full frame batch is never held in "
                                                  "RAM. Wire this and vae instead of images."}),

@@ -463,8 +463,8 @@ class AVHandlesMEC:
                     "amount."}),
             },
             "optional": {
-                "images": ("IMAGE",),
-                "audio": ("AUDIO",),
+                "images": ("IMAGE", {"tooltip": "The clip to pad or trim (fit mode needs it). Wire images, audio or both."}),
+                "audio": ("AUDIO", {"tooltip": "Audio moved by the same duration as the frames, so it stays in sync."}),
                 "target_frames": ("INT", {
                     "default": 0, "min": 0, "max": 100000, "step": 1,
                     "tooltip":
