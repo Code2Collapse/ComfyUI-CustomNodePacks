@@ -142,7 +142,7 @@ class MagnificSaveTo:
             projects = [LOAD_FAILED_SENTINEL]
         return {
             "required": {
-                "project": (projects, {}),
+                "project": (projects, {"tooltip": "Your Magnific project. Press R after creating one at magnific.com to refresh the list."}),
                 "folder": (
                     [PROJECT_ROOT] + folder_paths,
                     {
@@ -155,6 +155,7 @@ class MagnificSaveTo:
 
     RETURN_TYPES = (FOLDER_TYPE,)
     RETURN_NAMES = ("folder",)
+    OUTPUT_TOOLTIPS = ("Where new creations are stored - wire it to a generation node's folder input.",)
     FUNCTION = "resolve"
     CATEGORY = CATEGORY
 
@@ -214,6 +215,7 @@ class MagnificLibraryReference:
 
     RETURN_TYPES = (LIBRARY_REFS_TYPE,)
     RETURN_NAMES = ("library_references",)
+    OUTPUT_TOOLTIPS = ("This asset plus everything chained into it - wire to a generation node or another Library Reference.",)
     FUNCTION = "resolve"
     CATEGORY = CATEGORY
 
@@ -316,10 +318,10 @@ class MagnificGenerateImage:
             models = ["auto"]  # 'auto' always works; the catalog loads on the next refresh
         return with_layout({
             "required": {
-                "prompt": ("STRING", {"multiline": True, "default": ""}),
-                "model": (models, {"default": "auto"}),
-                "aspect_ratio": (ASPECT_RATIOS, {"default": "auto"}),
-                "count": ("INT", {"default": 1, "min": 1, "max": 8}),
+                "prompt": ("STRING", {"multiline": True, "default": "", "tooltip": "What to generate."}),
+                "model": (models, {"default": "auto", "tooltip": "Image model; auto lets Magnific choose. The list comes from your account (press R to refresh)."}),
+                "aspect_ratio": (ASPECT_RATIOS, {"default": "auto", "tooltip": "Shape of the image; auto = the model's default."}),
+                "count": ("INT", {"default": 1, "min": 1, "max": 8, "tooltip": "How many images; each one is a separate paid generation (above 4 needs confirm_task_count)."}),
                 "seed": (
                     "INT",
                     {
@@ -344,7 +346,7 @@ class MagnificGenerateImage:
                 "reference_image_2": ("IMAGE", {"tooltip": EXTRA_REFERENCE_IMAGE_TOOLTIP}),
                 "reference_image_3": ("IMAGE", {"tooltip": EXTRA_REFERENCE_IMAGE_TOOLTIP}),
                 "reference_image_4": ("IMAGE", {"tooltip": EXTRA_REFERENCE_IMAGE_TOOLTIP}),
-                "reference_type": (["image", "style"], {"default": "image"}),
+                "reference_type": (["image", "style"], {"default": "image", "tooltip": "How the reference pictures are used: image = content to follow, style = look to copy."}),
                 # Widget order still matters: widgets_values is positional in a
                 # saved workflow. web/magnific.js rebuilds it by name on load,
                 # but only for workflows whose frontend recorded the widget
@@ -363,6 +365,7 @@ class MagnificGenerateImage:
 
     RETURN_TYPES = ("IMAGE", "STRING", "STRING")
     RETURN_NAMES = ("images", "creation_identifiers", "metadata")
+    OUTPUT_TOOLTIPS = ("The generated images as one batch.", "The creation id of each image, one per line.", "Model, prompt, seed, tool and url of the result as JSON - split it with the Metadata (unpack) node.")
     FUNCTION = "generate"
     CATEGORY = CATEGORY
 
@@ -426,33 +429,34 @@ class MagnificUpscaleImage:
     def INPUT_TYPES(cls):
         return with_layout({
             "required": {
-                "image": ("IMAGE",),
-                "scale": (["2x", "4x", "8x", "16x"], {"default": "2x"}),
-                "precision": (["creative", "precision"], {"default": "creative"}),
-                "presets": (["subtle", "vivid", "wild"], {"default": "subtle"}),
-                "engine": (api.UPSCALE_ENGINE_CHOICES, {"default": "Automatic"}),
-                "mode": (api.UPSCALE_MODE_CHOICES, {"default": "Automatic"}),
+                "image": ("IMAGE", {"tooltip": "The picture to upscale (uploaded to Magnific)."}),
+                "scale": (["2x", "4x", "8x", "16x"], {"default": "2x", "tooltip": "Size multiplier."}),
+                "precision": (["creative", "precision"], {"default": "creative", "tooltip": "creative = invents new detail (the -10..10 sliders apply); precision = stays faithful to the input (the 0..100 sliders apply)."}),
+                "presets": (["subtle", "vivid", "wild"], {"default": "subtle", "tooltip": "How strong the added detail is."}),
+                "engine": (api.UPSCALE_ENGINE_CHOICES, {"default": "Automatic", "tooltip": "Upscaling engine; Automatic lets Magnific choose."}),
+                "mode": (api.UPSCALE_MODE_CHOICES, {"default": "Automatic", "tooltip": "Magnific model version; Automatic lets the server choose."}),
             },
             "optional": {
                 # First optional key: preserves the socket order (image, folder)
                 # this input had while required, so saved link slots don't shift.
                 "folder": (FOLDER_TYPE, {"tooltip": FOLDER_TOOLTIP}),
-                "prompt": ("STRING", {"multiline": True, "default": ""}),
+                "prompt": ("STRING", {"multiline": True, "default": "", "tooltip": "Optional: describe the picture to guide the new detail."}),
                 # Creative sliders (-10..10); the server ignores the family that
                 # doesn't match the chosen precision.
-                "creativity": ("INT", {"default": 0, "min": -10, "max": 10}),
-                "hdr": ("INT", {"default": 0, "min": -10, "max": 10}),
-                "resemblance": ("INT", {"default": 0, "min": -10, "max": 10}),
-                "fractality": ("INT", {"default": 0, "min": -10, "max": 10}),
+                "creativity": ("INT", {"default": 0, "min": -10, "max": 10, "tooltip": "Creative mode: how much new detail is invented."}),
+                "hdr": ("INT", {"default": 0, "min": -10, "max": 10, "tooltip": "Creative mode: local contrast / definition."}),
+                "resemblance": ("INT", {"default": 0, "min": -10, "max": 10, "tooltip": "Creative mode: how closely the result keeps to the original."}),
+                "fractality": ("INT", {"default": 0, "min": -10, "max": 10, "tooltip": "Creative mode: how much fine, repeating detail the prompt adds per pixel."}),
                 # Precision sliders (0..100).
-                "sharpness": ("INT", {"default": 0, "min": 0, "max": 100}),
-                "grain": ("INT", {"default": 0, "min": 0, "max": 100}),
-                "ultra_detail": ("INT", {"default": 0, "min": 0, "max": 100}),
+                "sharpness": ("INT", {"default": 0, "min": 0, "max": 100, "tooltip": "Precision mode: sharpening."}),
+                "grain": ("INT", {"default": 0, "min": 0, "max": 100, "tooltip": "Precision mode: added film grain."}),
+                "ultra_detail": ("INT", {"default": 0, "min": 0, "max": 100, "tooltip": "Precision mode: extra fine detail."}),
             },
         }, _MAG_UPSCALE_IMAGE)
 
     RETURN_TYPES = ("IMAGE", "STRING", "STRING")
     RETURN_NAMES = ("image", "creation_identifier", "metadata")
+    OUTPUT_TOOLTIPS = ("The upscaled picture.", "The Magnific creation id of the result (find it in your library, or pass it on).", "Model, prompt, seed, tool and url of the result as JSON - split it with the Metadata (unpack) node.")
     FUNCTION = "upscale"
     CATEGORY = CATEGORY
 
@@ -519,11 +523,11 @@ class MagnificStockSearch:
     def INPUT_TYPES(cls):
         return with_layout({
             "required": {
-                "query": ("STRING", {"default": ""}),
-                "content_type": (STOCK_CONTENT_TYPES, {"default": "photo"}),
-                "license": (["any", "free", "premium"], {"default": "any"}),
-                "orientation": (["any", "portrait", "landscape", "square", "panoramic"], {"default": "any"}),
-                "ai_generated": (["any", "only", "excluded"], {"default": "any"}),
+                "query": ("STRING", {"default": "", "tooltip": "What to search the Magnific stock library for."}),
+                "content_type": (STOCK_CONTENT_TYPES, {"default": "photo", "tooltip": "Kind of stock item; vectors, PSDs and designs come back as JPG renders."}),
+                "license": (["any", "free", "premium"], {"default": "any", "tooltip": "Only free items, only premium items, or both."}),
+                "orientation": (["any", "portrait", "landscape", "square", "panoramic"], {"default": "any", "tooltip": "Shape filter."}),
+                "ai_generated": (["any", "only", "excluded"], {"default": "any", "tooltip": "Include AI-generated items, show only them, or leave them out."}),
                 "selection": (
                     ["index", "random"],
                     {"default": "index", "tooltip": "index = take result_index; random = pick between range_from and range_to."},
@@ -549,6 +553,7 @@ class MagnificStockSearch:
 
     RETURN_TYPES = ("IMAGE", "STRING")
     RETURN_NAMES = ("image", "info")
+    OUTPUT_TOOLTIPS = ("The chosen stock image.", "Every usable result found, the picked one marked >, and where it was saved.")
     FUNCTION = "search"
     CATEGORY = CATEGORY
 
@@ -662,8 +667,8 @@ class MagnificGenerateVideo:
             models = ["auto"]  # 'auto' always works; the catalog loads on the next refresh
         return {
             "required": {
-                "prompt": ("STRING", {"multiline": True, "default": ""}),
-                "model": (models, {"default": "auto"}),
+                "prompt": ("STRING", {"multiline": True, "default": "", "tooltip": "What happens in the video."}),
+                "model": (models, {"default": "auto", "tooltip": "Video model; auto lets Magnific choose. The list comes from your account (press R to refresh)."}),
                 "duration": (
                     [str(d) for d in durations] or ["5", "10"],
                     {"default": "5" if 5 in durations or not durations else str(durations[0]), "tooltip": "Seconds; narrows to the selected model."},
@@ -672,7 +677,7 @@ class MagnificGenerateVideo:
                     ["auto"] + resolutions,
                     {"default": "auto", "tooltip": "auto = model default; narrows to the selected model."},
                 ),
-                "aspect_ratio": (["auto"] + (ratios or VIDEO_ASPECT_RATIO_FALLBACK), {"default": "auto"}),
+                "aspect_ratio": (["auto"] + (ratios or VIDEO_ASPECT_RATIO_FALLBACK), {"default": "auto", "tooltip": "Shape of the video; auto = the model's default (or the start frame's shape)."}),
                 "sound_effects": ("BOOLEAN", {"default": False, "tooltip": "Only models with native audio honor it."}),
                 "seed": (
                     "INT",
@@ -691,7 +696,7 @@ class MagnificGenerateVideo:
                 "folder": (FOLDER_TYPE, {"tooltip": FOLDER_TOOLTIP}),
                 "start_frame": ("IMAGE", {"tooltip": "Image-to-video start keyframe."}),
                 "end_frame": ("IMAGE", {"tooltip": "End keyframe (models that support it)."}),
-                "reference_image": ("IMAGE",),
+                "reference_image": ("IMAGE", {"tooltip": "A picture of what should appear (models that take image references)."}),
                 # Appended last: an input socket added above an existing one
                 # would shift the saved link slots of existing workflows.
                 "reference_video": (
@@ -708,6 +713,7 @@ class MagnificGenerateVideo:
 
     RETURN_TYPES = ("VIDEO", "STRING", "STRING")
     RETURN_NAMES = ("video", "creation_identifier", "metadata")
+    OUTPUT_TOOLTIPS = ("The generated clip.", "The Magnific creation id of the result (find it in your library, or pass it on).", "Model, prompt, seed, tool and url of the result as JSON - split it with the Metadata (unpack) node.")
     FUNCTION = "generate"
     CATEGORY = CATEGORY
 
@@ -773,13 +779,13 @@ class MagnificUpscaleVideo:
     def INPUT_TYPES(cls):
         return with_layout({
             "required": {
-                "video": ("VIDEO",),
-                "mode": (["magnific", "magnific_precision", "topaz"], {"default": "magnific"}),
+                "video": ("VIDEO", {"tooltip": "The clip to upscale (uploaded as MP4)."}),
+                "mode": (["magnific", "magnific_precision", "topaz"], {"default": "magnific", "tooltip": "magnific = creative upscale (preset / custom sliders); magnific_precision = faithful (strength); topaz = scale by upscale_factor."}),
                 # Magnific/Precision target an output width; Topaz scales by factor.
                 "target_resolution": (["1280", "1920", "2560", "3840"], {"default": "1920", "tooltip": "Output width (Magnific/Precision modes)."}),
                 "upscale_factor": (["2", "4"], {"default": "2", "tooltip": "Scale multiplier (Topaz mode)."}),
                 "preset": (["realistic", "animationAnd3D", "artistic", "custom"], {"default": "realistic", "tooltip": "Creative bundle for the magnific mode; custom uses the sliders below."}),
-                "fps_boost": ("BOOLEAN", {"default": False}),
+                "fps_boost": ("BOOLEAN", {"default": False, "tooltip": "magnific / magnific_precision modes: ask the server to raise the frame rate as well (not sent in topaz mode)."}),
                 "preview": ("BOOLEAN", {"default": False, "tooltip": "12-frame preview run instead of the full clip."}),
             },
             "optional": {
@@ -787,18 +793,19 @@ class MagnificUpscaleVideo:
                 # this input had while required, so saved link slots don't shift.
                 "folder": (FOLDER_TYPE, {"tooltip": FOLDER_TOOLTIP}),
                 # Custom-preset creative fields (magnific mode) / strength (precision).
-                "creativity": ("INT", {"default": 0, "min": 0, "max": 100}),
-                "sharpen": ("INT", {"default": 0, "min": 0, "max": 100}),
-                "smart_grain": ("INT", {"default": 0, "min": 0, "max": 100}),
-                "flavor": (["natural", "vivid"], {"default": "natural"}),
-                "premium_quality": ("BOOLEAN", {"default": True}),
-                "turbo": ("BOOLEAN", {"default": False}),
+                "creativity": ("INT", {"default": 0, "min": 0, "max": 100, "tooltip": "magnific mode, custom preset: how much new detail is invented."}),
+                "sharpen": ("INT", {"default": 0, "min": 0, "max": 100, "tooltip": "Sharpening (video: magnific mode, custom preset only)."}),
+                "smart_grain": ("INT", {"default": 0, "min": 0, "max": 100, "tooltip": "Added grain that follows the image (video: magnific mode, custom preset only)."}),
+                "flavor": (["natural", "vivid"], {"default": "natural", "tooltip": "magnific mode, custom preset: colour rendering."}),
+                "premium_quality": ("BOOLEAN", {"default": True, "tooltip": "magnific mode, custom preset: the slower, higher-quality pass."}),
+                "turbo": ("BOOLEAN", {"default": False, "tooltip": "magnific mode, custom preset: faster processing."}),
                 "strength": ("INT", {"default": 50, "min": 0, "max": 100, "tooltip": "Precision mode only."}),
             },
         }, _MAG_UPSCALE_VIDEO)
 
     RETURN_TYPES = ("VIDEO", "STRING", "STRING")
     RETURN_NAMES = ("video", "creation_identifier", "metadata")
+    OUTPUT_TOOLTIPS = ("The upscaled clip.", "The Magnific creation id of the result (find it in your library, or pass it on).", "Model, prompt, seed, tool and url of the result as JSON - split it with the Metadata (unpack) node.")
     FUNCTION = "upscale"
     CATEGORY = CATEGORY
 
@@ -868,10 +875,10 @@ class MagnificGenerateMusic:
     def INPUT_TYPES(cls):
         return with_layout({
             "required": {
-                "prompt": ("STRING", {"multiline": True, "default": ""}),
-                "model": (cls._models(), {"default": api.music_model_label("google-lyria")}),
+                "prompt": ("STRING", {"multiline": True, "default": "", "tooltip": "Describe the music: genre, mood, instruments, lyrics."}),
+                "model": (cls._models(), {"default": api.music_model_label("google-lyria"), "tooltip": "Music model."}),
                 "duration_seconds": ("INT", {"default": 30, "min": 10, "max": 300, "tooltip": "Only Lyria 3 Long and ElevenLabs honor it; the rest are fixed at 30s."}),
-                "instrumental": ("BOOLEAN", {"default": False}),
+                "instrumental": ("BOOLEAN", {"default": False, "tooltip": "On: no vocals."}),
                 # Not sent: audio_music_generate takes no seed, so this only
                 # breaks ComfyUI's result cache to force a fresh run.
                 "seed": (
@@ -892,6 +899,7 @@ class MagnificGenerateMusic:
 
     RETURN_TYPES = ("AUDIO", "STRING", "STRING")
     RETURN_NAMES = ("audio", "creation_identifier", "metadata")
+    OUTPUT_TOOLTIPS = ("The generated music.", "The Magnific creation id of the result (find it in your library, or pass it on).", "Model, prompt, seed, tool and url of the result as JSON - split it with the Metadata (unpack) node.")
     FUNCTION = "generate"
     CATEGORY = CATEGORY
 
@@ -917,9 +925,9 @@ class MagnificVoiceover:
             voices = [LOAD_FAILED_SENTINEL]
         return {
             "required": {
-                "text": ("STRING", {"multiline": True, "default": ""}),
-                "voice": (voices, {}),
-                "speed": ("FLOAT", {"default": 1.0, "min": 0.7, "max": 1.2, "step": 0.05}),
+                "text": ("STRING", {"multiline": True, "default": "", "tooltip": "The words to speak."}),
+                "voice": (voices, {"tooltip": "Voice from your Magnific account (press R to refresh)."}),
+                "speed": ("FLOAT", {"default": 1.0, "min": 0.7, "max": 1.2, "step": 0.05, "tooltip": "Speaking speed; 1 = normal."}),
             },
             "optional": {
                 "folder": (FOLDER_TYPE, {"tooltip": FOLDER_TOOLTIP}),
@@ -928,6 +936,7 @@ class MagnificVoiceover:
 
     RETURN_TYPES = ("AUDIO", "STRING", "STRING")
     RETURN_NAMES = ("audio", "creation_identifier", "metadata")
+    OUTPUT_TOOLTIPS = ("The spoken audio.", "The Magnific creation id of the result (find it in your library, or pass it on).", "Model, prompt, seed, tool and url of the result as JSON - split it with the Metadata (unpack) node.")
     FUNCTION = "speak"
     CATEGORY = CATEGORY
 
@@ -955,10 +964,10 @@ class MagnificSkinEnhancer:
     def INPUT_TYPES(cls):
         return with_layout({
             "required": {
-                "image": ("IMAGE",),
-                "version": (["faithful", "creative", "flexible"], {"default": "faithful"}),
-                "sharpen": ("INT", {"default": 0, "min": 0, "max": 100}),
-                "smart_grain": ("INT", {"default": 0, "min": 0, "max": 100}),
+                "image": ("IMAGE", {"tooltip": "A portrait to enhance (uploaded to Magnific)."}),
+                "version": (["faithful", "creative", "flexible"], {"default": "faithful", "tooltip": "faithful = keeps the face as it is (skin_detail applies); creative = freer; flexible = aim set by optimized_for."}),
+                "sharpen": ("INT", {"default": 0, "min": 0, "max": 100, "tooltip": "Sharpening (video: magnific mode, custom preset only)."}),
+                "smart_grain": ("INT", {"default": 0, "min": 0, "max": 100, "tooltip": "Added grain that follows the image (video: magnific mode, custom preset only)."}),
                 "skin_detail": ("INT", {"default": 0, "min": 0, "max": 100, "tooltip": "Faithful version only."}),
                 "optimized_for": (
                     ["default", "enhance_skin", "enhance_everything", "improve_lighting", "transform_to_real", "no_make_up"],
@@ -972,6 +981,7 @@ class MagnificSkinEnhancer:
 
     RETURN_TYPES = ("IMAGE", "STRING", "STRING")
     RETURN_NAMES = ("image", "creation_identifier", "metadata")
+    OUTPUT_TOOLTIPS = ("The enhanced picture.", "The Magnific creation id of the result (find it in your library, or pass it on).", "Model, prompt, seed, tool and url of the result as JSON - split it with the Metadata (unpack) node.")
     FUNCTION = "enhance"
     CATEGORY = CATEGORY
 
@@ -997,7 +1007,7 @@ class MagnificRemoveBackground:
     def INPUT_TYPES(cls):
         return {
             "required": {
-                "image": ("IMAGE",),
+                "image": ("IMAGE", {"tooltip": "The picture to cut out (uploaded to Magnific)."}),
             },
             "optional": {
                 "folder": (FOLDER_TYPE, {"tooltip": FOLDER_TOOLTIP}),
@@ -1006,6 +1016,7 @@ class MagnificRemoveBackground:
 
     RETURN_TYPES = ("IMAGE", "MASK", "STRING", "STRING")
     RETURN_NAMES = ("image", "mask", "creation_identifier", "metadata")
+    OUTPUT_TOOLTIPS = ("The cut-out picture (RGB).", "The subject's alpha: 1 = kept, 0 = removed background.", "The Magnific creation id of the result (find it in your library, or pass it on).", "Model, prompt, seed, tool and url of the result as JSON - split it with the Metadata (unpack) node.")
     FUNCTION = "remove"
     CATEGORY = CATEGORY
 
@@ -1026,9 +1037,9 @@ class MagnificRetouch:
     def INPUT_TYPES(cls):
         return with_layout({
             "required": {
-                "image": ("IMAGE",),
+                "image": ("IMAGE", {"tooltip": "The picture to edit; scaled down to the retouch size limit when larger (the console says so)."}),
                 "mask": ("MASK", {"tooltip": "1.0/white = area to change. Must be the same pixel size as the image."}),
-                "mode": (["replace", "erase"], {"default": "replace"}),
+                "mode": (["replace", "erase"], {"default": "replace", "tooltip": "replace = paint what the prompt says into the mask; erase = remove what is there."}),
                 "prompt": ("STRING", {"default": "", "multiline": True, "tooltip": "Replace mode only: what the masked area should become."}),
             },
             "optional": {
@@ -1038,6 +1049,7 @@ class MagnificRetouch:
 
     RETURN_TYPES = ("IMAGE", "STRING", "STRING")
     RETURN_NAMES = ("image", "creation_identifier", "metadata")
+    OUTPUT_TOOLTIPS = ("The retouched picture (at the size it was sent).", "The Magnific creation id of the result (find it in your library, or pass it on).", "Model, prompt, seed, tool and url of the result as JSON - split it with the Metadata (unpack) node.")
     FUNCTION = "retouch"
     CATEGORY = CATEGORY
 
@@ -1101,11 +1113,11 @@ class MagnificStockPicker:
     def INPUT_TYPES(cls):
         return with_layout({
             "required": {
-                "query": ("STRING", {"default": ""}),
-                "content_type": (STOCK_CONTENT_TYPES, {"default": "photo"}),
-                "license": (["any", "free", "premium"], {"default": "any"}),
-                "orientation": (["any", "portrait", "landscape", "square", "panoramic"], {"default": "any"}),
-                "ai_generated": (["any", "only", "excluded"], {"default": "any"}),
+                "query": ("STRING", {"default": "", "tooltip": "What to search the Magnific stock library for."}),
+                "content_type": (STOCK_CONTENT_TYPES, {"default": "photo", "tooltip": "Kind of stock item; vectors, PSDs and designs come back as JPG renders."}),
+                "license": (["any", "free", "premium"], {"default": "any", "tooltip": "Only free items, only premium items, or both."}),
+                "orientation": (["any", "portrait", "landscape", "square", "panoramic"], {"default": "any", "tooltip": "Shape filter."}),
+                "ai_generated": (["any", "only", "excluded"], {"default": "any", "tooltip": "Include AI-generated items, show only them, or leave them out."}),
                 "selected": ("STRING", {"default": "", "tooltip": "Set by clicking a thumbnail in the results grid."}),
             },
             "optional": {
@@ -1115,6 +1127,7 @@ class MagnificStockPicker:
 
     RETURN_TYPES = ("IMAGE", "STRING")
     RETURN_NAMES = ("image", "info")
+    OUTPUT_TOOLTIPS = ("The stock image you clicked.", "Its stock id and type, and where it was saved.")
     FUNCTION = "pick"
     CATEGORY = CATEGORY
 
@@ -1157,6 +1170,7 @@ class MagnificCreationPicker:
 
     RETURN_TYPES = ("IMAGE", "VIDEO", "AUDIO", "STRING", "STRING")
     RETURN_NAMES = ("image", "video", "audio", "creation_identifier", "metadata")
+    OUTPUT_TOOLTIPS = ("The picked creation when content_type = image (empty otherwise).", "The picked creation when content_type = video.", "The picked creation when content_type = audio.", "Its creation id.", "Model, prompt, seed, tool and url of the result as JSON - split it with the Metadata (unpack) node.")
     FUNCTION = "pick"
     CATEGORY = CATEGORY
 
@@ -1202,6 +1216,7 @@ class MagnificMetadata:
 
     RETURN_TYPES = ("STRING", "STRING", "INT", "STRING", "STRING", "STRING", "STRING")
     RETURN_NAMES = ("model", "prompt", "seed", "creation_identifier", "tool", "url", "json")
+    OUTPUT_TOOLTIPS = ("The model that made the result.", "The prompt it was made from.", "Its seed (to replay it).", "Its creation id.", "The Magnific tool that ran.", "Where the result can be downloaded.", "The whole entry as JSON.")
     FUNCTION = "unpack"
     CATEGORY = CATEGORY
 
