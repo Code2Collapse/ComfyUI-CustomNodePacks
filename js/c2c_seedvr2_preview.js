@@ -5,6 +5,8 @@
  * ("c2c.seedvr2.preview") and, when the run ends, keeps a small JPEG strip of every frame ("c2c.seedvr2.done",
  * GET /c2c/seedvr2/frame). This widget shows them: a before/after wipe while it runs, then a frame slider to scrub;
  * views Wipe / After / Before / Difference (|after - before|, amplified) and Alpha (RGBA input).
+ * L7.72: during a tiled VAE decode each decoded tile arrives as it finishes ("c2c.seedvr2.tile") and is painted at its
+ * place on a frame-sized canvas with the tile grid drawn faintly; the batch's whole frame replaces it when it lands.
  * Setting: Settings > C2C > Video > SeedVR2 preview.
  */
 import { app } from "../../scripts/app.js";
@@ -104,7 +106,10 @@ function buildView(node) {
     root.className = "c2c-s2";
 
     const state = { mode: "wipe", pos: 0.5, aspect: 16 / 9, before: null, after: null, alpha: null,
-                    run: null, live: false, frames: [], hasBefore: false, hasAlpha: false, loadToken: 0 };
+                    run: null, live: false, frames: [], hasBefore: false, hasAlpha: false, loadToken: 0,
+                    tileView: false };
+    // L7.72 live tiles: a frame-sized canvas (<= 640 px) the tiles are painted on as they decode, plus a grid layer
+    const tiles = { canvas: null, grid: null, scale: 1 };
 
     const modes = [
         { value: "wipe", label: "Wipe" }, { value: "after", label: "After" }, { value: "before", label: "Before" },
@@ -151,6 +156,11 @@ function buildView(node) {
         view.appendChild(t);
     }
     function render() {
+        if (state.tileView && tiles.canvas) {
+            view.replaceChildren(tiles.canvas, tiles.grid);   // the real canvases (a clone loses their pixels)
+            tag("Decoding tiles", "left");
+            return;
+        }
         if (!state.after) return;
         view.replaceChildren();
         const pct = Math.round(state.pos * 1000) / 10;
@@ -237,6 +247,7 @@ function buildView(node) {
             alphaPill.hidden = true;
         }
         state.live = true;
+        state.tileView = false;                         // the whole decoded batch frame replaces the tiles
         status.setText(`Decoding batch ${d.batch} of ${d.batches} · frame ${d.frame + 1} of ${d.total_frames}`, "default");
         try {
             const [after, before] = await Promise.all([loadImage(d.after), d.before ? loadImage(d.before) : null]);
@@ -245,8 +256,50 @@ function buildView(node) {
             render();
         } catch { /* a dropped live frame is replaced by the next one */ }
     }
+    async function onTile(d) {
+        if (state.run?.prompt_id !== d.prompt_id) {
+            state.run = { prompt_id: d.prompt_id, key: `${d.prompt_id}:${d.node}` };
+            scrub.hidden = true;
+            alphaPill.hidden = true;
+            tiles.canvas = null;                        // a new run starts on a clean canvas
+        }
+        const fw = Number(d.width) || 1, fh = Number(d.height) || 1;
+        const s = Math.min(1, 640 / Math.max(fw, fh));
+        const cw = Math.max(1, Math.round(fw * s)), ch = Math.max(1, Math.round(fh * s));
+        if (!tiles.canvas || tiles.canvas.width !== cw || tiles.canvas.height !== ch) {
+            tiles.canvas = document.createElement("canvas");
+            tiles.grid = document.createElement("canvas");
+            for (const c of [tiles.canvas, tiles.grid]) { c.width = cw; c.height = ch; }
+            const g0 = tiles.canvas.getContext("2d");
+            g0.fillStyle = "#050608";                   // literal colour: var() in a canvas fillStyle paints black
+            g0.fillRect(0, 0, cw, ch);
+        }
+        tiles.scale = s;
+        // the grid of this decode call (every tile so far, also the ones the throttle did not send)
+        const gg = tiles.grid.getContext("2d");
+        gg.clearRect(0, 0, cw, ch);
+        gg.strokeStyle = "rgba(113, 156, 181, 0.45)";
+        gg.lineWidth = 1;
+        for (const r of d.grid || []) {
+            gg.strokeRect(Math.round(r[0] * s) + 0.5, Math.round(r[1] * s) + 0.5,
+                          Math.max(1, Math.round(r[2] * s) - 1), Math.max(1, Math.round(r[3] * s) - 1));
+        }
+        state.live = true;
+        state.tileView = true;                          // set now, not after the await: a batch frame may come first
+        status.setText(`Decoding · tile ${d.tile}${d.seq > 1 ? ` · batch ${d.seq}` : ""}`, "default");
+        setAspect(fw, fh);
+        render();
+        const canvas = tiles.canvas;
+        try {
+            const img = await loadImage(d.image);
+            if (canvas !== tiles.canvas) return;        // a newer run replaced the canvas meanwhile
+            canvas.getContext("2d").drawImage(img, Math.round(d.x * s), Math.round(d.y * s),
+                                              Math.max(1, Math.round(d.w * s)), Math.max(1, Math.round(d.h * s)));
+        } catch { /* a dropped tile is covered by the batch frame that follows */ }
+    }
     function onDone(d) {
         state.live = false;
+        state.tileView = false;
         state.run = { prompt_id: d.prompt_id, key: d.key };
         state.frames = d.frames || [];
         state.hasBefore = !!d.before;
@@ -285,7 +338,7 @@ function buildView(node) {
         });
     }
 
-    return { root, onLive, onDone, height };
+    return { root, onLive, onTile, onDone, height };
 }
 
 function mount(node) {
@@ -338,6 +391,7 @@ if (!globalThis.__c2cSeedVR2PreviewExt) {
             _enabled = app.ui.settings.getSettingValue(SETTING) !== false;
             api.addEventListener("c2c.seedvr2.preview", (e) => { if (_enabled) viewFor(e.detail)?.onLive(e.detail); });
             api.addEventListener("c2c.seedvr2.done", (e) => { if (_enabled) viewFor(e.detail)?.onDone(e.detail); });
+            api.addEventListener("c2c.seedvr2.tile", (e) => { if (_enabled) viewFor(e.detail)?.onTile(e.detail); });
         },
     });
 }
