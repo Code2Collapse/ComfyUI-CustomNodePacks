@@ -1684,6 +1684,8 @@ read any file path. Through an SSH tunnel the page still counts as local.
   last placement and `info` says which. How-to: [docs/mask-placement.md](docs/mask-placement.md).
 - **Video Stabilizer** (2026-11-18): the three old nodes (Classic / Dense Flow / Auto) are removed; saved workflows
   turn into Video Stabilizer on load with the method the old node ran (`C2C_LEGACY_STABILIZERS=1` keeps them).
+- **Save Video (C2C)** (2026-11-19): H.264 (NVENC) encodes at most 4096 px a side; a larger clip is now refused
+  before ffmpeg starts, naming H.265 / AV1 (NVENC) or the CPU encoder (it used to fail with "NVENC could not start").
 - **Segment (C2C)** (new, 2026-11-19, owner card P04): the start of the one segmentation node. This first version
   finds objects by words ("person", "person:3, dog"), clicks or boxes on ComfyUI's own SAM 3 / 3.1 (the same model the
   Mask + Matting viewer loads, shared), with one mask per object, their union and boxes. A clip is tracked: the

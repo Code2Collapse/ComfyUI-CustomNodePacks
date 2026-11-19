@@ -163,6 +163,13 @@ def encode_with_ffmpeg(
     from .save_formats import SaveVideoError
 
     n, h, w, _c = images.shape
+    # NVIDIA's H.264 encoder stops at 4096 px a side (HEVC / AV1 NVENC reach 8192). Seen upstream in
+    # ComfyUI-4K-Video-Save-Load f1771f8 (2026-10-29); here the user is told before ffmpeg starts, instead of the
+    # misleading "NVENC could not start" after it fails - the codec they picked is not switched behind their back.
+    if spec.codec == "h264_nvenc" and max(int(w), int(h)) > 4096:
+        raise SaveVideoError(f"H.264 (NVENC) encodes at most 4096 px a side; this clip is {int(w)}x{int(h)}. Pick "
+                             "H.265 (NVENC) or AV1 (NVENC) (up to 8192 px), H.264 on the CPU, or scale the clip "
+                             "down. Nothing was written.")
     deep = spec.bit_depth > 8
     src_pix = ("rgba64le" if has_alpha else "rgb48le") if deep else ("rgba" if has_alpha else "rgb24")
     pix = spec.pix_fmt_for(has_alpha)
