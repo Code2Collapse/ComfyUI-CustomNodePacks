@@ -5,10 +5,16 @@ ProPainterMEC — unified ProPainter node.
 Absorbs the five legacy ProPainter nodes into one mode-switched node:
 
     mode = "temporal"      -> ProPainterTemporalMEC      (video inpaint inside InpaintCrop/Stitch flow)
-    mode = "remove"        -> ProPainterRemoveMEC        (object/wire/plate removal - needs ProPainter; no model-free fallback yet, L7.92)
+    mode = "remove"        -> ProPainterRemoveMEC        (object/wire/plate removal)
     mode = "stitch"        -> ProPainterStitchMEC        (flow-aware composite of inpainted crop)
     mode = "stitch_refine" -> ProPainterStitchRefineMEC  (seam ring refinement of already-stitched output)
     mode = "flow"          -> FlowRefineMEC              (RAFT optical flow viz / warp / consistency)
+
+L7.92 (owner 2026-10-12): temporal / remove take an appended `backend` widget. "propainter" (the default and the
+value every older save runs with) is the unchanged ProPainter-only path; "auto" uses ProPainter when the user installed
+it (code + weights, S-Lab License 1.0 non-commercial), otherwise the model-free OpenCV fallback; "auto_no_propainter"
+never uses ProPainter; "opencv_flow" forces the fallback (_opencv_flow_fill: Farneback flow + flow completion +
+temporal propagation + Telea, labelled APPROXIMATE). Nothing is downloaded. Audit: docs/research/L7.92_inpaint_audit.md.
 
 Helper classes are kept on disk as importable Python classes; only this
 single node is registered with ComfyUI. Lazy imports keep load-time cost
@@ -73,6 +79,141 @@ def _get_flow_cls():
 
 
 _MODES = ["temporal", "remove", "stitch", "stitch_refine", "flow"]
+
+# L7.92: the `backend` widget (appended last; "propainter" = the behaviour of every save made before it).
+# Mirrors propainter_bridge.INPAINT_BACKENDS / OPENCV_FALLBACK_LABEL (pinned equal by tests/test_l792_backend_select.py):
+# not imported here, so registering the node never imports the bridge (which probes for a ProPainter checkout).
+_BACKENDS = ["propainter", "auto", "auto_no_propainter", "opencv_flow"]
+# Inputs appended after the A28 pin (tests/test_a28_cnp_a_layout.py excludes these, as for MaskToolsMEC's extras).
+L792_APPENDED_INPUTS = ("backend",)
+_CV_LABEL = ("APPROXIMATE model-free fallback (Farneback flow + temporal propagation + Telea; "
+             "not ProPainter quality)")
+
+
+def _select_backend(requested: str):
+    from .propainter_bridge import select_inpaint_backend
+    return select_inpaint_backend(requested)
+
+
+def _check_interrupt() -> None:
+    try:
+        import comfy.model_management as _mm  # type: ignore
+    except ImportError:
+        return
+    _mm.throw_exception_if_processing_interrupted()
+
+
+def _complete_flow_nc(flow, invalid, sigmas=(4.0, 16.0, 64.0, 256.0)):
+    """Fill `flow` (h,w,2) where `invalid` (h,w bool) by normalised convolution with growing Gaussians: the hole gets
+    the smooth motion of its surroundings (background motion, not the masked object's). Model-free."""
+    import cv2
+    import numpy as np
+    if not invalid.any():
+        return flow
+    valid = (~invalid).astype(np.float32)
+    out = flow.copy()
+    out[invalid] = 0.0
+    todo = invalid.copy()
+    for s in sigmas:
+        if not todo.any():
+            break
+        w = cv2.GaussianBlur(valid, (0, 0), s)
+        num = cv2.GaussianBlur(flow * valid[..., None], (0, 0), s)
+        ok = todo & (w > 1e-4)
+        out[ok] = num[ok] / w[ok][:, None]
+        todo &= ~ok
+    return out  # anything still in `todo` keeps zero motion
+
+
+def _opencv_flow_fill(images: torch.Tensor, mask: torch.Tensor, max_flow_side: int = 512, telea_radius: int = 5):
+    """L7.92 model-free video fill: Farneback flow (at <= max_flow_side) -> flow completion inside the hole ->
+    forward and backward temporal propagation from the original frames (the source nearest in time wins) -> Telea
+    for what no frame shows. Outside the hole the frames are returned bit-exact. APPROXIMATE: no learned prior, so
+    it cannot invent structure the way ProPainter can.
+
+    images (B,H,W,3) float 0-1, mask (B,H,W) float -> (filled (B,H,W,3) float32 cpu, stats dict)."""
+    import cv2
+    import numpy as np
+    with torch.no_grad():
+        img = images[..., :3].detach().float().cpu().clamp(0, 1).numpy()
+        hole = (mask.detach().float().cpu() > 0.5).numpy()
+    B, H, W, _ = img.shape
+    stats = {"frames": int(B), "hole_px": int(hole.sum()), "propagated_px": 0, "telea_px": 0, "flow_res": "-"}
+    if stats["hole_px"] == 0:
+        return torch.from_numpy(img.copy()), stats
+
+    known0 = ~hole
+    if B > 1:
+        sc = min(1.0, float(max_flow_side) / float(max(H, W)))
+        fh, fw = max(8, int(round(H * sc))), max(8, int(round(W * sc)))
+        stats["flow_res"] = f"{fw}x{fh}"
+        gray = [cv2.resize((cv2.cvtColor(f, cv2.COLOR_RGB2GRAY) * 255.0).astype(np.uint8), (fw, fh),
+                           interpolation=cv2.INTER_AREA) for f in img]
+        hole_s = [cv2.resize(h.astype(np.uint8), (fw, fh), interpolation=cv2.INTER_NEAREST) > 0 for h in hole]
+        kern = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (7, 7))
+        gx, gy = np.meshgrid(np.arange(W, dtype=np.float32), np.arange(H, dtype=np.float32))
+
+        def flow_to(t, s):
+            """Map of frame t's pixels into frame s: gray_t(x) ~ gray_s(x + flow)."""
+            # The masked object is erased (Telea, at flow resolution) from BOTH frames first: otherwise its own motion
+            # bleeds into the background flow around it (Farneback windows + pyramid), and the plate is pulled from
+            # the wrong place (synthetic test clip, static plate: mean hole error 0.024 -> 0.0, tests/test_l792_backend_select.py).
+            both = (hole_s[t] | hole_s[s]).astype(np.uint8)
+            ga = cv2.inpaint(gray[t], both * 255, 3.0, cv2.INPAINT_TELEA) if both.any() else gray[t]
+            gb = cv2.inpaint(gray[s], both * 255, 3.0, cv2.INPAINT_TELEA) if both.any() else gray[s]
+            f = cv2.calcOpticalFlowFarneback(ga, gb, None, 0.5, 4, 21, 3, 7, 1.5, 0)
+            invalid = cv2.dilate(both, kern) > 0
+            f = _complete_flow_nc(f, invalid)
+            f = cv2.resize(f, (W, H), interpolation=cv2.INTER_LINEAR)
+            f[..., 0] *= W / float(fw)
+            f[..., 1] *= H / float(fh)
+            return gx + f[..., 0], gy + f[..., 1]
+
+        def run_pass(order, step):
+            fill = img.copy()
+            known = known0.astype(np.float32)
+            age = np.where(known0, 0.0, np.inf).astype(np.float32)
+            for t in order:
+                _check_interrupt()
+                s = t - step
+                mx, my = flow_to(t, s)
+                src_k = cv2.remap(known[s], mx, my, cv2.INTER_LINEAR, borderMode=cv2.BORDER_CONSTANT, borderValue=0)
+                src_a = cv2.remap(np.where(np.isfinite(age[s]), age[s], 1e9).astype(np.float32), mx, my,
+                                  cv2.INTER_NEAREST, borderMode=cv2.BORDER_CONSTANT, borderValue=1e9)
+                src_c = cv2.remap(fill[s], mx, my, cv2.INTER_LINEAR, borderMode=cv2.BORDER_REPLICATE)
+                take = hole[t] & (src_k >= 0.999)
+                fill[t][take] = src_c[take]
+                known[t][take] = 1.0
+                age[t][take] = src_a[take] + 1.0
+            return fill, age
+
+        fill_f, age_f = run_pass(range(1, B), 1)
+        fill_b, age_b = run_pass(range(B - 2, -1, -1), -1)
+        use_b = age_b < age_f
+        fill = np.where(use_b[..., None], fill_b, fill_f)
+        age = np.minimum(age_f, age_b)
+    else:
+        fill = img.copy()
+        age = np.where(known0, 0.0, np.inf).astype(np.float32)
+
+    unknown = hole & ~np.isfinite(age)
+    stats["propagated_px"] = int((hole & np.isfinite(age)).sum())
+    stats["telea_px"] = int(unknown.sum())
+    for t in range(B):
+        if not unknown[t].any():
+            continue
+        _check_interrupt()
+        u8 = (np.clip(fill[t], 0, 1) * 255.0 + 0.5).astype(np.uint8)
+        tel = cv2.inpaint(u8, unknown[t].astype(np.uint8) * 255, float(telea_radius), cv2.INPAINT_TELEA)
+        fill[t][unknown[t]] = tel[unknown[t]].astype(np.float32) / 255.0
+    out = np.where(hole[..., None], np.clip(fill, 0, 1), img).astype(np.float32)
+    return torch.from_numpy(out), stats
+
+
+def _fallback_info(stats: dict) -> str:
+    h = max(1, stats["hole_px"])
+    return (f"{_CV_LABEL} | frames={stats['frames']} flow_res={stats['flow_res']} | hole filled from other frames "
+            f"{100.0 * stats['propagated_px'] / h:.1f}%, Telea (spatial guess) {100.0 * stats['telea_px'] / h:.1f}%")
 
 
 def _uniform(values, what):
@@ -230,6 +371,15 @@ class ProPainterMEC:
                     {"tooltip": "[flow] Second frame for optical-flow computation."}),
                 "flow_mask":        ("MASK",
                     {"tooltip": "[flow] Optional mask restricting the consistency visualisation."}),
+                # L7.92: appended last so every earlier save keeps its values; the default is the old behaviour.
+                "backend":          (list(_BACKENDS), {"default": "propainter",
+                    "tooltip": "[temporal/remove] Which engine fills the hole.\n"
+                               "propainter: ProPainter only (fails when you have not installed it) - the old "
+                               "behaviour.\nauto: ProPainter when you installed it (code + weights; S-Lab License "
+                               "1.0, non-commercial only), otherwise the OpenCV fallback.\nauto_no_propainter: "
+                               "licence-safe for commercial work, never ProPainter.\nopencv_flow: model-free OpenCV "
+                               "fallback (optical flow + temporal propagation + Telea) - APPROXIMATE, not ProPainter "
+                               "quality. Nothing is ever downloaded. The info output says which engine ran and why."}),
             },
         }
 
@@ -242,6 +392,12 @@ class ProPainterMEC:
                    images=None, masks=None, stitch_data=None, inpainted_image=None,
                    stitched_image=None, mask_override=None, frame_a=None, frame_b=None,
                    flow_mask=None, **kwargs):
+        if str(kwargs.get("backend", "propainter")).startswith("auto"):
+            # L7.92: the engine "auto" picks depends on what is installed: installing ProPainter re-runs the node.
+            try:
+                kwargs["_resolved_backend"] = _select_backend(kwargs["backend"])[0]
+            except Exception:
+                kwargs["_resolved_backend"] = "unavailable"
         return hash_args_and_kwargs(
             mode, use_half, color_match_mode, raft_iter, neighbor_stride,
             ref_stride, subvideo_length, raft_chunk, blend_boundary,
@@ -331,11 +487,82 @@ class ProPainterMEC:
                 mask_override: Optional[torch.Tensor] = None,
                 frame_a: Optional[torch.Tensor] = None,
                 frame_b: Optional[torch.Tensor] = None,
-                flow_mask: Optional[torch.Tensor] = None):
+                flow_mask: Optional[torch.Tensor] = None,
+                backend: str = "propainter"):
 
         cm = self._normalise_cm(color_match_mode)
         stitch_data = _as_stitch_data(stitch_data)
 
+        # L7.92: backend choice for the two filling modes. "propainter" (every pre-L7.92 save) skips this block and
+        # runs the unchanged code below, info text included.
+        backend = str(backend or "propainter")
+        prefix = ""
+        if mode in ("temporal", "remove") and backend != "propainter":
+            if images is None or masks is None:
+                raise ValueError(f"[ProPainterMEC] mode='{mode}' requires 'images' and 'masks'.")
+            resolved, why = _select_backend(backend)
+            prefix = f"backend={resolved} (requested {backend}: {why}) | "
+            if resolved == "opencv_flow":
+                return self._run_opencv(mode, images, masks, stitch_data, cm, bool(blend_boundary),
+                                        int(remove_dilate_pixels), prefix)
+
+        result = self._run_mode(mode, cm, stitch_data, use_half, raft_iter, neighbor_stride, ref_stride,
+                                subvideo_length, raft_chunk, blend_boundary, remove_quality, remove_dilate_pixels,
+                                boundary_band_pixels, preserve_inpaint_center, upscale_method, ring_pixels,
+                                flow_consistency_thr, images, masks, inpainted_image, stitched_image,
+                                mask_override, frame_a, frame_b, flow_mask)
+        if prefix:
+            info = result[4]
+            head, sep, tail = info.partition(" | ")
+            result = (*result[:4], f"{head} | {prefix}{tail}" if sep else f"{info} | {prefix.rstrip(' |')}")
+        return result
+
+    def _run_opencv(self, mode, images, masks, stitch_data, cm, blend_boundary, dilate_px, prefix):
+        """L7.92 model-free fallback for temporal / remove (see _opencv_flow_fill)."""
+        import time
+        from .propainter_stitch_suite import _binary_dilate, _ensure_bhw_mask
+        from .propainter_temporal_inpaint import _boundary_blend, _color_match
+        t0 = time.time()
+        if images.dim() != 4 or images.shape[-1] < 3:
+            raise ValueError(f"[ProPainterMEC] IMAGE [B,H,W,3] expected, got {tuple(images.shape)}")
+        images = images[..., :3]
+        B, H, W, _ = images.shape
+        m = _ensure_bhw_mask(masks, B, H, W)
+        notes = []
+        if mode == "remove" and dilate_px > 0:
+            m = _binary_dilate(m, dilate_px)
+            notes.append(f"dilate={dilate_px}")
+        hole = (m > 0.5).float()
+        if float(hole.mean()) < 1e-5:
+            out = images.float().cpu()
+            notes.append("NOOP_empty_mask")
+        else:
+            out, stats = _opencv_flow_fill(images, hole)
+            notes.append(_fallback_info(stats))
+            cm_t = {"off": "none", "lab": "lab_transfer"}.get(cm, cm)
+            if cm_t not in ("none", "reinhard", "lab_transfer"):
+                cm_t = "reinhard"
+            if cm_t != "none":
+                matched = _color_match(out, images.float().cpu(), hole, cm_t)
+                out = torch.where(hole.unsqueeze(-1) > 0.5, matched, out)
+            notes.append(f"color_match={cm_t}")
+            if mode == "temporal" and blend_boundary:
+                bm = (stitch_data or {}).get("stitch_blend_mask_crop") if isinstance(stitch_data, dict) else None
+                if bm is not None:
+                    out = _boundary_blend(out, images.float().cpu(), bm)
+                    notes.append("boundary_blend=on")
+                else:
+                    notes.append("boundary_blend=requested_but_missing")
+        out = out.clamp(0, 1).contiguous()
+        notes.append(f"elapsed={time.time() - t0:.2f}s")
+        region = hole if mode == "remove" else self._mask_like(masks, out)
+        diff, changed, qc = self._qc(out, images, region)
+        return (out, region, diff, changed, f"mode={mode} | {prefix}{' | '.join(notes)} | {qc}")
+
+    def _run_mode(self, mode, cm, stitch_data, use_half, raft_iter, neighbor_stride, ref_stride, subvideo_length,
+                  raft_chunk, blend_boundary, remove_quality, remove_dilate_pixels, boundary_band_pixels,
+                  preserve_inpaint_center, upscale_method, ring_pixels, flow_consistency_thr, images, masks,
+                  inpainted_image, stitched_image, mask_override, frame_a, frame_b, flow_mask):
         if mode == "temporal":
             if images is None or masks is None:
                 raise ValueError("[ProPainterMEC] mode='temporal' requires 'images' and 'masks'.")
@@ -466,4 +693,5 @@ if declare_layout is not None:
         "upscale_method": {"c2c_show_if": {"mode": ["stitch"]}},
         "ring_pixels": {"c2c_show_if": {"mode": ["stitch_refine"]}},
         "flow_consistency_thr": {"c2c_show_if": {"mode": ["flow"]}},
+        "backend": {"c2c_show_if": {"mode": ["temporal", "remove"]}},
     })

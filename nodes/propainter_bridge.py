@@ -314,3 +314,65 @@ def status() -> Tuple[bool, str]:
     if missing:
         return True, f"propainter OK; weights missing: {missing}"
     return True, "propainter OK; weights present"
+
+
+# ---------- L7.92: inpaint backend selection (selection only, never loads or downloads) ----------
+# "propainter" stays first: it is the value every workflow saved before L7.92 runs with (exact old behaviour).
+INPAINT_BACKENDS = ["propainter", "auto", "auto_no_propainter", "opencv_flow"]
+OPENCV_FALLBACK_LABEL = ("APPROXIMATE model-free fallback (Farneback flow + temporal propagation + Telea; "
+                         "not ProPainter quality)")
+
+
+def propainter_ready() -> Tuple[bool, str]:
+    """ProPainter counts as installed only when the user's checkout imports AND all three weights are on disk.
+    Only checks files (os.path.isfile); never downloads, creates folders or loads a model."""
+    if not HAS_PROPAINTER:
+        return False, "ProPainter code is not installed (not shipped by this pack: S-Lab License 1.0, non-commercial)"
+    missing = [n for n in _DEFAULT_URLS if not os.path.isfile(os.path.join(_MODELS_ROOT, n))]
+    if missing:
+        return False, f"ProPainter weights missing in {_MODELS_ROOT}: {', '.join(missing)}"
+    return True, "ProPainter code and weights installed by the user"
+
+
+def opencv_ready() -> Tuple[bool, str]:
+    """OpenCV (Apache-2.0, a declared dependency of this pack) with the functions the fallback uses."""
+    try:
+        import cv2  # type: ignore
+    except Exception as exc:  # pragma: no cover - cv2 is a hard requirement of the pack
+        return False, f"OpenCV is not importable ({type(exc).__name__}: {exc})"
+    need = ("calcOpticalFlowFarneback", "inpaint", "remap", "GaussianBlur")
+    lacking = [n for n in need if not hasattr(cv2, n)]
+    if lacking:
+        return False, f"OpenCV lacks {', '.join(lacking)}"
+    return True, "OpenCV installed (Apache-2.0)"
+
+
+def select_inpaint_backend(requested: str) -> Tuple[str, str]:
+    """(backend, reason) for a backend widget value; backend is "propainter" or "opencv_flow".
+
+    propainter         -> always ProPainter, no detection: the legacy behaviour (fails as before when it is missing).
+    auto               -> ProPainter when the user installed it (code + weights), else the OpenCV fallback.
+    auto_no_propainter -> licence-safe: never ProPainter (non-commercial), the best Apache-compatible backend.
+    opencv_flow        -> the OpenCV fallback.
+    """
+    req = str(requested or "propainter")
+    if req not in INPAINT_BACKENDS:
+        raise ValueError(f"unknown inpaint backend {req!r}; use one of {INPAINT_BACKENDS}")
+    if req == "propainter":
+        return "propainter", "explicit choice (legacy behaviour; fails as before when ProPainter is missing)"
+    if req == "auto":
+        ok_pp, why_pp = propainter_ready()
+        if ok_pp:
+            return "propainter", (f"{why_pp}; best installed backend. Licence: S-Lab License 1.0, "
+                                  "non-commercial use only - choose auto_no_propainter for commercial work")
+        ok_cv, why_cv = opencv_ready()
+        if ok_cv:
+            return "opencv_flow", f"ProPainter skipped ({why_pp}); {why_cv}"
+        raise RuntimeError(f"No inpaint backend is available: {why_pp}; {why_cv}. "
+                           "Reinstall the pack requirements (opencv-python) and run again.")
+    ok_cv, why_cv = opencv_ready()
+    if ok_cv:
+        why = "licence-safe auto: ProPainter never considered" if req == "auto_no_propainter" else "explicit choice"
+        return "opencv_flow", f"{why}; {why_cv}"
+    raise RuntimeError(f"The OpenCV inpaint backend is not available: {why_cv}. Reinstall the pack requirements "
+                       "(opencv-python) and run again.")
