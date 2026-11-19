@@ -178,6 +178,124 @@ def _apply_crop_bhwc(image: torch.Tensor, cx: float, cy: float, cw: float, ch: f
 
 
 # ----------------------------------------------------------------------
+#  L9.173: rotate + pad (AusBoss Video Crop + Rotate + Pad, mapped onto this node; own implementation) and the
+#  source map. Positive degrees = clockwise, as AusBoss; here the rotation turns the picture inside the crop window
+#  (what the player's crop rectangle shows), so the drawn crop stays what you get.
+# ----------------------------------------------------------------------
+PAD_MODES = ("color", "edge", "mirror")
+L9173_APPENDED_INPUTS = ("rotate_degrees", "pad_left", "pad_top", "pad_right", "pad_bottom", "pad_mode", "pad_color")
+APPENDED_AFTER_A28 = L9173_APPENDED_INPUTS          # read by tests/test_a28_cnp_a_layout.py
+
+
+def _parse_rgb(text) -> Tuple[float, float, float]:
+    t = str(text or "").strip()
+    try:
+        if t.startswith("#") and len(t) == 7:
+            vals = [int(t[i:i + 2], 16) for i in (1, 3, 5)]
+        else:
+            vals = [float(v) for v in t.replace(";", ",").split(",") if v.strip()]
+        if len(vals) != 3 or not all(0 <= v <= 255 for v in vals):
+            raise ValueError("need three values 0-255")
+    except ValueError as exc:
+        raise ValueError(f"VideoFramePlayerMEC: pad_color {text!r} is not 'R, G, B' (0-255) or #RRGGBB ({exc}).") \
+            from exc
+    return tuple(float(v) / 255.0 for v in vals)
+
+
+def _rotation_grid(box, deg: float, W: int, H: int, device) -> torch.Tensor:
+    """grid_sample grid (1, h, w, 2): output pixel centres of the crop window, rotated by -deg about its centre,
+    in the source frame's normalised coordinates (align_corners=False)."""
+    x0, y0, w, h = box
+    th = np.radians(deg)
+    c, s = float(np.cos(th)), float(np.sin(th))
+    ys, xs = torch.meshgrid(torch.arange(h, dtype=torch.float32, device=device) + 0.5 - h / 2.0,
+                            torch.arange(w, dtype=torch.float32, device=device) + 0.5 - w / 2.0, indexing="ij")
+    sx = x0 + w / 2.0 + c * xs + s * ys
+    sy = y0 + h / 2.0 - s * xs + c * ys
+    return torch.stack([2.0 * sx / W - 1.0, 2.0 * sy / H - 1.0], dim=-1)[None]
+
+
+def _rotate_pad(src: torch.Tensor, box, deg: float, pads, mode: str, fill):
+    """(frames, mask): the crop window rotated (sampled from the whole frame) then padded; mask = 1 where filled."""
+    n, H, W, C = src.shape
+    x0, y0, w, h = box
+    dev = src.device
+    fill_t = torch.zeros(C, dtype=torch.float32, device=dev)
+    fill_t[:min(3, C)] = torch.tensor(fill[:min(3, C)], dtype=torch.float32, device=dev)
+    if abs(deg) > 1e-9:
+        grid = _rotation_grid(box, deg, W, H, dev)
+        pm = {"color": "zeros", "edge": "border", "mirror": "reflection"}[mode]
+        outs, valids = [], []
+        for s0 in range(0, n, 16):
+            _IC.check()
+            x = src[s0:s0 + 16].permute(0, 3, 1, 2).float()
+            g = grid.expand(x.shape[0], -1, -1, -1)
+            o = F.grid_sample(x, g, mode="bilinear", padding_mode=pm, align_corners=False)
+            v = F.grid_sample(torch.ones_like(x[:, :1]), g, mode="bilinear", padding_mode="zeros",
+                              align_corners=False)
+            if mode == "color":
+                o = o + (1.0 - v) * fill_t.view(1, C, 1, 1)
+            outs.append(o.permute(0, 2, 3, 1))
+            valids.append(v[:, 0])
+        img = torch.cat(outs).to(src.dtype)
+        mask = (1.0 - torch.cat(valids)).clamp(0.0, 1.0)
+        mask = torch.where(mask < 1e-4, torch.zeros_like(mask), mask)
+    else:
+        img = src[:, y0:y0 + h, x0:x0 + w, :]
+        mask = torch.zeros((n, h, w), dtype=torch.float32, device=dev)
+    l, t, r, b = pads
+    if any(pads):
+        if mode == "mirror" and (max(l, r) >= w or max(t, b) >= h):
+            raise ValueError(f"VideoFramePlayerMEC: mirror padding needs each pad smaller than the picture "
+                             f"({w}x{h}); got left/top/right/bottom {pads}. Use edge or color for wider pads.")
+        x = img.permute(0, 3, 1, 2)
+        if mode == "color":
+            canvas = fill_t.view(1, C, 1, 1).to(x.dtype).expand(n, C, h + t + b, w + l + r).clone()
+            canvas[:, :, t:t + h, l:l + w] = x
+            x = canvas
+        else:
+            x = F.pad(x.float(), (l, r, t, b), mode="replicate" if mode == "edge" else "reflect").to(img.dtype)
+        img = x.permute(0, 2, 3, 1)
+        mask = F.pad(mask, (l, r, t, b), value=1.0)
+    return img.contiguous(), mask
+
+
+def _timecode(frame: int, fps: float) -> str:
+    nominal = max(1, int(round(fps)))
+    ff = frame % nominal
+    secs = frame // nominal
+    return f"{secs // 3600:02d}:{(secs // 60) % 60:02d}:{secs % 60:02d}:{ff:02d}"
+
+
+def _source_map(src_frames, fps: float, box, deg: float, pads, pad_mode: str, pre_size, out_size, W: int, H: int):
+    """JSON: per output frame the source frame / seconds / timecode, plus the out -> source pixel matrix."""
+    x0, y0, w, h = box
+    l, t, r, b = pads
+    pw, ph = pre_size                       # size after rotate + pad, before resize
+    ow, oh = out_size
+    sx, sy = ow / float(max(1, pw)), oh / float(max(1, ph))
+    th = np.radians(deg)
+    c, s = float(np.cos(th)), float(np.sin(th))
+    # out (u, v) -> (u / sx - l - w/2, v / sy - t - h/2) = (dx, dy) -> source centre + R(-deg) (dx, dy)
+    cxs, cys = x0 + w / 2.0, y0 + h / 2.0
+    a = np.array([[c / sx, s / sy, cxs - c * (l + w / 2.0) - s * (t + h / 2.0)],
+                  [-s / sx, c / sy, cys + s * (l + w / 2.0) - c * (t + h / 2.0)]])
+    fps = float(fps) if fps and fps > 0 else 24.0
+    return json.dumps({
+        "fps": fps, "timecode": f"non-drop, {max(1, int(round(fps)))} frames per second, from 00:00:00:00",
+        "frames": [{"out": k, "source_frame": int(i), "seconds": round(i / fps, 6), "timecode": _timecode(int(i), fps)}
+                   for k, i in enumerate(src_frames)],
+        "transform": {"order": "crop -> rotate -> pad -> resize", "source_size": [int(W), int(H)],
+                      "crop_px": [int(x0), int(y0), int(w), int(h)], "rotate_degrees": float(deg),
+                      "pad_ltrb": [int(l), int(t), int(r), int(b)], "pad_mode": pad_mode,
+                      "pre_resize_size": [int(pw), int(ph)], "output_size": [int(ow), int(oh)],
+                      "scale": [round(sx, 6), round(sy, 6)],
+                      "out_to_source_affine": np.round(a, 8).tolist(),
+                      "convention": "continuous pixel coordinates (pixel centres at +0.5)"},
+    })
+
+
+# ----------------------------------------------------------------------
 #  Node
 # ----------------------------------------------------------------------
 
@@ -371,6 +489,33 @@ class VideoFramePlayerMEC:
                     "default": 95, "min": 30, "max": 100, "step": 5,
                     "tooltip": "JPEG quality (ignored when preview_format=png)."}),
             },
+            # L9.173 (A25: AusBoss Video Crop + Rotate + Pad -> this node; spec 47): appended, optional. The
+            # defaults (0 / no pad) leave every old output unchanged.
+            "optional": {
+                "rotate_degrees": ("FLOAT", {
+                    "default": 0.0, "min": -180.0, "max": 180.0, "step": 0.1,
+                    "tooltip": "Rotate the picture inside the crop window by this many degrees (positive = "
+                               "clockwise), about the window's centre. Pixels come from the whole source frame, "
+                               "so the corners fill with real picture where there is any; the rest is filled by "
+                               "pad_mode and marked in pad_mask. Order: crop -> rotate -> pad -> resize. 0 = off."}),
+                "pad_left": ("INT", {"default": 0, "min": 0, "max": 8192, "step": 1,
+                             "tooltip": "Pixels added on the left after crop and rotate (e.g. for outpainting); "
+                                        "marked 1 in pad_mask."}),
+                "pad_top": ("INT", {"default": 0, "min": 0, "max": 8192, "step": 1,
+                            "tooltip": "Pixels added at the top after crop and rotate; marked 1 in pad_mask."}),
+                "pad_right": ("INT", {"default": 0, "min": 0, "max": 8192, "step": 1,
+                              "tooltip": "Pixels added on the right after crop and rotate; marked 1 in pad_mask."}),
+                "pad_bottom": ("INT", {"default": 0, "min": 0, "max": 8192, "step": 1,
+                               "tooltip": "Pixels added at the bottom after crop and rotate; marked 1 in pad_mask."}),
+                "pad_mode": (list(PAD_MODES), {
+                    "default": "color",
+                    "tooltip": "How padding and empty rotation corners are filled: color = pad_color; edge = the "
+                               "nearest edge pixel repeated; mirror = the picture reflected (a pad must then be "
+                               "smaller than the picture)."}),
+                "pad_color": ("STRING", {
+                    "default": "127, 127, 127",
+                    "tooltip": "pad_mode color: 'R, G, B' (0-255) or #RRGGBB. Extra channels (alpha) are 0."}),
+            },
         }
 
     RETURN_TYPES = (
@@ -380,6 +525,8 @@ class VideoFramePlayerMEC:
         "INT", "FLOAT",
         # --- new in v2 (May 2026): video-info outputs for downstream automation ---
         "IMAGE", "INT", "INT", "INT", "INT", "FLOAT", "STRING",
+        # --- L9.173: rotate / pad mask + source mapping ---
+        "MASK", "STRING",
     )
     RETURN_NAMES = (
         "frame", "frame_index", "frame_count",
@@ -389,6 +536,7 @@ class VideoFramePlayerMEC:
         # --- new in v2 ---
         "frames_trimmed", "trim_start_idx", "trim_end_idx",
         "width", "height", "duration", "video_info",
+        "pad_mask", "source_map",
     )
     OUTPUT_TOOLTIPS = (
         "Single full-resolution frame at the slider position (1,H,W,C) - pre-crop, pre-resize. Full source precision (no JPEG re-encode).",
@@ -410,6 +558,8 @@ class VideoFramePlayerMEC:
         "Source height in pixels.",
         "Total duration of the trimmed range in seconds (trimmed_count / playback_fps).",
         "JSON string with all video metadata: width, height, fps, duration, frame_count, trim_*, crop_*, etc. Wire to a Show Text node or any downstream automation.",
+        "Mask matching 'processed': 1 where padding or an empty rotation corner was filled (the area to outpaint / inpaint), 0 on real picture. All 0 without rotate / pad.",
+        "Source mapping as JSON: for every frame on 'processed' its source frame number, seconds and timecode (non-drop, at playback_fps), plus the transform (crop px, rotation, padding, resize scale) and a 2x3 matrix taking a 'processed' pixel back to source pixels - for exact downstream reconstruction.",
     )
     FUNCTION = "play"
     CATEGORY = "C2C/Preview"
@@ -485,6 +635,13 @@ class VideoFramePlayerMEC:
         preview_width: int = 480,
         preview_format: str = _PREVIEW_FORMAT_DEFAULT,
         preview_quality: int = 95,
+        rotate_degrees: float = 0.0,
+        pad_left: int = 0,
+        pad_top: int = 0,
+        pad_right: int = 0,
+        pad_bottom: int = 0,
+        pad_mode: str = "color",
+        pad_color: str = "127, 127, 127",
     ):
         if frames is None or not hasattr(frames, "shape"):
             raise ValueError("VideoFramePlayerMEC: 'frames' input is missing or invalid (expected IMAGE B,H,W,C).")
@@ -497,7 +654,8 @@ class VideoFramePlayerMEC:
                 crop_locked, aspect_ratio, custom_aspect_w, custom_aspect_h,
                 crop_x, crop_y, crop_w, crop_h, resize_method, target_width,
                 target_height, upscale_factor, preview_width, preview_format,
-                preview_quality,
+                preview_quality, rotate_degrees=rotate_degrees,
+                pads=(pad_left, pad_top, pad_right, pad_bottom), pad_mode=pad_mode, pad_color=pad_color,
             )
 
     def _play_impl(
@@ -526,11 +684,23 @@ class VideoFramePlayerMEC:
         preview_width: int = 480,
         preview_format: str = _PREVIEW_FORMAT_DEFAULT,
         preview_quality: int = 95,
+        rotate_degrees: float = 0.0,
+        pads=(0, 0, 0, 0),
+        pad_mode: str = "color",
+        pad_color: str = "127, 127, 127",
     ):
         if frames.dim() != 4:
             raise ValueError(f"VideoFramePlayerMEC: expected 4D IMAGE (B,H,W,C), got shape {tuple(frames.shape)}.")
 
         B, H, W, C = frames.shape
+        rot = float(rotate_degrees or 0.0)
+        pads = tuple(int(v or 0) for v in pads)
+        if any(v < 0 for v in pads):
+            raise ValueError(f"VideoFramePlayerMEC: padding must be >= 0, got {pads}.")
+        if pad_mode not in PAD_MODES:
+            raise ValueError(f"VideoFramePlayerMEC: pad_mode must be one of {list(PAD_MODES)}, got {pad_mode!r}.")
+        fill = _parse_rgb(pad_color)
+        transform_on = abs(rot) > 1e-9 or any(pads)
 
         # trim range (inclusive). frame_end < 0 means "last frame".
         fs = max(0, min(B - 1, int(frame_start)))
@@ -638,7 +808,8 @@ class VideoFramePlayerMEC:
 
         src = trimmed if output_mode == "all_frames" else out_frame
 
-        if crop_enabled and (cx > 0.0 or cy > 0.0 or cw < 1.0 or ch < 1.0):
+        cropping = crop_enabled and (cx > 0.0 or cy > 0.0 or cw < 1.0 or ch < 1.0)
+        if cropping:
             processed = _apply_crop_bhwc(src, cx, cy, cw, ch)
         else:
             processed = src.clone() if src is out_frame else src
@@ -649,6 +820,12 @@ class VideoFramePlayerMEC:
         crop_w_px = int(processed.shape[2])
         crop_h_px = int(processed.shape[1])
 
+        # L9.173: rotate inside the crop window (sampling the whole source) and pad, with a mask of filled pixels
+        box = (crop_x_px, crop_y_px, crop_w_px, crop_h_px) if cropping else (0, 0, W, H)
+        pad_mask = None
+        if transform_on:
+            processed, pad_mask = _rotate_pad(src, box, rot, pads, pad_mode, fill)
+
         # resize
         cur_h = processed.shape[1]
         cur_w = processed.shape[2]
@@ -656,8 +833,14 @@ class VideoFramePlayerMEC:
         if (tw, th) != (cur_w, cur_h):
             method = resize_method if resize_method != "none" else "bilinear"
             processed = _resize_bhwc(processed, th, tw, method)
+            if pad_mask is not None:
+                pad_mask = F.interpolate(pad_mask[:, None], size=(th, tw), mode="bilinear",
+                                         align_corners=False)[:, 0].clamp(0.0, 1.0)
 
         out_h, out_w = int(processed.shape[1]), int(processed.shape[2])
+        if pad_mask is None:
+            pad_mask = torch.zeros((int(processed.shape[0]), out_h, out_w), dtype=torch.float32,
+                                   device=processed.device)
 
         ui_payload = {
             "frames": previews,
@@ -722,6 +905,14 @@ class VideoFramePlayerMEC:
             "preview_format": fmt,
         }
         video_info_json = json.dumps(video_info, indent=2, sort_keys=True)
+        src_frames = list(range(fs, fe + 1, stride)) if output_mode == "all_frames" else [idx]
+        if output_mode == "all_frames" and not (fs > 0 or fe < B - 1 or stride > 1):
+            src_frames = list(range(B))
+        source_map = _source_map(src_frames, float(playback_fps), box, rot, pads, pad_mode, (cur_w, cur_h),
+                                 (out_w, out_h), W, H)
+        if transform_on:
+            ui_payload["rotate_degrees"] = [rot]
+            ui_payload["pads"] = [list(pads)]
 
         return {
             "ui": ui_payload,
@@ -734,6 +925,8 @@ class VideoFramePlayerMEC:
                 # --- v2 ---
                 frames_trimmed, int(fs), int(fe),
                 int(W), int(H), float(duration_sec), video_info_json,
+                # --- L9.173 ---
+                pad_mask, source_map,
             ),
         }
 
@@ -751,6 +944,7 @@ if declare_layout is not None:
                  Crop=["crop_enabled", "aspect_ratio", "custom_aspect_w", "custom_aspect_h", "crop_x", "crop_y",
                        "crop_w", "crop_h"],
                  Resize=["resize_method", "target_width", "target_height", "upscale_factor"],
+                 Transform=list(L9173_APPENDED_INPUTS),
                  Preview=["preview_width", "preview_format", "preview_quality"]),
         {"loop_mode": {"c2c_hidden": True},
          "crop_locked": {"c2c_hidden": True},
@@ -761,5 +955,6 @@ if declare_layout is not None:
          "crop_y": {"c2c_show_if": {"crop_enabled": [True]}},
          "crop_w": {"c2c_show_if": {"crop_enabled": [True]}},
          "crop_h": {"c2c_show_if": {"crop_enabled": [True]}},
-         "preview_quality": {"c2c_show_if": {"preview_format": ["jpeg"]}}},
+         "preview_quality": {"c2c_show_if": {"preview_format": ["jpeg"]}},
+         "pad_color": {"c2c_show_if": {"pad_mode": ["color"]}}},
     ))

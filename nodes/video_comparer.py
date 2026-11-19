@@ -36,6 +36,7 @@ No stubs. Every branch is fully implemented.
 
 from __future__ import annotations
 
+import json
 import math
 import os
 from typing import Optional
@@ -535,13 +536,20 @@ class VideoComparerC2C:
             },
         }
 
-    RETURN_TYPES = ("IMAGE", "MASK", "IMAGE", "STRING")
-    RETURN_NAMES = ("preview", "diff_mask", "scope", "info")
+    RETURN_TYPES = ("IMAGE", "MASK", "IMAGE", "STRING", "IMAGE", "STRING")
+    RETURN_NAMES = ("preview", "diff_mask", "scope", "info", "annotated", "change_report")
     OUTPUT_TOOLTIPS = (
         "The comparison picture of the current mode (frame_index).",
         "How different A and B are per pixel (mean over channels, before gain) - threshold it to find changes.",
         "A histogram of A at frame_index (in histogram_scope mode, the same picture as preview).",
         "What was compared: sources, sizes, frame, metrics (JSON).",
+        "A at frame_index (B's partner frame via b_offset) with the A/B difference painted as a heat map and a red "
+        "box around every changed region, labelled with the changed share. A alone when B is missing.",
+        "Change report as JSON, for a Save Text node or automation: per A-frame changed share and mean difference, "
+        "the significant frames and frame ranges, boxed regions (full-size A pixels) of the worst frames, and a "
+        "summary of B, C and D against A (PSNR / SSIM / colour difference / changed share) ranked best first. A "
+        "pixel counts as changed above diff_threshold (0 = 0.02, about 5 / 255); a frame is significant when 0.1 % "
+        "or more of it changed.",
     )
     FUNCTION = "execute"
     CATEGORY = "C2C/Preview"
@@ -581,6 +589,19 @@ class VideoComparerC2C:
         result = self._compute(mode, bit_depth, wipe_position, onion_alpha, diff_gain, diff_gamma,
                                diff_threshold, diff_mode, false_color_lut, scope_intensity, frame_index,
                                label_a, label_b, image_a, image_b, audio_a, audio_b, file_a, file_b)
+        # L9.173 (A25 spec 47 / AusBoss Compare 8): annotated difference report + multi-source summary, appended
+        try:
+            with torch.no_grad():
+                annotated, report = _change_report(
+                    image_a, image_b, file_a, file_b, int(b_offset), float(diff_threshold), int(frame_index),
+                    {"B": (label_b, image_b, file_b, int(b_offset)), "C": (label_c, image_c, file_c, 0),
+                     "D": (label_d, image_d, file_d, 0)}, label_a)
+        except Exception as exc:  # noqa: BLE001 - the appended report must not take the comparison down: it says so
+            if type(exc).__name__ == "InterruptProcessingException":
+                raise
+            annotated = result[0]
+            report = {"error": f"change report failed: {type(exc).__name__}: {exc}"}
+        result = tuple(result) + (annotated, json.dumps(report))
         # The widget compares LIVE in the browser but could only load files from the input folder, and this node
         # returned no `ui` payload: with image_a / image_b wired (the usual case) it showed nothing, before or
         # after a Queue (A9, L2.26). Hand it previews of the wired tensors and the server-rendered panel.
@@ -595,6 +616,8 @@ class VideoComparerC2C:
             if metrics:
                 m = _metrics(image_a, image_b, file_a, file_b, int(b_offset))
                 if m:
+                    if report.get("sources"):          # L9.173: C / D against A ride along (the strip shows A/B)
+                        m = dict(m, sources=report["sources"], ranking=report.get("ranking", []))
                     ui["c2c_metrics"] = [m]
             panel = save_preview_png(result[0][0].cpu().numpy(), "panel")
             if panel:
@@ -773,6 +796,158 @@ def _metrics(image_a, image_b, file_a, file_b, offset: int) -> dict | None:
     return {"frames": na, "pairs": hi - lo, "offset": offset, "first": lo,
             "psnr": full(m["psnr"]), "ssim": full(m["ssim"]), "delta_e": full(m["delta_e"]),
             "worst": {k: lo + v for k, v in m["worst"].items()}, "summary": m["summary"]}
+
+
+# ──────────────────────────────────────────────────────────────────────────
+# L9.173: change report (thresholded change detection, regions, significant frames) + multi-source summary
+# ──────────────────────────────────────────────────────────────────────────
+_CHANGE_DEFAULT_THR = 0.02          # diff_threshold 0 -> about 5 / 255: below that is codec / dither noise
+_SIGNIFICANT_SHARE = 0.001          # a frame with 0.1 % changed pixels or more is significant
+_REGION_MIN_SHARE = 0.0005          # regions smaller than 0.05 % of the frame are not boxed
+_WORK_SIDE = 256                    # change maps are measured at <= 256 px (long side)
+_BOXED_FRAMES = 10                  # regions are listed for the worst frames (+ frame_index)
+
+
+def _small(x: torch.Tensor) -> torch.Tensor:
+    h, w = int(x.shape[1]), int(x.shape[2])
+    s = min(1.0, _WORK_SIDE / float(max(h, w)))
+    if s >= 1.0:
+        return x.float()
+    size = (max(1, round(h * s)), max(1, round(w * s)))
+    return F.interpolate(x.permute(0, 3, 1, 2).float(), size=size, mode="area").permute(0, 2, 3, 1)
+
+
+def _pairs(a: torch.Tensor, b: torch.Tensor, offset: int):
+    na, nb = int(a.shape[0]), int(b.shape[0])
+    lo, hi = max(0, offset), min(na, nb + offset)
+    return lo, hi
+
+
+def _regions(changed: np.ndarray, full_h: int, full_w: int, limit: int = 8) -> list:
+    import cv2
+    m = cv2.dilate(changed.astype(np.uint8), np.ones((3, 3), np.uint8))
+    n, _lab, stats, _c = cv2.connectedComponentsWithStats(m, connectivity=8)
+    h, w = changed.shape
+    sx, sy = full_w / float(w), full_h / float(h)
+    out = []
+    for i in range(1, n):
+        x, y, bw, bh, area = (int(v) for v in stats[i])
+        if area < _REGION_MIN_SHARE * h * w:
+            continue
+        out.append({"box_xywh": [int(x * sx), int(y * sy), int(math.ceil(bw * sx)), int(math.ceil(bh * sy))],
+                    "share": round(area / float(h * w), 5)})
+    out.sort(key=lambda r: -r["share"])
+    return out[:limit]
+
+
+def _ranges(frames: list) -> list:
+    out = []
+    for f in frames:
+        if out and f == out[-1][1] + 1:
+            out[-1][1] = f
+        else:
+            out.append([f, f])
+    return out
+
+
+def _change_report(image_a, image_b, file_a, file_b, b_offset: int, diff_threshold: float, frame_index: int,
+                   sources: dict, label_a: str):
+    """(annotated IMAGE [1,H,W,3], report dict). A frame i is paired with B frame i - b_offset (as the metrics)."""
+    a = _frames_of(image_a, file_a)
+    thr = float(diff_threshold) if diff_threshold and diff_threshold > 0 else _CHANGE_DEFAULT_THR
+    report: dict = {"reference": label_a, "threshold": thr, "significant_share": _SIGNIFICANT_SHARE}
+    if a is None:
+        report["note"] = "no A frames: nothing to compare"
+        return torch.zeros(1, 64, 64, 3), report
+    a = a.float()
+    fi = max(0, min(int(frame_index), int(a.shape[0]) - 1))
+    b = _frames_of(image_b, file_b)
+    annotated = a[fi:fi + 1, ..., :3].clamp(0, 1).cpu()
+    if b is None:
+        report["note"] = "no B frames: nothing to compare"
+    else:
+        b = b.float()
+        lo, hi = _pairs(a, b, b_offset)
+        report.update({"offset": b_offset, "pairs": max(0, hi - lo), "first": lo})
+        if hi <= lo:
+            report["note"] = "A and B do not overlap at this offset"
+        else:
+            if tuple(b.shape[1:3]) != tuple(a.shape[1:3]):
+                report["note"] = f"B resized from {int(b.shape[2])}x{int(b.shape[1])} to A's size for the comparison"
+            H, W = int(a.shape[1]), int(a.shape[2])
+            share, mean_d, maps = [None] * int(a.shape[0]), [None] * int(a.shape[0]), {}
+            for s0 in range(lo, hi, 16):
+                s1 = min(hi, s0 + 16)
+                sa = _small(a[s0:s1, ..., :3])
+                sb = b[s0 - b_offset:s1 - b_offset, ..., :3].float()
+                sb = F.interpolate(sb.permute(0, 3, 1, 2), size=tuple(sa.shape[1:3]), mode="area" if
+                                   sb.shape[1] >= sa.shape[1] else "bilinear").permute(0, 2, 3, 1)
+                d = (sa - sb.to(sa.device)).abs()
+                ch = d.amax(-1) > thr
+                for k in range(s1 - s0):
+                    share[s0 + k] = round(float(ch[k].float().mean()), 6)
+                    mean_d[s0 + k] = round(float(d[k].mean()), 6)
+                    maps[s0 + k] = ch[k].cpu().numpy()
+            paired = [i for i in range(lo, hi)]
+            sig = [i for i in paired if share[i] >= _SIGNIFICANT_SHARE]
+            worst = sorted(paired, key=lambda i: -share[i])[:_BOXED_FRAMES]
+            boxed = sorted(set(worst + ([fi] if lo <= fi < hi else [])))
+            report.update({"changed_share": share, "mean_abs_diff": mean_d, "significant_frames": sig,
+                           "significant_ranges": _ranges(sig),
+                           "worst_frame": max(paired, key=lambda i: share[i]),
+                           "regions": {str(i): _regions(maps[i], H, W) for i in boxed if share[i] > 0}})
+            if lo <= fi < hi:
+                annotated = _annotate(a[fi, ..., :3], b[fi - b_offset, ..., :3], thr, maps[fi], share[fi], fi)
+    # multi-source: B / C / D against A on the A timeline (C / D start with A)
+    summ, rank = {}, []
+    for key, (label, img, fname, off) in sources.items():
+        m = _metrics(image_a, img, file_a, fname, off) if (key == "B" or img is not None or fname) else None
+        if not m or not m.get("pairs"):
+            continue
+        x = _frames_of(img, fname)
+        ch_mean = None
+        if x is not None:
+            lo2, hi2 = _pairs(a, x, off)
+            if hi2 > lo2:
+                sa = _small(a[lo2:hi2, ..., :3])
+                sx = F.interpolate(x[lo2 - off:hi2 - off, ..., :3].float().permute(0, 3, 1, 2),
+                                   size=tuple(sa.shape[1:3]), mode="bilinear",
+                                   align_corners=False).permute(0, 2, 3, 1)
+                ch_mean = round(float(((sa - sx.to(sa.device)).abs().amax(-1) > thr).float().mean()), 6)
+        summ[key] = {"label": label, "offset": off, "pairs": m["pairs"], "changed_share_mean": ch_mean,
+                     **{k: {kk: round(vv, 4) for kk, vv in v.items()} for k, v in m["summary"].items()},
+                     "worst": m["worst"]}
+        rank.append((m["summary"]["psnr"]["mean"], key))
+    if summ:
+        report["sources"] = summ
+        report["ranking"] = [k for _p, k in sorted(rank, key=lambda t: -t[0])]
+    return annotated.float().clamp(0, 1), report
+
+
+def _annotate(fa: torch.Tensor, fb: torch.Tensor, thr: float, changed_small: np.ndarray, share: float,
+              idx: int) -> torch.Tensor:
+    import cv2
+    H, W = int(fa.shape[0]), int(fa.shape[1])
+    a = fa.float().cpu().numpy()
+    bb = fb.float().cpu()
+    if tuple(bb.shape[:2]) != (H, W):
+        bb = F.interpolate(bb.permute(2, 0, 1)[None], size=(H, W), mode="bilinear",
+                           align_corners=False)[0].permute(1, 2, 0)
+    d = np.abs(a - bb.numpy()).max(-1)
+    heat = _apply_lut(np.clip(d / (4.0 * thr), 0.0, 1.0), _lut_table("turbo"))
+    w = np.clip(d / thr, 0.0, 1.0)[..., None] * 0.6
+    out = np.clip(a, 0, 1) * (1.0 - w) * 0.85 + heat * w
+    out = np.ascontiguousarray(out.astype(np.float32))
+    lw = max(1, round(max(H, W) / 400))
+    for r in _regions(changed_small, H, W):
+        x, y, bw, bh = r["box_xywh"]
+        cv2.rectangle(out, (x, y), (min(W - 1, x + bw), min(H - 1, y + bh)), (1.0, 0.15, 0.15), lw)
+    fs = max(0.35, max(H, W) / 1400.0)
+    txt = f"frame {idx}: {share * 100:.2f}% changed"
+    cv2.putText(out, txt, (6, int(18 * fs / 0.5)), cv2.FONT_HERSHEY_SIMPLEX, fs, (0.0, 0.0, 0.0), lw + 2,
+                cv2.LINE_AA)
+    cv2.putText(out, txt, (6, int(18 * fs / 0.5)), cv2.FONT_HERSHEY_SIMPLEX, fs, (1.0, 1.0, 1.0), lw, cv2.LINE_AA)
+    return torch.from_numpy(out)[None]
 
 
 # Back-compat alias: old saved workflows reference "VideoComparerMEC"; map

@@ -725,7 +725,9 @@ app.registerExtension({
                            "custom_aspect_w", "custom_aspect_h",
                            "crop_x", "crop_y", "crop_w", "crop_h",
                            "frame_start", "frame_end", "frame_stride",
-                           "playback_fps", "loop_mode"];
+                           "playback_fps", "loop_mode",
+                           // L9.173: the rotate / pad preview follows these
+                           "rotate_degrees", "pad_left", "pad_top", "pad_right", "pad_bottom"];
             requestAnimationFrame(() => {
                 for (const wn of watch) {
                     const w = node.widgets?.find(x => x.name === wn);
@@ -994,6 +996,56 @@ app.registerExtension({
                 ctx.textBaseline = "top";
                 ctx.fillText(txt, cr.x + 6, cr.y + 4);
                 ctx.restore();
+            }
+
+            // L9.173: rotate / pad preview. The node turns the picture inside the crop window (or the whole frame)
+            // by rotate_degrees, clockwise, sampling the whole source - so the source area that ends up in the
+            // output is the window turned the OTHER way about its centre. Drawn dashed in source space; the
+            // padding is listed in the label (it lies outside the source).
+            {
+                const gv = (n, d) => Number(this.widgets?.find(w => w.name === n)?.value ?? d) || 0;
+                const deg = gv("rotate_degrees", 0);
+                const pads = ["pad_left", "pad_top", "pad_right", "pad_bottom"].map(n => Math.max(0, gv(n, 0)));
+                if (Math.abs(deg) > 1e-6 || pads.some(v => v > 0)) {
+                    const [ncx, ncy, ncw, nch] = this._isCropEnabled?.() ? this._getCropNorm() : [0, 0, 1, 1];
+                    const W = S.width || 1, H = S.height || 1;
+                    const cx = (ncx + ncw / 2) * W, cy = (ncy + nch / 2) * H;
+                    const hw = ncw * W / 2, hh = nch * H / 2;
+                    const t = -deg * Math.PI / 180, c = Math.cos(t), s = Math.sin(t);   // source = R(-deg) * out
+                    const toCanvas = (dx, dy) => [px + (cx + c * dx - s * dy) / W * pw,
+                                                  py + (cy + s * dx + c * dy) / H * ph];
+                    ctx.save();
+                    ctx.beginPath();
+                    ctx.rect(px, py, pw, ph);
+                    ctx.clip();
+                    ctx.strokeStyle = C.peachVivid;
+                    ctx.lineWidth = 1.5;
+                    ctx.setLineDash([5, 4]);
+                    ctx.beginPath();
+                    [[-hw, -hh], [hw, -hh], [hw, hh], [-hw, hh]].forEach(([dx, dy], i) => {
+                        const [x, y] = toCanvas(dx, dy);
+                        if (i === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
+                    });
+                    ctx.closePath();
+                    ctx.stroke();
+                    ctx.setLineDash([]);
+                    // a tick on the output's top edge, so the turn direction reads at a glance
+                    const [tx0, ty0] = toCanvas(0, -hh), [tx1, ty1] = toCanvas(0, -hh + Math.min(hw, hh) * 0.25);
+                    ctx.beginPath(); ctx.moveTo(tx0, ty0); ctx.lineTo(tx1, ty1); ctx.stroke();
+                    ctx.restore();
+                    const label = `rot ${deg.toFixed(1)}°` +
+                        (pads.some(v => v > 0) ? `  pad L${pads[0]} T${pads[1]} R${pads[2]} B${pads[3]}` : "");
+                    ctx.save();
+                    ctx.font = "11px sans-serif";
+                    const lw = ctx.measureText(label).width + 8;
+                    ctx.fillStyle = "rgba(0,0,0,0.6)";
+                    ctx.fillRect(px + pw - lw - 4, py + ph - 20, lw, 16);
+                    ctx.fillStyle = C.white;
+                    ctx.textAlign = "left";
+                    ctx.textBaseline = "top";
+                    ctx.fillText(label, px + pw - lw, py + ph - 18);
+                    ctx.restore();
+                }
             }
 
             // Status line (time-aware: shows "0:02 / 0:09" in time mode,

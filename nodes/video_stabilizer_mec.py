@@ -329,6 +329,146 @@ def _stable_result_to_image(result, frames_in: torch.Tensor) -> torch.Tensor:
     return torch.from_numpy(arr).clamp(0, 1)
 
 
+# ---------------------------------------------------------------------
+# L9.173 (A25 spec 56): horizon lock, user path correction, rolling-shutter correction. All three compose into the
+# engine's own per-frame matrix (M' = C @ M @ R), so the frames are resampled ONCE from the source and motion_meta
+# (and the inverse) stays exact.
+# ---------------------------------------------------------------------
+def _parse_path_correction(text) -> Dict[int, Tuple[float, float, float]]:
+    """'frame: dx, dy[, deg]' lines (or ';'), or a JSON object {"frame": [dx, dy, deg]}. Empty -> {}."""
+    text = (text or "").strip() if isinstance(text, str) else ""
+    if not text:
+        return {}
+    items: List[Tuple[str, Any]] = []
+    if text.startswith("{"):
+        try:
+            data = json.loads(text)
+        except ValueError as exc:
+            raise ValueError(f"path_correction starts with '{{' but is not valid JSON ({exc}).") from exc
+        if not isinstance(data, dict):
+            raise ValueError('path_correction JSON must be an object such as {"48": [12, -4, 0.5]}.')
+        items = list(data.items())
+    else:
+        for line in text.replace(";", "\n").splitlines():
+            line = line.strip()
+            if not line or line.startswith("#"):
+                continue
+            if ":" not in line:
+                raise ValueError(f"path_correction line {line!r}: write 'frame: dx, dy' or 'frame: dx, dy, degrees'.")
+            k, v = line.split(":", 1)
+            items.append((k, [p for p in v.replace(" ", ",").split(",") if p.strip()]))
+    keys: Dict[int, Tuple[float, float, float]] = {}
+    for k, v in items:
+        try:
+            f = int(str(k).strip())
+            vals = [float(x) for x in (v if isinstance(v, (list, tuple)) else [v])]
+        except (TypeError, ValueError) as exc:
+            raise ValueError(f"path_correction keyframe {k!r}: {v!r} is not 'frame: dx, dy[, degrees]' ({exc}).") from exc
+        if f < 0 or len(vals) not in (2, 3) or not all(np.isfinite(vals)):
+            raise ValueError(f"path_correction keyframe {k!r}: need a frame >= 0 and 2 or 3 finite numbers "
+                             f"(dx, dy[, degrees]), got {v!r}.")
+        keys[f] = (vals[0], vals[1], vals[2] if len(vals) == 3 else 0.0)
+    return keys
+
+
+def _rot_about(cx: float, cy: float, rad: float) -> np.ndarray:
+    """Rotation by `rad` about (cx, cy) in image coordinates (y down: positive = clockwise on screen)."""
+    c, s = float(np.cos(rad)), float(np.sin(rad))
+    return np.array([[c, -s, cx - c * cx + s * cy], [s, c, cy - s * cx - c * cy], [0.0, 0.0, 1.0]])
+
+
+def _apply_path_corrections(frames: torch.Tensor, out, padding_color: str, horizon_lock: bool, horizon_deg: float,
+                            keys: Dict[int, Tuple[float, float, float]], readout: float, frame_rate: float):
+    """Re-warp the source frames with the engine's matrices composed with the requested corrections."""
+    import cv2
+    stab, _masks, info, meta_json = out
+    meta = json.loads(meta_json)
+    warp = meta.get("stabilization_warp") or {}
+    per = warp.get("per_frame") or []
+    B, H, W, _ = frames.shape
+    if len(per) != B or "output_size" not in warp:
+        return (stab, _masks, info + "\ncorrections skipped: the engine reported no per-frame warp", meta_json)
+    M = [np.asarray(e["applied_matrix"], dtype=np.float64) for e in per]
+    ow, oh = int(warp["output_size"][0]), int(warp["output_size"][1])
+    trans = [np.asarray(t["matrix"], dtype=np.float64)
+             for t in (meta.get("estimated_motion") or {}).get("per_transition") or []]
+    have_motion = B > 1 and len(trans) == B - 1
+    notes: List[str] = []
+    # camera roll relative to frame 0, and the per-frame motion of the source centre (pixels / frame)
+    cam_roll = np.zeros(B)
+    vel = np.zeros((B, 2))
+    if have_motion:
+        c = np.array([W / 2.0, H / 2.0, 1.0])
+        steps = np.array([float(np.arctan2(t[1, 0], t[0, 0])) for t in trans])
+        cam_roll[1:] = np.cumsum(steps)
+        moves = []
+        for t in trans:
+            q = t @ c
+            moves.append(q[:2] / q[2] - c[:2])
+        moves = np.asarray(moves)
+        for i in range(B):
+            adj = [moves[k] for k in (i - 1, i) if 0 <= k < B - 1]
+            vel[i] = np.mean(adj, axis=0)
+    elif horizon_lock or readout > 0:
+        notes.append("horizon_lock / rolling_shutter need the measured motion, which this run has none of - skipped")
+    out_roll = cam_roll + np.array([float(np.arctan2(m[1, 0], m[0, 0])) for m in M])     # roll still in the output
+    lock = horizon_lock and have_motion
+    rs = readout if have_motion else 0.0
+    if keys:
+        ks = sorted(keys)
+        fr = np.arange(B)
+        pdx = np.interp(fr, ks, [keys[k][0] for k in ks])
+        pdy = np.interp(fr, ks, [keys[k][1] for k in ks])
+        pdeg = np.interp(fr, ks, [keys[k][2] for k in ks])
+    else:
+        pdx = pdy = pdeg = np.zeros(B)
+    ocx, ocy = ow / 2.0, oh / 2.0
+    pad = np.array(_parse_padding_color(padding_color), dtype=np.float32) / 255.0
+    new_frames = np.empty((B, oh, ow, 3), dtype=np.float32)
+    new_masks = np.empty((B, oh, ow), dtype=np.float32)
+    ones = np.ones((H, W), dtype=np.float32)
+    new_M = []
+    for i in range(B):
+        _check_interrupt()
+        ang = (-out_roll[i] if lock else 0.0) + np.radians(horizon_deg) + np.radians(pdeg[i])
+        C = np.array([[1.0, 0.0, pdx[i]], [0.0, 1.0, pdy[i]], [0.0, 0.0, 1.0]]) @ _rot_about(ocx, ocy, ang)
+        vx, vy = vel[i] * rs
+        R = np.array([[1.0, -vx / H, vx / 2.0], [0.0, 1.0 - vy / H, vy / 2.0], [0.0, 0.0, 1.0]])
+        m2 = C @ M[i] @ R
+        new_M.append(m2)
+        src = frames[i, ..., :3].detach().float().cpu().numpy()
+        new_frames[i] = cv2.warpPerspective(src, m2.astype(np.float32), (ow, oh), flags=cv2.INTER_LINEAR,
+                                            borderMode=cv2.BORDER_CONSTANT, borderValue=pad.tolist())
+        content = cv2.warpPerspective(ones, m2.astype(np.float32), (ow, oh), flags=cv2.INTER_NEAREST,
+                                      borderMode=cv2.BORDER_CONSTANT, borderValue=0.0)
+        new_masks[i] = 1.0 - (content > 0.5).astype(np.float32)
+    for e, m2 in zip(per, new_M):
+        e["applied_matrix"] = m2.astype(np.float32).tolist()
+    res_roll = out_roll + np.array([float(np.arctan2(m2[1, 0], m2[0, 0]) - np.arctan2(m[1, 0], m[0, 0]))
+                                    for m, m2 in zip(M, new_M)])
+    meta["c2c_corrections"] = {
+        "horizon_lock": bool(lock), "horizon_angle_deg": horizon_deg, "rolling_shutter_readout": rs,
+        "path_keyframes": {str(k): list(v) for k, v in sorted(keys.items())},
+        "matrix_order": "applied = correction @ engine @ rolling_shutter (source_to_stabilized)",
+        "trajectory": {"camera_roll_deg": np.degrees(cam_roll).round(4).tolist(),
+                       "output_roll_before_deg": np.degrees(out_roll).round(4).tolist(),
+                       "output_roll_after_deg": np.degrees(res_roll).round(4).tolist(),
+                       "centre_velocity_px": vel.round(4).tolist()},
+        "notes": notes,
+    }
+    mod = sys.modules.get("_mec_vendored_stabilizer.video_stabilizer_classic")
+    if mod is not None and hasattr(mod, "_attach_motion_meta"):      # the applied-motion summary follows the warp
+        meta = mod._attach_motion_meta(meta, float(meta.get("fps_effective") or frame_rate or 16.0))
+    pads = new_masks.reshape(B, -1).mean(1)
+    meta["padding_fraction_mean"] = float(pads.mean())
+    meta["padding_fraction_max"] = float(pads.max())
+    info += (f"\ncorrections: horizon_lock={'on' if lock else 'off'} horizon_angle={horizon_deg:g} "
+             f"path_keyframes={len(keys)} rolling_shutter={rs:g} (one resample from the source)")
+    if notes:
+        info += "\n" + "\n".join(notes)
+    return (torch.from_numpy(new_frames).clamp(0, 1), torch.from_numpy(new_masks), info,
+            json.dumps(meta, default=_json_default))
+
 
 # =====================================================================
 # Unified VideoStabilizerMEC (replaces VideoStabilizerClassic/Flow/Auto)
@@ -427,6 +567,23 @@ class VideoStabilizerMEC:
                     "ORIGINAL CAMERA MOTION BACK (after you painted / inpainted the steady plate). The frames must "
                     "be the stabilised size and count; the other settings are not used then. Pixels a crop framing "
                     "threw away cannot come back."}),
+                # L9.173 (A25 spec 56): appended, optional; the defaults leave the stabilised frames exactly as before
+                "horizon_lock": ("BOOLEAN", {"default": False, "tooltip":
+                    "Keep the horizon as level as on the first frame: the camera's remaining roll (what the "
+                    "smoothing left in) is removed on every frame. Uses the motion the stabiliser measured; borders "
+                    "this uncovers are padded and marked in padding_mask."}),
+                "horizon_angle": ("FLOAT", {"default": 0.0, "min": -45.0, "max": 45.0, "step": 0.05, "tooltip":
+                    "Rotate every stabilised frame by this many degrees (positive = clockwise) - e.g. to level a "
+                    "first frame that was shot tilted. 0 = no rotation."}),
+                "path_correction": ("STRING", {"default": "", "multiline": True, "tooltip":
+                    "Your own correction of the stabilised camera path: one keyframe per line, 'frame: dx, dy' or "
+                    "'frame: dx, dy, degrees' (pixels, positive = right / down / clockwise), e.g. '0: 0, 0' and "
+                    "'48: 12, -4, 0.5'. Values between keyframes are interpolated linearly and held before the "
+                    "first / after the last. A JSON object {\"48\": [12, -4, 0.5]} works too. Empty = none."}),
+                "rolling_shutter": ("FLOAT", {"default": 0.0, "min": 0.0, "max": 1.0, "step": 0.01, "tooltip":
+                    "Rolling-shutter correction: the sensor read-out time as a fraction of one frame (0 = global "
+                    "shutter / off; CMOS phones and DSLRs are often 0.3-0.9). Undoes the skew / wobble fast pans "
+                    "cause, from the measured frame-to-frame motion, in the same warp as the stabilisation."}),
             },
         }
 
@@ -497,7 +654,8 @@ class VideoStabilizerMEC:
     # --------------------------------------------------------------
     def stabilize(self, frames, method, preset, frame_rate, padding_color,
                   framing_mode, transform_mode, camera_lock, strength, smooth,
-                  keep_fov, raft_iters, use_half, allow_download=False, motion_meta=None):
+                  keep_fov, raft_iters, use_half, allow_download=False, motion_meta=None,
+                  horizon_lock=False, horizon_angle=0.0, path_correction="", rolling_shutter=0.0):
         method = self._METHOD_ALIASES.get(method, method)
         _require_stabilizer()
         if motion_meta:
@@ -506,13 +664,21 @@ class VideoStabilizerMEC:
             raise ValueError(
                 f"VideoStabilizerMEC expects IMAGE tensor [B,H,W,3], got {tuple(getattr(frames, 'shape', ()))}"
             )
+        keys = _parse_path_correction(path_correction)          # L9.173: a typo fails before the engine runs
+        rs = float(rolling_shutter or 0.0)
+        if not 0.0 <= rs <= 1.0:
+            raise ValueError(f"rolling_shutter must be 0..1 (a fraction of the frame time), got {rs}")
         from ._download_policy import allow_downloads
         with torch.no_grad(), allow_downloads(allow_download):
-            return self._stabilize_impl(
+            out = self._stabilize_impl(
                 frames, method, preset, frame_rate, padding_color,
                 framing_mode, transform_mode, camera_lock, strength, smooth,
                 keep_fov, raft_iters, use_half,
             )
+            if horizon_lock or abs(float(horizon_angle or 0.0)) > 1e-9 or keys or rs > 0.0:
+                out = _apply_path_corrections(frames, out, padding_color, bool(horizon_lock),
+                                              float(horizon_angle or 0.0), keys, rs, frame_rate)
+            return out
 
     def _restore_motion(self, frames, motion_meta, padding_color):
         """Inverse: stabilised (edited) frames + the meta that made them -> the original camera motion."""
@@ -773,4 +939,11 @@ if declare_layout is not None:
         _VS[_n] = {"c2c_section": "RAFT", "c2c_show_if": {"method": ["raft_flow"]}, "c2c_hide_if_linked": _VS_LINK}
     _VS["allow_download"] = {"c2c_section": "Model setup", "c2c_show_if": {"method": ["raft_flow"]},
                              "c2c_hide_if_linked": _VS_LINK}
+    # L9.173: the path corrections are not read while restoring the camera motion (motion_meta wired)
+    for _n in ("horizon_lock", "horizon_angle", "path_correction", "rolling_shutter"):
+        _VS[_n] = {"c2c_section": "Path corrections", "c2c_hide_if_linked": _VS_LINK}
     declare_layout(VideoStabilizerMEC, _VS)
+
+# L9.173: inputs appended after the A28 signature pin (tests/test_a28_cnp_a_layout.py can exclude these by name)
+L9173_APPENDED_INPUTS = ("horizon_lock", "horizon_angle", "path_correction", "rolling_shutter")
+APPENDED_AFTER_A28 = L9173_APPENDED_INPUTS          # read by tests/test_a28_cnp_a_layout.py
