@@ -21,6 +21,7 @@ Design notes (research-grounded):
   * AUDIO dict contract verified against comfy_extras/nodes_audio.py and VHS.
 """
 
+import json
 import math
 import logging
 
@@ -58,6 +59,96 @@ def _flow_and_motion(g0, g1, rescale):
     return flow, motion
 
 
+MOTION_METRICS = ("global p95", "local tiles")   # L9.171: appended choice; "global p95" = the metric above
+_TILES = 4
+
+
+def _motion_from_flow(flow, rescale, metric):
+    """Motion of one pair in full-resolution pixels. "global p95": the 95th percentile of the whole flow magnitude
+    (the metric of _flow_and_motion). "local tiles": the frame cut into a 4x4 grid, the largest of the tiles' 95th
+    percentiles - a small fast subject on a still background then counts as fast (A25 spec item 90.1)."""
+    mag = np.linalg.norm(flow, axis=2)
+    if metric != "local tiles":
+        return float(np.percentile(mag, 95.0)) * rescale
+    h, w = mag.shape[:2]
+    best = 0.0
+    for ty in range(_TILES):
+        for tx in range(_TILES):
+            tile = mag[ty * h // _TILES:(ty + 1) * h // _TILES, tx * w // _TILES:(tx + 1) * w // _TILES]
+            if tile.size:
+                best = max(best, float(np.percentile(tile, 95.0)))
+    return best * rescale
+
+
+def _cut_distance(g0, g1):
+    """Bhattacharyya distance (0 = same, 1 = unrelated) of two gray frames' 64-bin histograms (A25 spec item 90.2)."""
+    import cv2
+    h0 = cv2.calcHist([g0], [0], None, [64], [0, 256])
+    h1 = cv2.calcHist([g1], [0], None, [64], [0, 256])
+    return float(cv2.compareHist(h0, h1, cv2.HISTCMP_BHATTACHARYYA))
+
+
+def _audio_parts(audio):
+    """(waveform as [B,C,S], restore fn) so retimed audio keeps the rank it came in with."""
+    w = audio["waveform"]
+    if w.ndim == 3:
+        return w, lambda x: x
+    if w.ndim == 2:
+        return w.unsqueeze(0), lambda x: x.squeeze(0)
+    return w.reshape(1, 1, -1), lambda x: x.reshape(-1)
+
+
+def retime_audio(audio, positions, batch):
+    """Audio made on the expanded timeline (`batch` frames) brought back onto the source frames (A25 spec item 89.1).
+
+    Source frame k sat at expanded position positions[k]; between those knots the map is linear, after the last knot
+    it runs on at speed 1. Each output sample is linearly interpolated from the expanded waveform."""
+    if audio is None:
+        return None
+    if not (isinstance(audio, dict) and torch.is_tensor(audio.get("waveform"))):
+        raise ValueError("FluidShotDecoder: audio must be an AUDIO dict with a 'waveform' tensor.")
+    w, restore = _audio_parts(audio)
+    n_src = len(positions)
+    S = int(w.shape[-1])
+    if n_src < 2 or batch < 1 or S < 2:
+        return audio
+    spf = S / float(batch)
+    s_out = int(round(n_src * spf))
+    u = np.arange(s_out, dtype=np.float64) / spf
+    knots = np.arange(n_src, dtype=np.float64)
+    pos = np.asarray(positions, dtype=np.float64)
+    v = np.interp(u, knots, pos)
+    after = u > knots[-1]
+    v[after] = pos[-1] + (u[after] - knots[-1])
+    x = np.clip(v * spf, 0.0, S - 1.0)
+    i0 = np.floor(x).astype(np.int64)
+    i1 = np.minimum(i0 + 1, S - 1)
+    frac = torch.from_numpy((x - i0).astype(np.float32)).to(device=w.device, dtype=w.dtype)
+    out = (w.index_select(-1, torch.from_numpy(i0).to(w.device)) * (1.0 - frac)
+           + w.index_select(-1, torch.from_numpy(i1).to(w.device)) * frac)
+    res = dict(audio)
+    res["waveform"] = restore(out)
+    return res
+
+
+def integrity_report(images, selected, count_mismatch, missing):
+    """Missing / repeated / out-of-order / identical-content frames of the decoder's pick (A25 spec item 89.2).
+    Compared one frame pair at a time (no copy of the batch)."""
+    repeated, non_mono, dup = [], [], []
+    with torch.no_grad():
+        for k in range(1, len(selected)):
+            if selected[k] == selected[k - 1]:
+                repeated.append(k)
+                continue
+            if selected[k] < selected[k - 1]:
+                non_mono.append(k)
+            if float((images[selected[k]] - images[selected[k - 1]]).abs().max()) <= 1e-6:
+                dup.append(k)
+    return {"ok": not (count_mismatch or missing or repeated or non_mono or dup),
+            "count_mismatch": bool(count_mismatch), "missing": list(missing), "repeated": repeated,
+            "non_monotonic": non_mono, "content_duplicates": dup}
+
+
 def _warp_mid(a_u8, b_u8, flow, t):
     """Flow-warp intermediate at fraction t between full-res RGB uint8 frames.
 
@@ -91,6 +182,20 @@ class FluidShotEncoderMEC:
                                "(95th-percentile optical-flow magnitude). Fast sections get "
                                "flow-warped in-betweens until each step is under this."}),
             },
+            "optional": {
+                # L9.171 (A25 spec item 90) - appended; at the defaults the frames and the TIMEMAP are as before
+                "scene_cut_threshold": ("FLOAT", {
+                    "default": 0.0, "min": 0.0, "max": 1.0, "step": 0.01,
+                    "tooltip": "0 = off. Above 0: a pair of frames whose gray histograms differ by at least this "
+                               "(Bhattacharyya distance, 0 = same .. 1 = unrelated; hard cuts are usually above "
+                               "0.4) is a scene cut and gets no in-betweens, so two shots are never blended. The cut "
+                               "pairs are listed in the TIMEMAP (scene_cuts)."}),
+                "motion_metric": (list(MOTION_METRICS), {
+                    "default": "global p95",
+                    "tooltip": "global p95: motion = 95th percentile of the whole frame's flow (as before). local "
+                               "tiles: the frame is cut into a 4x4 grid and the fastest tile counts, so a small fast "
+                               "subject (a hand, a ball) on a still background also gets in-betweens."}),
+            },
         }
 
     RETURN_TYPES = ("IMAGE", "TIMEMAP")
@@ -103,7 +208,13 @@ class FluidShotEncoderMEC:
                    "sections so motion per frame is constant — safe for Wan-style AI video. "
                    "Pair with Fluid Shot Decoder to restore the original timing exactly.")
 
-    def execute(self, images, max_px_per_frame):
+    def execute(self, images, max_px_per_frame, scene_cut_threshold=0.0, motion_metric="global p95"):
+        if motion_metric not in MOTION_METRICS:
+            raise ValueError(f"FluidShotEncoder: unknown motion_metric {motion_metric!r}; use one of "
+                             f"{', '.join(MOTION_METRICS)}.")
+        cut_thr = float(scene_cut_threshold or 0.0)
+        extended = cut_thr > 0.0 or motion_metric != "global p95"
+        scene_cuts, pair_motion = [], []
         if images.ndim == 3:
             images = images.unsqueeze(0)
         B = images.shape[0]
@@ -138,6 +249,13 @@ class FluidShotEncoderMEC:
                 g1 = _to_gray_u8(b_t, scale)
                 prev_gray = g1
                 flow, motion = _flow_and_motion(g0, g1, rescale)
+                if motion_metric != "global p95":
+                    motion = _motion_from_flow(flow, rescale, motion_metric)
+                if extended:
+                    pair_motion.append(round(float(motion), 4))
+                if cut_thr > 0.0 and _cut_distance(g0, g1) >= cut_thr:
+                    scene_cuts.append(i)          # L9.171: a scene cut gets no in-betweens
+                    motion = 0.0
                 if motion > max_px:
                     n_insert = min(_MAX_INSERTS_PER_PAIR,
                                    int(math.ceil(motion / max_px)) - 1)
@@ -174,6 +292,10 @@ class FluidShotEncoderMEC:
               "out_count": int(normalized.shape[0]),
               "original_positions": original_positions,
               "src_of_output": src_of_output}
+        if extended:                              # L9.171: only when a new feature is on (old TIMEMAPs unchanged)
+            tm.update(motion_metric=motion_metric, pair_motion=pair_motion)
+            if cut_thr > 0.0:
+                tm["scene_cuts"] = scene_cuts
         logger.info("FluidShotEncoder: %d -> %d frames (max %.1fpx/frame).",
                     B, normalized.shape[0], max_px)
         return (normalized, tm)
@@ -195,20 +317,30 @@ class FluidShotDecoderMEC:
                     "When the processed batch has a different frame count than the encoder made (e.g. a model "
                     "trimmed it to 4n+1), map the original frames proportionally - their timing is then only "
                     "approximate and the info output says by how much. Off: stop with an error instead."}),
+                # L9.171 (A25 spec item 89) - appended
+                "audio": ("AUDIO", {"tooltip":
+                    "Audio made on the expanded (normalized) timeline, e.g. by an audio-video model. It is retimed "
+                    "onto the original frames with the same map as the pictures (linear between the original "
+                    "frames' positions, speed 1 after the last one), so it stays in sync with the restored clip."}),
             },
         }
 
-    RETURN_TYPES = ("IMAGE", "STRING")
-    RETURN_NAMES = ("images", "info")
+    RETURN_TYPES = ("IMAGE", "STRING", "AUDIO", "STRING", "STRING")
+    RETURN_NAMES = ("images", "info", "audio", "frame_map", "integrity")
     OUTPUT_TOOLTIPS = ("The processed frames at the original count and pacing.",
-                       "How the frames were picked; says how approximate the timing is when the count changed.")
+                       "How the frames were picked; says how approximate the timing is when the count changed.",
+                       "The wired audio retimed onto the original frames (nothing when no audio is wired).",
+                       "JSON: for every original frame its position on the expanded timeline and the batch frame "
+                       "that was picked.",
+                       "JSON check of the pick: missing (outside the batch), repeated, out-of-order and identical-"
+                       "content frames, and whether the frame count changed; ok is true only when all are empty.")
     FUNCTION = "execute"
     CATEGORY = "MEC/Temporal"
     DESCRIPTION = ("Selects exactly the frames that correspond to the ORIGINAL input "
                    "frames using the encoder's TIMEMAP — restores the original frame "
                    "count and slow-to-fast pacing.")
 
-    def execute(self, images, time_map, allow_approximate=True):
+    def execute(self, images, time_map, allow_approximate=True, audio=None):
         if images.ndim == 3:
             images = images.unsqueeze(0)
         if not (isinstance(time_map, dict) and time_map.get("kind") == "fluid_shot"):
@@ -217,9 +349,15 @@ class FluidShotDecoderMEC:
         B = int(images.shape[0])
         positions = [int(p) for p in time_map.get("original_positions", [])]
         if not positions:
-            return (images, "TIMEMAP has no original positions: images passed through unchanged.")
+            empty = json.dumps({"src_count": 0, "batch": B, "expected": int(time_map.get("out_count", 0) or 0),
+                                "exact": False, "frames": []})
+            bad = json.dumps({"ok": False, "count_mismatch": False, "missing": [], "repeated": [],
+                              "non_monotonic": [], "content_duplicates": [],
+                              "note": "the TIMEMAP has no original positions"})
+            return (images, "TIMEMAP has no original positions: images passed through unchanged.", audio, empty, bad)
         expected = int(time_map.get("out_count", 0))
         info = f"exact: {len(positions)} original frames selected from {B}."
+        positions_f = [float(p) for p in positions]
         if expected and B != expected:
             if not allow_approximate:
                 raise ValueError(
@@ -230,13 +368,56 @@ class FluidShotDecoderMEC:
             ratio = (B - 1) / float(max(1, expected - 1))
             scaled = [p * ratio for p in positions]
             positions = [int(round(p)) for p in scaled]
+            positions_f = scaled
             worst = max((abs(p - s) for p, s in zip(positions, scaled)), default=0.0)
             info = (f"APPROXIMATE: batch has {B} frames, the encoder made {expected}; original frames mapped "
                     f"proportionally (rounding error up to {worst:.2f} frame).")
             logger.warning("FluidShotDecoder: %s", info)
-        idx = torch.tensor([min(max(p, 0), B - 1) for p in positions],
-                           dtype=torch.long, device=images.device)
-        return (images.index_select(0, idx), info)
+        selected = [min(max(p, 0), B - 1) for p in positions]
+        idx = torch.tensor(selected, dtype=torch.long, device=images.device)
+        # L9.171 (A25 spec item 89): explicit source -> output correspondence, integrity check, retimed audio
+        mismatch = bool(expected and B != expected)
+        missing = [k for k, p in enumerate(positions) if p < 0 or p > B - 1]
+        frame_map = json.dumps({"src_count": len(positions), "batch": B, "expected": expected, "exact": not mismatch,
+                                "frames": [{"src": k, "out": o, "pos": round(float(pf), 4)}
+                                           for k, (o, pf) in enumerate(zip(selected, positions_f))]})
+        integrity = json.dumps(integrity_report(images, selected, mismatch, missing))
+        out_audio = retime_audio(audio, positions_f, B) if audio is not None else None
+        return (images.index_select(0, idx), info, out_audio, frame_map, integrity)
+
+
+def _grain_reverse(seg: torch.Tensor, sr: int, grain_ms: float) -> torch.Tensor:
+    """Reverse the ORDER of short grains while each grain still plays forwards (L9.173 / A25 spec 79.1).
+
+    Hann grains at 50 % overlap (they sum to exactly 1 at that hop, so a steady signal keeps its level); the
+    grain that started at s is written at len - s - G. Notes keep their pitch AND their attack-then-decay shape (plain
+    reversal turns every decay into a swell); only the order of events runs backwards. A segment shorter than two
+    grains falls back to plain reversal."""
+    n = int(seg.shape[-1])
+    g = int(round(max(1.0, float(grain_ms)) * sr / 1000.0))
+    g = max(4, g + (g % 2))                                    # even, so hop = g / 2 is exact
+    if n < 2 * g:
+        return torch.flip(seg, dims=[-1])
+    hop = g // 2
+    # half-sample-shifted periodic Hann: still sums to exactly 1 at hop g/2, and never 0, so an edge sample covered
+    # by a single grain is still recovered exactly after normalising by the summed weights
+    k = torch.arange(g, dtype=torch.float32, device=seg.device)
+    win = (0.5 - 0.5 * torch.cos(2.0 * math.pi * (k + 0.5) / g)).to(seg.dtype)
+    pad = (-(n - g)) % hop                                     # grains tile [0, n + pad) exactly
+    x = torch.nn.functional.pad(seg, (0, pad))
+    real = torch.nn.functional.pad(torch.ones(n, dtype=seg.dtype, device=seg.device), (0, pad))
+    m = int(x.shape[-1])
+    out = torch.zeros_like(x)
+    wsum = torch.zeros(m, dtype=seg.dtype, device=seg.device)
+    for s0 in range(0, m - g + 1, hop):
+        d0 = m - s0 - g
+        out[..., d0:d0 + g] += x[..., s0:s0 + g] * win
+        wsum[d0:d0 + g] += win * real[s0:s0 + g]          # the zero tail carries no weight: edges keep their level
+    out = out / wsum.clamp_min(1e-12)
+    return out[..., pad:pad + n]                               # where plain reversal puts the real samples
+
+
+_REVERSE_MODES = ("reverse", "grain_reverse (keeps note attacks)")
 
 
 class AudioReverserMEC:
@@ -249,34 +430,80 @@ class AudioReverserMEC:
                 "audio": ("AUDIO", {"tooltip": "Standard ComfyUI audio "
                                     "({'waveform': [B,C,S], 'sample_rate': int})."}),
             },
+            # L9.173 (A25 spec 79): appended, optional; the defaults reverse the whole clip exactly as before
+            "optional": {
+                "start_seconds": ("FLOAT", {"default": 0.0, "min": 0.0, "max": 86400.0, "step": 0.01,
+                    "tooltip": "Reverse only from this time on (seconds); audio before it plays unchanged. "
+                               "0 with end_seconds -1 = the whole clip (as before)."}),
+                "end_seconds": ("FLOAT", {"default": -1.0, "min": -1.0, "max": 86400.0, "step": 0.01,
+                    "tooltip": "Reverse only up to this time (seconds); audio after it plays unchanged. -1 = the "
+                               "end of the clip. The clip keeps its length, and time_map lists the reversed and the "
+                               "untouched ranges as segments."}),
+                "reverse_mode": (list(_REVERSE_MODES), {"default": _REVERSE_MODES[0],
+                    "tooltip": "reverse = every sample backwards (as before; notes swell instead of decaying). "
+                               "grain_reverse = the order of short grains runs backwards while each grain plays "
+                               "forwards, so notes keep their pitch and attack; only the order of events is "
+                               "reversed."}),
+                "grain_ms": ("FLOAT", {"default": 80.0, "min": 10.0, "max": 1000.0, "step": 1.0,
+                    "tooltip": "grain_reverse only: grain length in milliseconds (50 % overlap). Shorter = finer "
+                               "time order, longer = smoother sound. A range shorter than two grains is reversed "
+                               "plainly."}),
+            },
         }
 
     RETURN_TYPES = ("AUDIO", "TIMEMAP")
     RETURN_NAMES = ("audio", "time_map")
     OUTPUT_TOOLTIPS = ("The audio played backwards (same sample rate and channels).",
-                       "Maps original to reversed timestamps (t_new = duration - t_orig) for syncing video.")
+                       "Maps original to reversed timestamps (t_new = duration - t_orig) for syncing video; with a "
+                       "time range it also lists each range as a segment.")
     FUNCTION = "execute"
     CATEGORY = "MEC/Audio"
     DESCRIPTION = ("Reverses the audio waveform (torch.flip on the sample dim), "
                    "preserving sample rate and channels. TIMEMAP maps original to "
-                   "reversed timestamps (t_new = duration - t_orig).")
+                   "reversed timestamps (t_new = duration - t_orig). Optional: reverse only a time range, or reverse "
+                   "the grain order so notes keep their attacks.")
 
-    def execute(self, audio):
+    def execute(self, audio, start_seconds=0.0, end_seconds=-1.0, reverse_mode=_REVERSE_MODES[0], grain_ms=80.0):
         if not (isinstance(audio, dict) and "waveform" in audio):
             raise ValueError("AudioReverser: expected AUDIO dict with a 'waveform' tensor.")
         w = audio["waveform"]
         sr = int(audio.get("sample_rate", 44100))
         if not torch.is_tensor(w):
             raise ValueError("AudioReverser: 'waveform' is not a tensor.")
-        rev = torch.flip(w, dims=[-1])
+        if reverse_mode not in _REVERSE_MODES:
+            raise ValueError(f"AudioReverser: reverse_mode must be one of {list(_REVERSE_MODES)}, got {reverse_mode!r}.")
         n = int(w.shape[-1])
         dur = n / float(sr) if sr else 0.0
+        s0 = 0 if float(start_seconds) <= 0 else int(round(float(start_seconds) * sr))
+        s1 = n if float(end_seconds) < 0 else min(n, int(round(float(end_seconds) * sr)))
+        whole = s0 == 0 and s1 == n
+        if not whole and s1 - s0 < 2:
+            raise ValueError(f"AudioReverser: the range {float(start_seconds):g} s to {float(end_seconds):g} s holds no "
+                             f"audio (the clip is {dur:.3f} s long; end_seconds must be after start_seconds, or -1).")
+        grain = reverse_mode != _REVERSE_MODES[0]
+        seg = w[..., s0:s1]
+        seg_rev = _grain_reverse(seg, sr, grain_ms) if grain else torch.flip(seg, dims=[-1])
+        rev = seg_rev if whole else torch.cat([w[..., :s0], seg_rev, w[..., s1:]], dim=-1)
         out = dict(audio)
         out["waveform"] = rev
         out["sample_rate"] = sr
         tm = {"kind": "audio_reverse", "sample_rate": sr, "num_samples": n,
               "duration_s": dur, "formula": "t_new = duration_s - t_orig",
               "map_endpoints": [[0.0, dur], [dur, 0.0]]}
+        if not whole:                                   # L9.173: piecewise map (the old keys stay, per range)
+            a, b = s0 / float(sr), s1 / float(sr)
+            segs = []
+            if s0 > 0:
+                segs.append({"src": [0.0, a], "dst": [0.0, a], "reversed": False})
+            segs.append({"src": [a, b], "dst": [b, a], "reversed": True})
+            if s1 < n:
+                segs.append({"src": [b, dur], "dst": [b, dur], "reversed": False})
+            tm.update({"formula": "inside [range_start_s, range_end_s]: t_new = range_start_s + range_end_s - t_orig;"
+                                  " elsewhere t_new = t_orig",
+                       "range_start_s": a, "range_end_s": b, "segments": segs, "map_endpoints": [[a, b], [b, a]]})
+        if grain:
+            tm.update({"reverse_mode": "grain_reverse", "grain_ms": float(grain_ms),
+                       "note": "grain order reversed, each grain plays forwards: the map holds to +/- grain_ms / 2"})
         return (out, tm)
 
 
