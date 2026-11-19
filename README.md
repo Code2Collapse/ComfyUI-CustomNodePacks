@@ -265,7 +265,7 @@ Every node's parameters, modes, and outputs are documented in depth in the `docs
 
 ## Nodes
 
-CustomNodePacks registers **103 nodes** (counts per family and the startup line: [NODE_REFERENCE.md](NODE_REFERENCE.md)). Every node's parameters, defaults and tooltips are in [NODE_REFERENCE.md](NODE_REFERENCE.md), generated from the code, so it cannot drift. This list is generated from the same registration (the Magnific sign-in nodes are skipped when ComfyUI-OmniScale is installed, which replaces them).
+CustomNodePacks registers **101 nodes** (86 when ComfyUI-OmniScale is installed: its nodes replace the 15 Magnific sign-in nodes, which then stand down). Every node's parameters, defaults and tooltips are in [NODE_REFERENCE.md](NODE_REFERENCE.md), generated from the code, so it cannot drift. This list is generated from the same registration (`tools/c2c_readme_nodes.py` in the C2C workspace).
 
 ### 🐺 C2C/🧰 Core/AI Image
 
@@ -283,7 +283,7 @@ CustomNodePacks registers **103 nodes** (counts per family and the startup line:
 
 | Node | id | What it does |
 |---|---|---|
-| VAE Decode (C2C) | [`C2CVAEQualityDecode`](NODE_REFERENCE.md#c2cvaequalitydecode) | VAE decode with optional fp32 (<=0.17 dB measured gain), spatial-only tiling for Wan video, optional unclamped output for HDR chains, optional ACES tone mapping, and an optional clean step that measures and corrects colo... |
+| VAE Decode (C2C) | [`C2CVAEQualityDecode`](NODE_REFERENCE.md#c2cvaequalitydecode) | VAE decode with optional fp32 (<=0.17 dB measured gain), spatial-only tiling for Wan video, optional unclamped output for HDR chains, optional ACES tone mapping, and an optional clean step that measures and corrects colour cast, oversaturation and decode speckle (also for an already-decoded image). |
 
 ### 🐺 C2C/🧰 Core/Control
 
@@ -302,7 +302,7 @@ CustomNodePacks registers **103 nodes** (counts per family and the startup line:
 
 | Node | id | What it does |
 |---|---|---|
-| C2C GPU Inventory | [`C2CGPUInventory`](NODE_REFERENCE.md#c2cgpuinventory) | Lists the GPUs (architecture Turing to Blackwell, memory, BF16 / FP8 / FP4 support, whether this torch build has kernels for them), how they are linked (P2P, NVLink), Grace / aarch64 hosts, whether NCCL / gloo really wor... |
+| C2C GPU Inventory | [`C2CGPUInventory`](NODE_REFERENCE.md#c2cgpuinventory) | Lists the GPUs (architecture Turing to Blackwell, memory, BF16 / FP8 / FP4 support, whether this torch build has kernels for them), how they are linked (P2P, NVLink), Grace / aarch64 hosts, whether NCCL / gloo really work here, and which multi-GPU modes this box can run. |
 | C2C Multi-GPU Split | [`C2CSequenceParallel`](NODE_REFERENCE.md#c2csequenceparallel) | Splits every model call over the GPUs of this machine. |
 
 ### 🐺 C2C/🧰 Core/Face
@@ -329,7 +329,7 @@ CustomNodePacks registers **103 nodes** (counts per family and the startup line:
 | Number Lerp (C2C) | [`NumberLerpMEC`](NODE_REFERENCE.md#numberlerpmec) | Linear / smoothstep / cosine interpolation between two values. |
 | Probe (C2C) | [`ImageStatsProbeMEC`](NODE_REFERENCE.md#imagestatsprobemec) | Pass-through probe for debugging: wire an image, a mask and/or a latent and read their statistics - black or blown-out frames, how much of each frame a mask covers, NaN / Inf or saturated latents. |
 | Seed List Generator (C2C) | [`SeedListMEC`](NODE_REFERENCE.md#seedlistmec) | Generate N deterministic seeds from a base seed. |
-| Size (C2C) | [`AspectPresetMEC`](NODE_REFERENCE.md#aspectpresetmec) | Width and height for a render: a common aspect ratio scaled to a long edge (Wan 480p / 720p presets give Wan's native sizes), or your own width x height - snapped to a multiple of N, because Wan, Flux and SDXL need sizes... |
+| Size (C2C) | [`AspectPresetMEC`](NODE_REFERENCE.md#aspectpresetmec) | Width and height for a render: a common aspect ratio scaled to a long edge (Wan 480p / 720p presets give Wan's native sizes), or your own width x height - snapped to a multiple of N, because Wan, Flux and SDXL need sizes divisible by 8 / 16 / 64. |
 | Text Template (C2C) | [`TextTemplateMEC`](NODE_REFERENCE.md#texttemplatemec) | Substitute {a}{b}{c}{d} placeholders in a template string. |
 
 ### 🐺 C2C/🧰 Core/Inpaint
@@ -337,7 +337,7 @@ CustomNodePacks registers **103 nodes** (counts per family and the startup line:
 | Node | id | What it does |
 |---|---|---|
 | Inpaint Crop Pro | [`InpaintCropProMEC`](NODE_REFERENCE.md#inpaintcroppromec) | Crop around mask for inpainting (lquesada API + Wan 2.2 Animate aware). |
-| Inpaint Stitch Pro | [`InpaintStitchProMEC`](NODE_REFERENCE.md#inpaintstitchpromec) | Stitch the inpainted crop back into the original (lquesada-compatible) with blend overrides + color match; stitch_mode 'paste back', 'smart' (for a smart aspect crop) or 'context blend' (colour correction and lightness r... |
+| Inpaint Stitch Pro | [`InpaintStitchProMEC`](NODE_REFERENCE.md#inpaintstitchpromec) | Stitch the inpainted crop back into the original (lquesada-compatible) with blend overrides + color match; stitch_mode 'paste back', 'smart' (for a smart aspect crop) or 'context blend' (colour correction and lightness rescue over the original, no stitcher). |
 | ProPainter — Temporal / Remove / Stitch / Refine / Flow | [`ProPainterMEC`](NODE_REFERENCE.md#propaintermec) | Unified ProPainter node. |
 
 ### 🐺 C2C/🧰 Core/Layer Effects
@@ -384,7 +384,7 @@ CustomNodePacks registers **103 nodes** (counts per family and the startup line:
 |---|---|---|
 | Image Mask Editor (C2C) | [`ImageMaskEditorC2C`](NODE_REFERENCE.md#imagemaskeditorc2c) | Paint a mask over the image that actually reaches this node. |
 | Mask Placement — Prompt/Ref → Place → Track | [`MaskPlacementMEC`](NODE_REFERENCE.md#maskplacementmec) | Universal mask placement: source an alpha (wire a mask, or give a text prompt + SAM model and it segments the object for you), place it with a draggable 4-corner perspective quad, and propagate across the video. |
-| Mask Tools (C2C) | [`MaskToolsMEC`](NODE_REFERENCE.md#masktoolsmec) | Keyers and matte operations in one node: colour, luma and difference keys; grade (gain, gamma, clamp, invert); grow or shrink each side (left / right / up / down) with a feather; combine two mattes; gradient; grain; moti... |
+| Mask Tools (C2C) | [`MaskToolsMEC`](NODE_REFERENCE.md#masktoolsmec) | Keyers and matte operations in one node: colour, luma and difference keys; grade (gain, gamma, clamp, invert, black / white point, lift, offset - as Nuke Grade); grow or shrink each side (left / right / up / down) with a feather; combine two mattes; gradient; grain; motion blur; edge spread; channel |
 
 ### 🐺 C2C/🧰 Core/Model Analysis
 
@@ -455,14 +455,14 @@ CustomNodePacks registers **103 nodes** (counts per family and the startup line:
 |---|---|---|
 | LocateAnything Grounding (MEC) | [`LocateAnythingGroundingMEC`](NODE_REFERENCE.md#locateanythinggroundingmec) | Find things in an image by describing them in words - 'the person on the left', 'red car', 'coffee cup' - and get back bounding boxes. |
 | LocateAnything → SAM Prompt (MEC) | [`LocateAnythingToSAMMEC`](NODE_REFERENCE.md#locateanythingtosammec) | Turn bounding boxes into filled rectangles a SAM node can take as box prompts. |
+| Segment (C2C) | [`SegmentC2C`](NODE_REFERENCE.md#segmentc2c) | Find objects by words, clicks or boxes with ComfyUI's own SAM 3 / 3.1 and get one mask per object plus their union and boxes. |
 | Semantic Segment — Face / Clothes Parsing | [`SemanticSegmentMEC`](NODE_REFERENCE.md#semanticsegmentmec) | Semantic face / clothes parsing using SegFormer. |
-| Segment (C2C) | [`SegmentC2C`](NODE_REFERENCE.md#segmentc2c) | Find objects by words, clicks or boxes with ComfyUI's own SAM 3 / 3.1: one mask per object, their union and boxes (first slice of the unified segmentation node). |
 
 ### 🐺 C2C/🧰 Core/Stabilization
 
 | Node | id | What it does |
 |---|---|---|
-| Video Stabilizer | [`VideoStabilizerMEC`](NODE_REFERENCE.md#videostabilizermec) | Video stabilizer: classic feature tracking, RAFT optical flow or OpenCV dense flow, with presets. |
+| Video Stabilizer | [`VideoStabilizerMEC`](NODE_REFERENCE.md#videostabilizermec) | Classic feature tracking, RAFT optical flow or OpenCV dense flow, with presets. |
 
 ### 🐺 C2C/🧰 Core/Temporal
 
@@ -519,11 +519,11 @@ CustomNodePacks registers **103 nodes** (counts per family and the startup line:
 | Node | id | What it does |
 |---|---|---|
 | AV Handles — Add / Trim | [`AVHandlesMEC`](NODE_REFERENCE.md#avhandlesmec) | Add repeated frames at the head (or tail) to stabilise a video model, then trim exactly those back off afterwards — without retyping the number. |
-| Load Images Path (C2C) | [`LoadImagesPathC2C`](NODE_REFERENCE.md#loadimagespathc2c) |  |
-| Load Video (C2C) | [`LoadVideoC2C`](NODE_REFERENCE.md#loadvideoc2c) |  |
+| Load Images Path (C2C) | [`LoadImagesPathC2C`](NODE_REFERENCE.md#loadimagespathc2c) | Load a folder of numbered images as frames, in name order, with a cap, a skip and every-Nth selection. |
+| Load Video (C2C) | [`LoadVideoC2C`](NODE_REFERENCE.md#loadvideoc2c) | Load a video, an image sequence or an EXR sequence as frames - streamed, not decoded all at once - with VHS-style frame rate, size, cap, skip and every-Nth controls, audio, alpha as a mask, and a frame map back to the source frame numbers. |
 | Mask Track — Motion/Propagate/Anchor/Consistency/Stabilize | [`MaskTrackerMEC`](NODE_REFERENCE.md#masktrackermec) | Unified video-mask tracker. |
 | Save Video (C2C) | [`SaveVideoC2C`](NODE_REFERENCE.md#savevideoc2c) | Save an IMAGE batch as H.264/H.265/ProRes/DNxHR/FFV1/WebM/GIF/WebP or 16-bit PNG / EXR sequences. |
-| Video Info (C2C) | [`VideoInfoC2C`](NODE_REFERENCE.md#videoinfoc2c) |  |
+| Video Info (C2C) | [`VideoInfoC2C`](NODE_REFERENCE.md#videoinfoc2c) | Read a loader's video_info as numbers: the source file's frame rate, frame count, duration (s) and size, and the same for what was actually loaded (after skipping, caps and resizing). |
 
 ### 🐺 C2C/🧰 Core/Viewer helpers
 
