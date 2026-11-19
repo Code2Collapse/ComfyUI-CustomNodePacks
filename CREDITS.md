@@ -71,6 +71,14 @@ size snapping between a minimum and a maximum side, the three no-mask modes, Box
 match. Since L7.65 P08 it is Inpaint Crop Pro's `smart aspect` mode and Inpaint Stitch Pro's `smart` mode. Upstream
 says it was inspired by lquesada's ComfyUI-Inpaint-CropAndStitch (GPL-3.0); nothing was taken from that code here.
 
+### ComfyUI-AusBoss — ausboss (MIT)
+<https://github.com/ausboss/ComfyUI-AusBoss>
+
+Save Video (C2C)'s `pingpong` loop: `pingpong_frames` in `nodes/c2c_video/save_delivery.py` is ported from
+`nodes/_video_save_helpers.py` (A25 / L9.171). The rest of that module is ours.
+
+---
+
 ### comfyui-mcp — artokun
 <https://github.com/artokun/comfyui-mcp>
 
