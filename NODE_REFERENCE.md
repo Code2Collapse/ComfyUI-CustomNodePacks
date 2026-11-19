@@ -3338,6 +3338,7 @@ Segment (C2C): find objects by words, clicks or boxes with ComfyUI's own SAM 3 /
 |---|---|---|---|
 | `video` | choice: `track whole clip`, `per frame` | default `"track whole clip"` | A clip: find the objects on seed_frame and follow them through every frame (forward and backward, one tracking state, objects keep their order), or segment each frame on its own. |
 | `seed_frame` | `INT` | default `0`, range 0…100000 | The frame the objects are found on before tracking (pick a frame where they are clearly visible). |
+| `refine` | `BOOLEAN` | default `False` | EXPERIMENTAL: refine each object's mask once more with SAM, from prompts mined out of the mask itself (SAMRefiner, ICLR 2025). Off by default until it is measured better on your kind of shot; info reports what each pass changed. |
 
 **Outputs**
 

@@ -75,6 +75,12 @@ def _to_hw_stack(t, H: int, W: int) -> np.ndarray:
     return np.stack([_to_hw(t[n].numpy(), H, W) for n in range(t.shape[0])])
 
 
+def _refine(core, frame_hwc: np.ndarray, mask: np.ndarray):
+    from .segment_refine import refine as _samrefine
+    out, log = _samrefine(core, frame_hwc, mask)
+    return (out > 0.5).astype(np.float32), log
+
+
 def _bbox_of(m: np.ndarray) -> List[int]:
     ys, xs = np.nonzero(m > 0.5)
     if not len(xs):
@@ -133,10 +139,17 @@ class SegmentC2C:
                 "seed_frame": ("INT", {"default": 0, "min": 0, "max": 100000,
                                        "tooltip": "The frame the objects are found on before tracking (pick a frame "
                                                   "where they are clearly visible)."}),
+                # slice 3 (appended): SAMRefiner-style refinement, opt-in until measured better
+                "refine": ("BOOLEAN", {"default": False,
+                                       "tooltip": "EXPERIMENTAL: refine each object's mask once more with SAM, from "
+                                                  "prompts mined out of the mask itself (SAMRefiner, ICLR 2025). "
+                                                  "Off by default until it is measured better on your kind of shot; "
+                                                  "info reports what each pass changed."}),
             },
         }
 
-    def execute(self, image, model, target, prompt, picks, max_objects, video="track whole clip", seed_frame=0):
+    def execute(self, image, model, target, prompt, picks, max_objects, video="track whole clip", seed_frame=0,
+                refine=False):
         from .c2c_viewer.detect import get_detector, resolve_model
         if not isinstance(image, torch.Tensor) or image.ndim != 4:
             raise ValueError("Segment (C2C) expects an IMAGE tensor [B,H,W,C].")
@@ -166,7 +179,16 @@ class SegmentC2C:
             objs = sorted(objs, key=lambda o: -float(o.get("score", 0.0)))[: int(max_objects)]
             for o in objs:
                 o["mask"] = _to_hw(o["mask"], H, W)
+                if refine and can_refine:
+                    o["mask"], o["refine"] = _refine(det, frames[b], o["mask"])
+                    refine_log.append({"frame": b, "label": o.get("label", ""), **o["refine"]})
             return objs
+
+        can_refine = callable(getattr(det, "_prepare", None)) and hasattr(det, "SIDE")
+        refine_log: List[Dict[str, Any]] = []
+        if refine and not can_refine:
+            notes.append("refine needs ComfyUI's own SAM 3 (core 0.39+); this model path cannot refine, so it was "
+                         "skipped.")
 
         want_track = B > 1 and str(video) == "track whole clip"
         tracked = False
@@ -228,7 +250,8 @@ class SegmentC2C:
                  else torch.zeros((1, H, W), dtype=torch.float32))
         info = {"model": tag, "target": target, "prompt": text, "clicks": len(pos), "negative_clicks": len(neg),
                 "boxes": len(boxes), "frames": B, "tracked": tracked, "objects_first_frame": len(first),
-                "per_frame": per_frame, "edge_stability": edge, "seconds": round(time.time() - t0, 3), "notes": notes}
+                "per_frame": per_frame, "edge_stability": edge, "refine": refine_log if refine else None,
+                "seconds": round(time.time() - t0, 3), "notes": notes}
         return (torch.from_numpy(union), masks, [o["box"] for o in first], json.dumps(info))
 
 

@@ -98,6 +98,13 @@ a candidate set first.
 
 ---
 
+## Methods implemented from papers (no code copied)
+
+- **SAMRefiner** - Yuqi Lin et al., "SAMRefiner: Taming Segment Anything Model for Universal Mask Refinement",
+  ICLR 2025, arXiv 2502.06756. `nodes/segment_refine.py` (Segment (C2C)'s experimental `refine`) implements the
+  paper's distance-guided points and Gaussian-style mask prompt from the paper's text; the authors' repository
+  (github.com/linyq2117/SAMRefiner) was not used. The context-aware elastic box is not implemented (tight box).
+
 ## Not ported — reference only
 
 Read while building, no code taken:
