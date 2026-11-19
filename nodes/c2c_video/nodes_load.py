@@ -1224,6 +1224,9 @@ class LoadVideoC2C:
                        "(empty for other sources).", "The source's header / container metadata (JSON).")
     FUNCTION = "load_video"
     CATEGORY = CATEGORY
+    DESCRIPTION = ("Load a video, an image sequence or an EXR sequence as frames - streamed, not decoded all at once - "
+                   "with VHS-style frame rate, size, cap, skip and every-Nth controls, audio, alpha as a mask, and a "
+                   "frame map back to the source frame numbers. With a VAE connected it returns a LATENT.")
 
     def load_video(
         self,
@@ -1362,6 +1365,10 @@ class LoadImagesPathC2C:
 
     RETURN_TYPES = ("IMAGE", "MASK", "INT", "C2C_VIDEO")
     RETURN_NAMES = ("IMAGE", "MASK", "frame_count", "video")
+    DESCRIPTION = ("Load a folder of numbered images as frames, in name order, with a cap, a skip and every-Nth "
+                   "selection. The folder must be inside ComfyUI's input / output / media roots.")
+    OUTPUT_TOOLTIPS = ("The frames.", "1 - alpha of each frame when the images have alpha.", "Frames loaded.",
+                       "The lazy media handle for the C2C video nodes.")
     FUNCTION = "load_images"
     CATEGORY = CATEGORY
 
@@ -1410,6 +1417,12 @@ class VideoInfoC2C:
             },
         }
 
+    DESCRIPTION = ("Read a loader's video_info as numbers: the source file's frame rate, frame count, duration (s) and "
+                   "size, and the same for what was actually loaded (after skipping, caps and resizing).")
+    OUTPUT_TOOLTIPS = ("Source frame rate.", "Frames in the source.", "Source duration in seconds.",
+                       "Source width in pixels.", "Source height in pixels.", "Frame rate of the loaded frames.",
+                       "Frames loaded.", "Duration of the loaded frames in seconds.", "Loaded width in pixels.",
+                       "Loaded height in pixels.")
     RETURN_TYPES = ("FLOAT", "INT", "FLOAT", "INT", "INT", "FLOAT", "INT", "FLOAT", "INT", "INT")
     RETURN_NAMES = (
         "source_fps",

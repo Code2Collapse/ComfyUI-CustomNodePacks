@@ -366,7 +366,7 @@ class VideoStabilizerMEC:
     def INPUT_TYPES(cls):
         return {
             "required": {
-                "frames":         ("IMAGE",),
+                "frames":         ("IMAGE", {"tooltip": "The shaky clip (an IMAGE batch, one frame per image)."}),
                 "method":         (["auto", "classic", "raft_flow", "dense_flow"], {"default": "auto",
                                    "tooltip": "classic = feature tracking (fast; the most accurate in our "
                                               "tests). dense_flow = OpenCV DIS optical flow (no model). raft_flow = "
@@ -377,17 +377,36 @@ class VideoStabilizerMEC:
                                     "tripod_lock", "manual"],
                                    {"default": "handheld_light",
                                     "tooltip": "Preset overrides the manual widgets below unless set to 'manual'."}),
-                "frame_rate":     ("FLOAT", {"default": 16.0, "min": 1.0, "step": 0.1}),
-                "padding_color":  ("STRING", {"default": "127, 127, 127"}),
+                "frame_rate":     ("FLOAT", {"default": 16.0, "min": 1.0, "step": 0.1,
+                                   "tooltip": "The clip's frame rate. The smoothing window is set in seconds, so "
+                                              "this turns it into frames."}),
+                "padding_color":  ("STRING", {"default": "127, 127, 127",
+                                   "tooltip": "Colour of the borders the stabilisation uncovers, as 'R, G, B' "
+                                              "(0-255). padding_mask marks the same pixels."}),
                 # Manual overrides (used when preset == 'manual')
                 "framing_mode":   (["crop", "crop_and_pad", "expand"],
-                                   {"default": "crop_and_pad"}),
+                                   {"default": "crop_and_pad",
+                                    "tooltip": "manual preset: crop = zoom in so no border shows (keep_fov limits "
+                                               "how far); crop_and_pad = some zoom, the rest padded; expand = a "
+                                               "bigger canvas, nothing cropped."}),
                 "transform_mode": (["translation", "similarity", "perspective"],
-                                   {"default": "similarity"}),
-                "camera_lock":    ("BOOLEAN", {"default": False}),
-                "strength":       ("FLOAT", {"default": 0.7, "min": 0.0, "max": 1.0, "step": 0.05}),
-                "smooth":         ("FLOAT", {"default": 0.5, "min": 0.0, "max": 1.0, "step": 0.05}),
-                "keep_fov":       ("FLOAT", {"default": 0.6, "min": 0.0, "max": 1.0, "step": 0.05}),
+                                   {"default": "similarity",
+                                    "tooltip": "manual preset: which camera motion is removed - translation "
+                                               "(shift only), similarity (shift, rotate, zoom), perspective (adds "
+                                               "keystone; for heavy shake)."}),
+                "camera_lock":    ("BOOLEAN", {"default": False,
+                                               "tooltip": "manual preset: hold the camera where it is on the first "
+                                                          "frame (a locked-off tripod look) instead of smoothing "
+                                                          "its path."}),
+                "strength":       ("FLOAT", {"default": 0.7, "min": 0.0, "max": 1.0, "step": 0.05,
+                                             "tooltip": "manual preset: how much of the shake is removed (0 = none, "
+                                                        "1 = follow the smoothed path exactly)."}),
+                "smooth":         ("FLOAT", {"default": 0.5, "min": 0.0, "max": 1.0, "step": 0.05,
+                                             "tooltip": "manual preset: smoothing window, 0.19 s at 0 to 0.81 s at 1. "
+                                                        "Higher removes slower wobble too."}),
+                "keep_fov":       ("FLOAT", {"default": 0.6, "min": 0.0, "max": 1.0, "step": 0.05,
+                                             "tooltip": "manual preset, framing crop: the least of the picture to "
+                                                        "keep (1 = never zoom in, so frames come back unchanged)."}),
                 # RAFT-flow-only
                 "raft_iters":     ("INT", {"default": 12, "min": 4, "max": 32,
                                             "tooltip": "RAFT refinement iterations (num_flow_updates). Used only by "

@@ -87,6 +87,8 @@ class PARDesqueezeMEC:
     FUNCTION = "execute"
     RETURN_TYPES = ("IMAGE", "STRING")
     RETURN_NAMES = ("image", "par_info")
+    OUTPUT_TOOLTIPS = ("The frames with square pixels (wider with stretch_width, shorter with squash_height).",
+                       "What was done, as JSON - connect it to PAR Resqueeze to undo it exactly after processing.")
 
     @classmethod
     def IS_CHANGED(cls, **kwargs):
@@ -95,7 +97,7 @@ class PARDesqueezeMEC:
     @classmethod
     def INPUT_TYPES(cls):
         return with_layout({"required": {
-            "image": ("IMAGE", {}),
+            "image": ("IMAGE", {"tooltip": "Frames shot with non-square pixels (anamorphic lens, DV, HDV ...)."}),
             "par_preset": (tuple(PAR_PRESETS.keys()),
                            {"default": "ARRI 4448x3840→2:1 (1.7266)"}),
             "pixel_aspect": ("FLOAT", {"default": 1.7266, "min": 0.1, "max": 4.0,
@@ -104,7 +106,8 @@ class PARDesqueezeMEC:
             "method": (("stretch_width", "squash_height"), {"default": "stretch_width",
                        "tooltip": "stretch_width keeps every scanline (recommended); "
                                   "squash_height keeps the pixel count low."}),
-            "filter": (("bicubic", "bilinear", "nearest", "area"), {"default": "bicubic"}),
+            "filter": (("bicubic", "bilinear", "nearest", "area"), {"default": "bicubic",
+                       "tooltip": "How pixels are resampled: bicubic (sharp, default), bilinear (soft), nearest (no new values; for masks / IDs), area (best when shrinking)."}),
         }}, _DESQUEEZE_LAYOUT)
 
     def execute(self, image: torch.Tensor, par_preset: str, pixel_aspect: float,
@@ -139,6 +142,7 @@ class PARResqueezeMEC:
     FUNCTION = "execute"
     RETURN_TYPES = ("IMAGE", "STRING")
     RETURN_NAMES = ("image", "info")
+    OUTPUT_TOOLTIPS = ("The frames back at the plate's original width x height.", "What was restored, as JSON.")
 
     @classmethod
     def IS_CHANGED(cls, **kwargs):
@@ -147,9 +151,11 @@ class PARResqueezeMEC:
     @classmethod
     def INPUT_TYPES(cls):
         return {"required": {
-            "image": ("IMAGE", {}),
-            "par_info": ("STRING", {"default": "", "forceInput": True}),
-            "filter": (("bicubic", "bilinear", "nearest", "area"), {"default": "bicubic"}),
+            "image": ("IMAGE", {"tooltip": "The processed square-pixel frames from after PAR Desqueeze."}),
+            "par_info": ("STRING", {"default": "", "forceInput": True,
+                                    "tooltip": "PAR Desqueeze's par_info output: the original size and aspect."}),
+            "filter": (("bicubic", "bilinear", "nearest", "area"), {"default": "bicubic",
+                       "tooltip": "How pixels are resampled: bicubic (sharp, default), bilinear (soft), nearest (no new values; for masks / IDs), area (best when shrinking)."}),
         }}
 
     def execute(self, image: torch.Tensor, par_info: str, filter: str) -> Tuple[torch.Tensor, str]:

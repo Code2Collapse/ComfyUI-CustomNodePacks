@@ -49,21 +49,32 @@ class OpticalFlowMEC:
     FUNCTION = "revector"
     RETURN_TYPES = ("IMAGE", "IMAGE", "MASK")
     RETURN_NAMES = ("re_vectored", "flow_rgb", "consistency")
+    OUTPUT_TOOLTIPS = (
+        "frame_a moved along the flow toward frame_b (only inside the mask when one is wired).",
+        "The a -> b flow as a picture: red = horizontal, green = vertical (0.5 = still), blue = speed.",
+        "1 where the forward and backward flows agree (reliable), 0 where they do not (occlusion, errors).",
+    )
 
     @classmethod
     def INPUT_TYPES(cls):
         return {
             "required": {
-                "frame_a":          ("IMAGE",),
-                "frame_b":          ("IMAGE",),
-                "iters":            ("INT", {"default": 20, "min": 1, "max": 100}),
+                "frame_a":          ("IMAGE", {"tooltip": "The frame to move (one frame or a batch)."}),
+                "frame_b":          ("IMAGE", {"tooltip": "The frame to move it toward (same size and count)."}),
+                "iters":            ("INT", {"default": 20, "min": 1, "max": 100,
+                                             "tooltip": "RAFT refinement passes: more = finer flow, slower (the "
+                                                        "Lucas-Kanade fallback without RAFT uses its own 5)."}),
                 "consistency_thr":  ("FLOAT", {"default": 1.5, "min": 0.0, "max": 20.0,
-                                               "step": 0.05}),
+                                               "step": 0.05,
+                                               "tooltip": "Pixels: where the forward and backward flows disagree by "
+                                                          "more than this, 'consistency' is 0."}),
             },
             "optional": {
-                "mask":   ("MASK",),
+                "mask":   ("MASK", {"tooltip": "Only re-vector inside this mask; the rest of frame_a stays."}),
                 "scale":  ("FLOAT", {"default": 1.0, "min": -4.0, "max": 4.0,
-                                     "step": 0.05}),
+                                     "step": 0.05,
+                                     "tooltip": "Multiply the motion: 1 = all the way to frame_b, 0.5 = half way, "
+                                                "-1 = the opposite way."}),
             },
         }
 

@@ -108,15 +108,17 @@ class TilePlanMEC:
                 "image": ("IMAGE", {"tooltip": "Any frame at the size you will "
                                                "be tiling. Only its dimensions "
                                                "are read."}),
-                "mode": (["tile size", "tile count"], {"default": "tile size"}),
+                "mode": (["tile size", "tile count"], {"default": "tile size",
+                         "tooltip": "tile size: the largest equal tiles up to tile_size. tile count: a fixed rows x "
+                                    "cols grid."}),
                 "tile_size": ("INT", {
                     "default": 1024, "min": 128, "max": 8192, "step": 64,
                     "tooltip": "A MAXIMUM, not a target. Tiles are equal-sized "
                                "and must cover the frame exactly, so the size "
                                "chosen is the largest at or below this that "
                                "does. The report says what it picked."}),
-                "rows": ("INT", {"default": 2, "min": 1, "max": 16}),
-                "cols": ("INT", {"default": 2, "min": 1, "max": 16}),
+                "rows": ("INT", {"default": 2, "min": 1, "max": 16, "tooltip": "tile count: tiles down the frame."}),
+                "cols": ("INT", {"default": 2, "min": 1, "max": 16, "tooltip": "tile count: tiles across the frame."}),
                 "overlap": ("INT", {
                     "default": 96, "min": 0, "max": 512, "step": 8,
                     "tooltip": "How far neighbouring tiles share pixels. The "
@@ -134,6 +136,8 @@ class TilePlanMEC:
 
     RETURN_TYPES = ("TILE_PLAN", "STRING")
     RETURN_NAMES = ("tile_plan", "info")
+    OUTPUT_TOOLTIPS = ("The plan: connect it to Tile Split and Tile Merge (the same plan for both).",
+                       "What it chose: tile size, grid, overlap.")
     FUNCTION = "plan"
     CATEGORY = CATEGORY
     DESCRIPTION = ("Decide the tiles once for a whole clip. Reusing one plan "
@@ -163,12 +167,14 @@ class TileSplitMEC:
     def INPUT_TYPES(cls):
         return {
             "required": {
-                "image": ("IMAGE",),
-                "tile_plan": ("TILE_PLAN",),
+                "image": ("IMAGE", {"tooltip": "The clip to cut up (the size the plan was made for)."}),
+                "tile_plan": ("TILE_PLAN", {"tooltip": "Tile Plan's output."}),
             }
         }
 
     RETURN_TYPES = ("IMAGE", "INT", "STRING")
+    OUTPUT_TOOLTIPS = ("Every tile of every frame as one batch, frame by frame, tiles in plan order.",
+                       "How many tiles came out (frames x tiles per frame).", "What was split, as text.")
     RETURN_NAMES = ("tiles", "tile_count", "info")
     FUNCTION = "split"
     CATEGORY = CATEGORY
@@ -228,8 +234,9 @@ class TileMergeMEC:
     def INPUT_TYPES(cls):
         return {
             "required": {
-                "tiles": ("IMAGE",),
-                "tile_plan": ("TILE_PLAN",),
+                "tiles": ("IMAGE", {"tooltip": "The tiles after processing, in the order Tile Split gave them "
+                                               "(they may be enlarged)."}),
+                "tile_plan": ("TILE_PLAN", {"tooltip": "The same plan Tile Split used."}),
             },
             "optional": {
                 "scale": ("FLOAT", {
@@ -244,6 +251,7 @@ class TileMergeMEC:
 
     RETURN_TYPES = ("IMAGE", "STRING")
     RETURN_NAMES = ("image", "info")
+    OUTPUT_TOOLTIPS = ("The clip put back together, seams blended.", "What was merged and at what scale.")
     FUNCTION = "merge"
     CATEGORY = CATEGORY
     DESCRIPTION = "Blend the tiles back into one clip, in float32, with no seam."
@@ -345,6 +353,10 @@ class IdentityLockMEC:
 
     RETURN_TYPES = ("IMAGE", "MASK", "FLOAT", "STRING")
     RETURN_NAMES = ("image", "drift_map", "drift", "info")
+    OUTPUT_TOOLTIPS = ("The refined detail on the plate's structure.",
+                       "Where structure moved (bright = moved); all black unless want_drift_map is on.",
+                       "How much structure the refinement moved (lower = closer to the plate).",
+                       "Settings used and the drift numbers, as text.")
     FUNCTION = "lock"
     CATEGORY = CATEGORY
     DESCRIPTION = ("Refine every pixel without letting anything move. Keeps "
