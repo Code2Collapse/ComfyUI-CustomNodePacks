@@ -25,6 +25,7 @@ from . import _interrupt_check as _IC
 from ._is_changed_util import hash_args_and_kwargs
 
 import gc
+import json
 import torch
 import torch.nn.functional as F
 
@@ -830,6 +831,175 @@ def _suggest_method(
 
 
 # ══════════════════════════════════════════════════════════════════════
+#  L9.174 (A25): temporal failure timeline + corrective-action preview
+# ══════════════════════════════════════════════════════════════════════
+
+_CENTROID_JUMP = 0.1          # centroid moved more than 10 % of the image diagonal between frames
+
+
+def _frame_flags(i, vals, cov, dark_t, blur_t):
+    flags = []
+    if vals["brightness"] < dark_t:
+        flags.append("dark")
+    if vals["blur"] < blur_t:
+        flags.append("blurry")
+    if vals["boundary_contrast"] < _THRESHOLD_CONTRAST:
+        flags.append("low_boundary_contrast")
+    if vals["color_confusion"] < _THRESHOLD_COLOR:
+        flags.append("color_confusion")
+    if vals["bg_complexity"] > _THRESHOLD_BG:
+        flags.append("busy_background")
+    if cov < _THR_COVERAGE_LO:
+        flags.append("empty_mask")
+    elif cov > _THR_COVERAGE_HI:
+        flags.append("over_segmented")
+    return flags
+
+
+def _build_timeline(brightness, blur, boundary_contrast, color_confusion, bg_complexity, mq, mask_a,
+                    dark_t, blur_t, area_jump_threshold) -> dict:
+    """Per-frame metrics and problem flags (same thresholds as the explanation) plus area / centroid jumps."""
+    B, H, W = mask_a.shape
+    diag = (H * H + W * W) ** 0.5
+    binm = (mask_a > 0.5).to(torch.float32)
+    areas = binm.sum(dim=(1, 2))
+    ys = torch.arange(H, dtype=torch.float32, device=binm.device).view(1, H, 1)
+    xs = torch.arange(W, dtype=torch.float32, device=binm.device).view(1, 1, W)
+    cy = (binm * ys).sum(dim=(1, 2)) / areas.clamp_min(1.0)
+    cx = (binm * xs).sum(dim=(1, 2)) / areas.clamp_min(1.0)
+    frames, problem, counts = [], [], {}
+    for i in range(B):
+        vals = {"brightness": float(brightness[i]), "blur": float(blur[i]),
+                "boundary_contrast": float(boundary_contrast[i]), "color_confusion": float(color_confusion[i]),
+                "bg_complexity": float(bg_complexity[i])}
+        cov = float(mq["coverage"][i])
+        flags = _frame_flags(i, vals, cov, dark_t, blur_t)
+        area_change = centroid_shift = None
+        if i > 0:
+            prev, cur = float(areas[i - 1]), float(areas[i])
+            if prev > 0:
+                area_change = (cur - prev) / prev
+            elif cur > 0:
+                area_change = float("inf")
+            if prev > 0 and cur > 0:
+                centroid_shift = float(((cy[i] - cy[i - 1]) ** 2 + (cx[i] - cx[i - 1]) ** 2) ** 0.5) / diag
+        if area_change is not None and abs(area_change) > float(area_jump_threshold):
+            flags.append("area_jump")
+        if centroid_shift is not None and centroid_shift > _CENTROID_JUMP:
+            flags.append("centroid_jump")
+        for f in flags:
+            counts[f] = counts.get(f, 0) + 1
+        if flags:
+            problem.append(i)
+        frames.append({"frame": i, **{k: round(v, 5) for k, v in vals.items()}, "coverage": round(cov, 6),
+                       "area_change": (None if area_change is None else
+                                       ("inf" if area_change == float("inf") else round(area_change, 5))),
+                       "centroid_shift": None if centroid_shift is None else round(centroid_shift, 5),
+                       "flags": flags})
+    return {"frames": frames,
+            "summary": {"frames": B, "problem_frames": problem, "flag_counts": counts,
+                        "area_jump_threshold": float(area_jump_threshold), "centroid_jump_threshold": _CENTROID_JUMP}}
+
+
+# L9.174 (A25): inputs appended after the A28 audit (tests/test_a28_cnp_a_layout.py leaves them out of the A28 hash)
+APPENDED_AFTER_A28 = ("area_jump_threshold", "preview_fix", "fix_radius_px")
+
+FIX_OPS = ("none", "auto", "fill_holes", "remove_specks", "close_gaps", "smooth_edges", "dilate", "erode", "invert")
+_AUTO_FIX = (("over_segmented", "invert"), ("interior_holes", "fill_holes"), ("fragmented", "remove_specks"),
+             ("jagged_boundary", "smooth_edges"))
+
+
+def _dilate(m, r):
+    return F.max_pool2d(m.unsqueeze(1), 2 * r + 1, stride=1, padding=r).squeeze(1)
+
+
+def _erode(m, r):
+    return 1.0 - _dilate(1.0 - m, r)
+
+
+def _fill_holes_frame(b):
+    """b: HxW bool numpy -> holes filled (background not reachable from the border becomes mask)."""
+    import numpy as np
+    if HAS_CV2:
+        inv = (~b).astype("uint8")
+        h, w = inv.shape
+        ff = np.pad(inv, 1, constant_values=1)            # a background frame around: one flood reaches all exterior
+        cv2.floodFill(ff, np.zeros((h + 4, w + 4), dtype="uint8"), (0, 0), 2)
+        return b | (ff[1:-1, 1:-1] == 1)
+    try:
+        from scipy.ndimage import binary_fill_holes  # type: ignore
+        return binary_fill_holes(b)
+    except Exception:
+        t = torch.from_numpy(~b).float()
+        reach = torch.zeros_like(t)
+        reach[0, :], reach[-1, :], reach[:, 0], reach[:, -1] = t[0, :], t[-1, :], t[:, 0], t[:, -1]
+        for _ in range(t.shape[0] + t.shape[1]):
+            nxt = _dilate(reach.unsqueeze(0), 1).squeeze(0) * t
+            if torch.equal(nxt, reach):
+                break
+            reach = nxt
+        return b | ~(reach > 0).numpy()
+
+
+def _remove_specks_frame(b):
+    """Keep the largest component and every component >= 1 % of it. None when no labeller is available."""
+    import numpy as np
+    if HAS_CV2:
+        n, lab, stats, _ = cv2.connectedComponentsWithStats(b.astype("uint8"), connectivity=8)
+        sizes = stats[1:, cv2.CC_STAT_AREA] if n > 1 else np.zeros(0)
+    else:
+        try:
+            from scipy.ndimage import label as _label  # type: ignore
+            lab, n0 = _label(b, structure=np.ones((3, 3)))
+            n = n0 + 1
+            sizes = np.bincount(lab.ravel())[1:]
+        except Exception:
+            return None
+    if len(sizes) == 0:
+        return b
+    keep = [i + 1 for i, s in enumerate(sizes) if s >= 0.01 * sizes.max()]
+    return np.isin(lab, keep)
+
+
+def _apply_fix(mask, op, r):
+    """mask (B,H,W) float -> corrected copy. The input tensor is never modified."""
+    m = mask.clone().to(torch.float32)
+    if op == "invert":
+        return 1.0 - m
+    if op == "dilate":
+        return _dilate(m, r)
+    if op == "erode":
+        return _erode(m, r)
+    if op == "close_gaps":
+        return _erode(_dilate(m, r), r)
+    if op == "smooth_edges":
+        k = 2 * r + 1
+        x = torch.arange(k, dtype=torch.float32) - r
+        g = torch.exp(-(x ** 2) / (2 * max(r / 2.0, 0.5) ** 2))
+        g = (g / g.sum()).to(m.device)
+        y = F.conv2d(F.pad(m.unsqueeze(1), (r, r, 0, 0), mode="replicate"), g.view(1, 1, 1, k))
+        y = F.conv2d(F.pad(y, (0, 0, r, r), mode="replicate"), g.view(1, 1, k, 1)).squeeze(1)
+        return ((y - 0.5) * 2.0 + 0.5).clamp(0.0, 1.0)       # re-sharpened soft edge, smooth contour
+    if op in ("fill_holes", "remove_specks"):
+        out = []
+        for i in range(m.shape[0]):
+            b = (m[i] > 0.5).cpu().numpy()
+            f = _fill_holes_frame(b) if op == "fill_holes" else _remove_specks_frame(b)
+            if f is None:
+                raise RuntimeError("Mask Failure Explainer: remove_specks needs OpenCV or SciPy to label components; "
+                                   "neither is installed.")
+            t = torch.from_numpy(f.astype("float32")).to(m.device)
+            # keep soft values where the mask was kept; added pixels become 1, removed ones 0
+            out.append(torch.where((t > 0.5) & (m[i] > 0.5), m[i], t))
+        return torch.stack(out)
+    raise ValueError(f"Mask Failure Explainer: unknown preview_fix {op!r}; choose one of {', '.join(FIX_OPS)}")
+
+
+def _mq_means(mq: dict) -> dict:
+    return {k: round(float(v.float().mean()), 6) for k, v in mq.items()}
+
+
+# ══════════════════════════════════════════════════════════════════════
 #  Node class
 # ══════════════════════════════════════════════════════════════════════
 
@@ -867,16 +1037,38 @@ class MaskFailureExplainerMEC:
                     "default": 0.15, "min": 0.0, "max": 1.0, "step": 0.01,
                     "tooltip": "Mean brightness threshold below which the scene is considered dark.",
                 }),
+                # L9.174 (A25), appended: defaults = the behaviour of every saved workflow
+                "area_jump_threshold": ("FLOAT", {
+                    "default": 0.25, "min": 0.01, "max": 10.0, "step": 0.01,
+                    "tooltip": "Timeline: a frame whose mask area changes by more than this fraction of the "
+                               "previous frame's area is flagged 'area_jump' (0.25 = 25 %).",
+                }),
+                "preview_fix": (list(FIX_OPS), {
+                    "default": "none",
+                    "tooltip": "Corrective-action preview (non-destructive): apply one mask operation and return "
+                               "the result as corrected_mask with before/after mask metrics in fix_report. auto "
+                               "picks from the findings (holes -> fill_holes, fragments -> remove_specks, jagged "
+                               "-> smooth_edges, whole frame -> invert). none: corrected_mask is the analysed mask.",
+                }),
+                "fix_radius_px": ("INT", {
+                    "default": 3, "min": 1, "max": 64, "step": 1,
+                    "tooltip": "Radius in pixels for dilate / erode / close_gaps / smooth_edges.",
+                }),
             },
         }
 
-    RETURN_TYPES = ("STRING", "MASK", "FLOAT", "STRING")
-    RETURN_NAMES = ("explanation", "problem_regions_mask", "severity_score", "suggested_method")
+    RETURN_TYPES = ("STRING", "MASK", "FLOAT", "STRING", "STRING", "MASK", "STRING")
+    RETURN_NAMES = ("explanation", "problem_regions_mask", "severity_score", "suggested_method",
+                    "timeline_json", "corrected_mask", "fix_report")
     OUTPUT_TOOLTIPS = (
         "Human-readable diagnosis explaining likely failure causes.",
         "Heatmap mask highlighting regions most likely to be problematic.",
         "Overall severity score in [0, 100] (higher means more issues).",
         "Suggested masking method or refinement to try next.",
+        "Per-frame metrics and problem flags (dark, blurry, low boundary contrast, colour confusion, busy "
+        "background, empty / whole-frame mask, area and centroid jumps) plus the list of problem frames, as JSON.",
+        "The mask after the preview_fix operation (the analysed mask unchanged when preview_fix is none).",
+        "Which fix was applied and why, with the mask metrics before and after, as JSON.",
     )
     FUNCTION = "analyze"
     CATEGORY = "C2C/Diagnostics"
@@ -901,7 +1093,13 @@ class MaskFailureExplainerMEC:
         ring_width: int = 5,
         blur_threshold: float = 50.0,
         brightness_threshold: float = 0.15,
-    ) -> tuple[str, torch.Tensor, float, str]:
+        area_jump_threshold: float = 0.25,
+        preview_fix: str = "none",
+        fix_radius_px: int = 3,
+    ) -> tuple:
+        if preview_fix not in FIX_OPS:
+            raise ValueError(f"MaskFailureExplainerMEC: unknown preview_fix {preview_fix!r}; choose one of "
+                             f"{', '.join(FIX_OPS)}")
         if not isinstance(image, torch.Tensor) or image.ndim != 4:
             raise ValueError("MaskFailureExplainerMEC expects IMAGE tensor [B,H,W,C]")
         if not isinstance(mask, torch.Tensor) or mask.ndim not in (2, 3):
@@ -910,7 +1108,8 @@ class MaskFailureExplainerMEC:
         with torch.no_grad():
             with _PB.session("MaskFailure"):
                 return self._analyze_impl(image, mask, ring_width, blur_threshold,
-                                          brightness_threshold)
+                                          brightness_threshold, area_jump_threshold, preview_fix,
+                                          int(fix_radius_px))
 
     def _analyze_impl(
         self,
@@ -919,7 +1118,10 @@ class MaskFailureExplainerMEC:
         ring_width: int = 5,
         blur_threshold: float = 50.0,
         brightness_threshold: float = 0.15,
-    ) -> tuple[str, torch.Tensor, float, str]:
+        area_jump_threshold: float = 0.25,
+        preview_fix: str = "none",
+        fix_radius_px: int = 3,
+    ) -> tuple:
         try:
             B, H, W, C = image.shape
 
@@ -1006,7 +1208,35 @@ class MaskFailureExplainerMEC:
                 mq=mq, dark_t=dark_t, blur_t=blur_t,
             )
 
-            return (explanation, heatmap, severity, method)
+            # ── L9.174: temporal timeline + corrective-action preview ──
+            timeline = _build_timeline(brightness, blur, boundary_contrast, color_confusion, bg_complexity, mq,
+                                       mask_a, dark_t, blur_t, area_jump_threshold)
+            if preview_fix == "none":
+                corrected = mask.clone()
+                fix = {"requested": "none", "applied": "none", "reason": "no fix requested"}
+            else:
+                findings = [k for k, _ in _mask_quality_findings(mq)]
+                if preview_fix == "auto":
+                    op, reason = "none", ("no finding has an automatic mask fix" if findings else "no mask defect "
+                                          "found")
+                    for key, cand in _AUTO_FIX:
+                        if key in findings:
+                            op, reason = cand, f"finding '{key}'"
+                            break
+                else:
+                    op, reason = preview_fix, "requested"
+                corrected = mask.clone() if op == "none" else _apply_fix(mask, op, int(fix_radius_px))
+                fix = {"requested": preview_fix, "applied": op, "reason": reason, "findings": findings,
+                       "radius_px": int(fix_radius_px), "before": _mq_means(mq)}
+                if op != "none":
+                    corr_a = corrected if corrected.shape[-2:] == mask_a.shape[-2:] else F.interpolate(
+                        corrected.unsqueeze(1), size=tuple(mask_a.shape[-2:]), mode="bilinear",
+                        align_corners=False).squeeze(1)
+                    mq_after = _compute_mask_quality(image_a, corr_a.to(device=device, dtype=image_a.dtype))
+                    fix["after"] = _mq_means(mq_after)
+                    fix["findings_after"] = [k for k, _ in _mask_quality_findings(mq_after)]
+            return (explanation, heatmap, severity, method, json.dumps(timeline, indent=1),
+                    corrected.to(torch.float32), json.dumps(fix, indent=1))
 
         finally:
             gc.collect()

@@ -267,6 +267,7 @@ def patch_kijai(patcher, mask_fn: Callable) -> int:
         def _make_bound(impl_=impl, mfn_=mask_fn, ca_=cross_attn):
             def _bound(self_module, *args, **kwargs):
                 return impl_(self_module, mfn_, *args, **kwargs)
+            _bound._c2c_prompt_relay_patch = True          # L9.174: recognisable as ours (tag only)
             return types.MethodType(_bound, ca_)
 
         cross_attn.forward = _make_bound()
@@ -304,6 +305,88 @@ def restore_kijai(patcher) -> int:
             restored += 1
     log.info("Kijai restore path: %d blocks restored", restored)
     return restored
+
+
+def _is_ours(fwd) -> bool:
+    return bool(getattr(getattr(fwd, "__func__", fwd), "_c2c_prompt_relay_patch", False))
+
+
+def _is_class_forward(module) -> bool:
+    """True when module.forward is the class's own method (no instance-level patch at all)."""
+    if "forward" not in vars(module):
+        return True
+    f = vars(module)["forward"]
+    return getattr(f, "__func__", None) is getattr(type(module), "forward", None)
+
+
+def kijai_patch_state(patcher) -> dict:
+    """Read-only census of the Prompt Relay patch on a Kijai model."""
+    model = getattr(patcher, "model", patcher)
+    blocks = getattr(getattr(model, "diffusion_model", None), "blocks", None) or []
+    st = {"blocks": len(blocks), "cross_attn": 0, "marked": 0, "originals_saved": 0, "ours_active": 0,
+          "foreign": [], "unpatched_forward": 0}
+    for i, block in enumerate(blocks):
+        ca = getattr(block, "cross_attn", None)
+        if ca is None:
+            continue
+        st["cross_attn"] += 1
+        st["marked"] += int(hasattr(ca, _KIJAI_MARKER_ATTR))
+        orig = getattr(ca, _KIJAI_ORIGINAL_ATTR, None)
+        st["originals_saved"] += int(orig is not None)
+        if _is_ours(ca.forward):
+            st["ours_active"] += 1
+        elif orig is not None and ca.forward != orig and not _is_class_forward(ca):
+            st["foreign"].append(i)
+        if _is_class_forward(ca) or (orig is not None and ca.forward == orig):
+            st["unpatched_forward"] += 1
+    return st
+
+
+def restore_kijai_checked(patcher, on_foreign: str = "restore anyway") -> dict:
+    """L9.174: restore with a before / after census. on_foreign: 'restore anyway' (= restore_kijai: put the saved
+    original back even over a later foreign patch), 'keep foreign patch' (leave a block whose current forward is not
+    ours, drop only our attrs), 'error' (raise before changing anything). A block that fails to restore does not stop
+    the others; it is reported."""
+    if on_foreign not in ("restore anyway", "keep foreign patch", "error"):
+        raise ValueError(f"on_foreign_patch must be restore anyway, keep foreign patch or error, got {on_foreign!r}")
+    before = kijai_patch_state(patcher)
+    if on_foreign == "error" and before["foreign"]:
+        raise RuntimeError(f"Prompt Relay Restore: blocks {before['foreign']} were patched by another node after "
+                           f"Prompt Relay; nothing was changed. Choose 'keep foreign patch' or 'restore anyway'.")
+    model = getattr(patcher, "model", patcher)
+    blocks = getattr(getattr(model, "diffusion_model", None), "blocks", None) or []
+    restored, kept, failed = 0, [], []
+    for i, block in enumerate(blocks):
+        ca = getattr(block, "cross_attn", None)
+        if ca is None:
+            continue
+        orig = getattr(ca, _KIJAI_ORIGINAL_ATTR, None)
+        if orig is None:
+            continue
+        try:
+            if on_foreign == "keep foreign patch" and i in before["foreign"]:
+                kept.append(i)
+            else:
+                ca.forward = orig
+                restored += 1
+            for attr in (_KIJAI_ORIGINAL_ATTR, _KIJAI_MARKER_ATTR):
+                if hasattr(ca, attr):
+                    delattr(ca, attr)
+        except Exception as exc:  # noqa: BLE001 - continue with the other blocks, report this one
+            failed.append({"block": i, "error": f"{type(exc).__name__}: {str(exc)[:160]}"})
+    after = kijai_patch_state(patcher)
+    if before["originals_saved"] == 0 and before["ours_active"] == 0:
+        verdict = "was not patched"
+    elif failed or after["ours_active"] or after["originals_saved"] or after["marked"]:
+        verdict = "restore incomplete"
+    elif kept:
+        verdict = "foreign patch kept"
+    else:
+        verdict = "clean"
+    log.info("Kijai restore (checked): %d restored, %d kept, %d failed -> %s", restored, len(kept), len(failed),
+             verdict)
+    return {"before": before, "restored": restored, "kept_foreign": kept, "failed": failed, "after": after,
+            "policy": on_foreign, "verdict": verdict}
 
 
 # ────────────────────────────────────────────────────────────────────────

@@ -55,6 +55,7 @@ from typing import Any, Dict, List, Optional, Tuple
 import torch
 
 from ._is_changed_util import hash_args_and_kwargs
+from . import _vae_bench as _VB
 try:                                                       # A28 layout declarations (display only)
     from ._layout_decl import with_layout
 except ImportError:  # loaded as a plain file (tests): the same module by path, never an absolute import
@@ -416,6 +417,79 @@ def _parse_recipe(recipe_json: str) -> Optional[Dict[str, Any]]:
     return None
 
 
+# ─────────────── L9.174 (A25): block-weight editor + validation benchmark ───────────────
+
+VALIDATION_MODES = ["off", "report", "block_on_regression"]
+
+
+def _parse_overrides(text: str, keys: List[str]) -> List[Tuple[str, "re.Pattern", float]]:
+    """block_weights_json -> [(pattern, compiled, weight)] in insertion order; every pattern must match a key."""
+    text = (text or "").strip()
+    if not text:
+        return []
+    try:
+        data = json.loads(text)
+    except json.JSONDecodeError as exc:
+        raise ValueError(f"VAE Merge: block_weights_json is not valid JSON ({exc}). Example: "
+                         '{"decoder\\.up\\.0\\.": 0.2, "^encoder\\.": 0.0}') from None
+    if not isinstance(data, dict):
+        raise ValueError("VAE Merge: block_weights_json must be a JSON object {\"<regex>\": weight}.")
+    out = []
+    for pat, w in data.items():
+        if isinstance(w, bool) or not isinstance(w, (int, float)) or not 0.0 <= float(w) <= 1.0:
+            raise ValueError(f"VAE Merge: block_weights_json weight for {pat!r} must be a number from 0 to 1, "
+                             f"got {w!r}.")
+        try:
+            rx = re.compile(pat)
+        except re.error as exc:
+            raise ValueError(f"VAE Merge: block_weights_json pattern {pat!r} is not a valid regex ({exc}).") from None
+        if not any(rx.search(k) for k in keys):
+            raise ValueError(f"VAE Merge: block_weights_json pattern {pat!r} matches no weight of this VAE "
+                             f"(keys look like {keys[:3]}).")
+        out.append((pat, rx, float(w)))
+    return out
+
+
+def _override_for(key: str, overrides) -> Optional[float]:
+    for _pat, rx, w in overrides:
+        if rx.search(key):
+            return w
+    return None
+
+
+def _weight_map(keys: List[str], alpha_of, overrides, similarity: Dict[str, float]):
+    """Effective alpha per slider group (+ override / other) next to the A-vs-B cosine per block, as an IMAGE."""
+    groups: Dict[str, List[float]] = {}
+    for k in keys:
+        g = "override" if overrides and _override_for(k, overrides) is not None else (_classify_key(k) or "other")
+        groups.setdefault(g, []).append(alpha_of(k))
+    order = [b for b in _BLOCKS if b in groups] + [g for g in ("override", "other") if g in groups]
+    alphas = [sum(groups[g]) / len(groups[g]) for g in order]
+    cos = [max(0.0, min(1.0, similarity[g])) if g in similarity else None for g in order]
+    return _VB.render_bars(order, {"alpha": alphas, "cosine A-B": cos}), dict(zip(order, alphas))
+
+
+def _validate_merge(vae_a, vae_b, merged_vae, merged: Dict[str, torch.Tensor], sd_a: Dict[str, torch.Tensor],
+                    max_drop: float) -> dict:
+    """Compatibility checks + the same reconstruction suite on A, B and the merge."""
+    nonfinite = [k for k, t in merged.items() if t.dtype.is_floating_point and not torch.isfinite(t).all()]
+    shape_bad = [k for k, t in merged.items() if k in sd_a and tuple(t.shape) != tuple(sd_a[k].shape)]
+    suites = {name: _VB.reconstruction_suite(v, (64,)) for name, v in
+              (("vae_a", vae_a), ("vae_b", vae_b), ("merged", merged_vae))}
+    pa, pb, pm = (suites[n]["mean_psnr_db"] for n in ("vae_a", "vae_b", "merged"))
+    if pa is None or pb is None or pm is None:
+        passed, reason = None, "the reconstruction suite could not run on every VAE (see failed_cases)"
+    else:
+        floor = min(pa, pb) - float(max_drop)
+        passed = bool(pm >= floor and not nonfinite and not shape_bad)
+        reason = (f"merged mean PSNR {pm} dB vs floor {round(floor, 3)} dB (min(A, B) - {float(max_drop)} dB)")
+    if nonfinite or shape_bad:
+        passed = False
+    return {"passed": passed, "reason": reason, "merged_mean_psnr_db": pm, "a_mean_psnr_db": pa,
+            "b_mean_psnr_db": pb, "non_finite_keys": nonfinite[:20], "shape_mismatch_keys": shape_bad[:20],
+            "suites": suites}
+
+
 # ──────────────────────────── ComfyUI node ─────────────────────────────
 
 
@@ -439,6 +513,10 @@ _VAE_MERGE_LAYOUT = {
     "device": {"c2c_section": "Compute"},
     "dry_run": {"c2c_section": "Compute"},
     "recipe_in": {"c2c_section": "Recipe"},
+    "block_weights_json": {"c2c_section": "Block overrides"},
+    "validation": {"c2c_section": "Validation"},
+    "validation_max_psnr_drop_db": {"c2c_section": "Validation",
+                                    "c2c_show_if": {"validation": ["block_on_regression"]}},
 }
 
 
@@ -520,16 +598,39 @@ class VAEMergeMEC:
                         "Optional recipe JSON from a previous run. When provided, overrides every "
                         "widget value above so the exact merge is reproduced."
                     )}),
+                # L9.174 (A25), appended: defaults = the behaviour of every saved workflow
+                "block_weights_json": ("STRING", {
+                    "default": "", "multiline": True,
+                    "tooltip": (
+                        "Fine-grained block weights: a JSON object {\"<regex>\": weight 0-1} matched against each "
+                        "weight's name (e.g. {\"decoder\\\\.up\\\\.0\\\\.\": 0.2}). Applied after the "
+                        "sliders / auto_alpha; the first matching pattern wins. Saved in the recipe. Empty = off."
+                    )}),
+                "validation": (VALIDATION_MODES, {
+                    "default": "off",
+                    "tooltip": (
+                        "Validation benchmark after the merge: finite / shape checks and the same five synthetic "
+                        "images at 64 px through A, B and the merged VAE (PSNR). report: result in validation_json "
+                        "and the recipe. block_on_regression: fail instead of returning a merge whose mean PSNR is "
+                        "more than validation_max_psnr_drop_db below the weaker input."
+                    )}),
+                "validation_max_psnr_drop_db": ("FLOAT", {
+                    "default": 3.0, "min": 0.0, "max": 60.0, "step": 0.1,
+                    "tooltip": "block_on_regression: allowed drop of the merged VAE's mean PSNR below min(A, B), "
+                               "in dB."}),
             },
         }, _VAE_MERGE_LAYOUT)
 
-    RETURN_TYPES = ("VAE", "STRING", "STRING", "STRING")
-    RETURN_NAMES = ("vae", "info", "recipe_json", "probe_report")
+    RETURN_TYPES = ("VAE", "STRING", "STRING", "STRING", "IMAGE", "STRING")
+    RETURN_NAMES = ("vae", "info", "recipe_json", "probe_report", "weight_map", "validation_json")
     OUTPUT_TOOLTIPS = (
         "Merged VAE (or vae_a clone when dry_run=True).",
         "Human-readable info string summarising mode, alpha, blocks, and timing.",
         "Reproducible recipe JSON; feed back into recipe_in to repeat the exact merge.",
         "Probe report with MSE/PSNR per VAE when reference_image is connected.",
+        "Chart: the effective merge weight (alpha) per block group, including block_weights_json overrides, next "
+        "to how similar A and B are in that block (cosine). Also on dry_run.",
+        "validation on: compatibility checks and reconstruction PSNR of A, B and the merge, as JSON. Empty when off.",
     )
     FUNCTION = "merge"
     CATEGORY = "C2C/VAE"
@@ -572,8 +673,13 @@ class VAEMergeMEC:
         vae_c: Optional[Any] = None,
         reference_image: Optional[torch.Tensor] = None,
         recipe_in: str = "",
-    ) -> Tuple[Any, str, str, str]:
+        block_weights_json: str = "",
+        validation: str = "off",
+        validation_max_psnr_drop_db: float = 3.0,
+    ) -> Tuple[Any, str, str, str, Any, str]:
 
+        if validation not in VALIDATION_MODES:
+            raise ValueError(f"VAE Merge: validation must be one of {VALIDATION_MODES}, got {validation!r}")
         if reference_image is not None and (
             not isinstance(reference_image, torch.Tensor)
             or reference_image.ndim != 4
@@ -589,7 +695,7 @@ class VAEMergeMEC:
                 vae_a, vae_b, merge_mode, alpha, beta, brightness, contrast,
                 use_blocks, auto_alpha, block_conv_in, block_conv_out, block_norm_out,
                 block_0, block_1, block_2, block_3, block_mid, device, dry_run,
-                vae_c, reference_image, recipe_in,
+                vae_c, reference_image, recipe_in, block_weights_json, validation, validation_max_psnr_drop_db,
             )
 
     def _merge_impl(
@@ -616,7 +722,10 @@ class VAEMergeMEC:
         vae_c: Optional[Any] = None,
         reference_image: Optional[torch.Tensor] = None,
         recipe_in: str = "",
-    ) -> Tuple[Any, str, str, str]:
+        block_weights_json: str = "",
+        validation: str = "off",
+        validation_max_psnr_drop_db: float = 3.0,
+    ) -> Tuple[Any, str, str, str, Any, str]:
 
         # ── Required-input validation (fail fast with clear message) ──
         if vae_a is None or vae_b is None:
@@ -650,6 +759,8 @@ class VAEMergeMEC:
             block_2 = float(bw.get("block_2", block_2))
             block_3 = float(bw.get("block_3", block_3))
             block_mid = float(bw.get("block_mid", block_mid))
+            if not (block_weights_json or "").strip() and loaded.get("block_weight_overrides"):
+                block_weights_json = json.dumps(loaded["block_weight_overrides"])
 
         # Resolve compute device
         if device == "auto":
@@ -724,6 +835,15 @@ class VAEMergeMEC:
                 auto_alpha=auto_alpha, auto_alpha_blocks=auto_alpha_blocks,
                 architecture=arch,
             )
+            # ── L9.174: fine-grained overrides + effective weight map ──
+            overrides = _parse_overrides(block_weights_json, list(sd_a.keys()))
+            if overrides:
+                recipe["block_weight_overrides"] = {p: w for p, _rx, w in overrides}
+
+            def _alpha_of(key, _bw=block_weights, _ub=use_blocks):
+                ov = _override_for(key, overrides) if overrides else None
+                return ov if ov is not None else _per_key_alpha(key, alpha, _ub, _bw)
+            weight_map, _group_alpha = _weight_map(list(sd_a.keys()), _alpha_of, overrides, similarity)
             recipe_str = json.dumps(recipe, indent=2)
 
             # ── Dry-run (feature C) ──
@@ -733,7 +853,8 @@ class VAEMergeMEC:
                     "dry_run=True: returned vae_a unchanged. "
                     "Use the block_similarity / recipe outputs to plan a real merge."
                 )
-                return (vae_a, json.dumps(info, indent=2), recipe_str, empty_probe)
+                return (vae_a, json.dumps(info, indent=2), recipe_str, empty_probe, weight_map,
+                        json.dumps({"skipped": "dry_run"}) if validation != "off" else "")
 
             # ── Pre-merge probe of A and B ──
             probe_image_chw = _build_probe_image(reference_image) if reference_image is not None else None
@@ -755,7 +876,7 @@ class VAEMergeMEC:
                 tb = sd_b[key]
                 ta_dev = ta.detach().to(compute)
                 tb_dev = tb.detach().to(compute)
-                a_eff = _per_key_alpha(key, alpha, use_blocks, block_weights)
+                a_eff = _alpha_of(key)
 
                 if merge_mode in REQUIRES_VAE_C:
                     assert sd_c is not None  # checked above
@@ -823,9 +944,23 @@ class VAEMergeMEC:
                         probe["merged"]["psnr_db"] - probe["vae_a"]["psnr_db"], 3
                     )
 
+            # ── L9.174: validation benchmark ──
+            validation_str = ""
+            if validation != "off":
+                val = _validate_merge(vae_a, vae_b, merged_vae, merged, sd_a, validation_max_psnr_drop_db)
+                if validation == "block_on_regression" and val["passed"] is not True:
+                    raise VAEMergeError(
+                        "VAE Merge (MEC): validation failed - " + val["reason"]
+                        + (f"; non-finite weights in {val['non_finite_keys'][:3]}" if val["non_finite_keys"] else "")
+                        + ". Nothing was returned; lower the merge weights or set validation to 'report'.")
+                recipe["validation"] = {k: val[k] for k in ("passed", "merged_mean_psnr_db", "a_mean_psnr_db",
+                                                            "b_mean_psnr_db")}
+                recipe_str = json.dumps(recipe, indent=2)
+                validation_str = json.dumps(val, indent=2)
+
             info["status"] = "ok"
             probe_str = json.dumps(probe, indent=2) if probe else empty_probe
-            return (merged_vae, json.dumps(info, indent=2), recipe_str, probe_str)
+            return (merged_vae, json.dumps(info, indent=2), recipe_str, probe_str, weight_map, validation_str)
 
         except (ValueError, VAEMergeError):
             raise

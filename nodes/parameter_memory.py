@@ -281,6 +281,146 @@ def _diff_runs(run_a: int, run_b: int) -> list[dict]:
         return []
 
 
+# ── L9.174 (A25): workflow branch snapshots + selective restore plan ───────────────────────────────────────────────
+# Named snapshots are COPIES of a run's deltas in their own table, so the MAX_RUNS pruning never removes them. The
+# table is created on first use only (the history modes never write to the database).
+SNAPSHOT_ACTIONS = ["none", "save", "compare", "restore_plan"]
+
+
+def _snap_db():
+    conn = sqlite3.connect(_DB_PATH, timeout=5.0)
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS param_snapshots (
+            name      TEXT PRIMARY KEY,
+            ts        TEXT NOT NULL,
+            run_id    INTEGER NOT NULL,
+            data_json TEXT NOT NULL
+        )
+    """)
+    conn.commit()
+    return conn
+
+
+def _run_nodes(run_id: int) -> dict:
+    """{node_id: {node_title, node_class, delta}} of one stored run."""
+    conn = _get_db()
+    try:
+        rows = conn.execute("SELECT node_id, node_title, node_class, delta_json FROM param_diffs WHERE run_id = ? "
+                            "ORDER BY id", (int(run_id),)).fetchall()
+    finally:
+        conn.close()
+    out = {}
+    for nid, title, cls, dj in rows:
+        try:
+            delta = _strip_secrets(json.loads(dj))
+        except (json.JSONDecodeError, TypeError):
+            continue
+        out.setdefault(str(nid), {"node_title": title, "node_class": cls, "delta": {}})["delta"].update(delta)
+    return out
+
+
+def _latest_run_id():
+    conn = _get_db()
+    try:
+        r = conn.execute("SELECT MAX(run_id) FROM param_diffs").fetchone()
+    finally:
+        conn.close()
+    return None if r is None or r[0] is None else int(r[0])
+
+
+def _snapshot_names() -> list:
+    conn = _snap_db()
+    try:
+        return [r[0] for r in conn.execute("SELECT name FROM param_snapshots ORDER BY name").fetchall()]
+    finally:
+        conn.close()
+
+
+def _load_snapshot(name: str) -> dict:
+    conn = _snap_db()
+    try:
+        r = conn.execute("SELECT ts, run_id, data_json FROM param_snapshots WHERE name = ?", (name,)).fetchone()
+    finally:
+        conn.close()
+    if r is None:
+        raise ValueError(f"Parameter History: no snapshot named {name!r}. Saved snapshots: "
+                         f"{', '.join(_snapshot_names()) or 'none'}.")
+    return {"name": name, "ts": r[0], "run_id": r[1], "nodes": json.loads(r[2])}
+
+
+def save_snapshot(name: str, run_id: int = 0) -> dict:
+    name = (name or "").strip()
+    if not name:
+        raise ValueError("Parameter History: snapshot_name is empty - give the snapshot a name.")
+    rid = int(run_id) if run_id and int(run_id) > 0 else _latest_run_id()
+    if rid is None:
+        raise ValueError("Parameter History: no runs recorded yet - run the workflow once, then save a snapshot.")
+    nodes = _run_nodes(rid)
+    if not nodes:
+        raise ValueError(f"Parameter History: run #{rid} has no stored parameters.")
+    conn = _snap_db()
+    try:
+        existed = conn.execute("SELECT 1 FROM param_snapshots WHERE name = ?", (name,)).fetchone() is not None
+        conn.execute("INSERT OR REPLACE INTO param_snapshots (name, ts, run_id, data_json) VALUES (?, ?, ?, ?)",
+                     (name, datetime.now().isoformat(sep=" ", timespec="seconds"), rid, json.dumps(nodes)))
+        conn.commit()
+    finally:
+        conn.close()
+    return {"action": "save", "name": name, "run_id": rid, "nodes": len(nodes),
+            "params": sum(len(n["delta"]) for n in nodes.values()), "overwritten": existed}
+
+
+def _resolve(name: str) -> tuple:
+    """A snapshot by name, or the latest run when the name is empty -> (label, nodes)."""
+    name = (name or "").strip()
+    if name:
+        snap = _load_snapshot(name)
+        return f"snapshot {name!r} (run #{snap['run_id']})", snap["nodes"]
+    rid = _latest_run_id()
+    if rid is None:
+        raise ValueError("Parameter History: no runs recorded yet.")
+    return f"latest run #{rid}", _run_nodes(rid)
+
+
+def compare_snapshots(name: str, compare_to: str = "") -> dict:
+    if not (name or "").strip():
+        raise ValueError("Parameter History: compare needs snapshot_name (compare_to empty = the latest run).")
+    la, na = _resolve(name)
+    lb, nb = _resolve(compare_to)
+    diffs = []
+    for nid in sorted(set(na) | set(nb)):
+        da, db_ = (na.get(nid) or {}).get("delta", {}), (nb.get(nid) or {}).get("delta", {})
+        info = na.get(nid) or nb.get(nid)
+        for param in sorted(set(da) | set(db_)):
+            if da.get(param) != db_.get(param):
+                diffs.append({"node_id": nid, "node_title": info["node_title"], "node_class": info["node_class"],
+                              "param_name": param, "run_a": da.get(param), "run_b": db_.get(param)})
+    return {"action": "compare", "a": la, "b": lb, "differences": diffs, "count": len(diffs)}
+
+
+def restore_plan(name: str, restore_filter: str) -> dict:
+    tokens = [t.strip() for t in (restore_filter or "").split(",") if t.strip()]
+    if not tokens:
+        raise ValueError("Parameter History: restore_plan needs restore_filter (node class / title / id, a "
+                         "parameter name or Class.param, comma-separated) - restoring everything is not selective.")
+    label, nodes = _resolve(name)
+    low = [t.lower() for t in tokens]
+    restore, matched, skipped = {}, 0, 0
+    for nid, n in nodes.items():
+        node_hit = any(t in (n["node_class"].lower(), (n["node_title"] or "").lower(), nid.lower()) for t in low)
+        for param, val in n["delta"].items():
+            hit = node_hit or any(t in (param.lower(), f"{n['node_class']}.{param}".lower()) for t in low)
+            if hit:
+                restore.setdefault(nid, {"node_class": n["node_class"], "node_title": n["node_title"],
+                                         "params": {}})["params"][param] = val
+                matched += 1
+            else:
+                skipped += 1
+    return {"action": "restore_plan", "source": label, "filter": tokens, "restore": restore,
+            "matched_params": matched, "skipped_params": skipped,
+            "note": "the exact values to set on those nodes; every other setting stays as it is"}
+
+
 # ══════════════════════════════════════════════════════════════════════
 #  ComfyUI Node: Parameter History Viewer
 # ══════════════════════════════════════════════════════════════════════
@@ -292,6 +432,9 @@ _HISTORY_LAYOUT = {
     "node_class_filter": {"c2c_show_if": {"mode": ["node_class_filter"]}},
     "run_a": {"c2c_show_if": {"mode": ["last_run_diff"]}},
     "run_b": {"c2c_show_if": {"mode": ["last_run_diff"]}},
+    "snapshot_name": {"c2c_show_if": {"snapshot_action": ["save", "compare", "restore_plan"]}},
+    "compare_to": {"c2c_show_if": {"snapshot_action": ["compare"]}},
+    "restore_filter": {"c2c_show_if": {"snapshot_action": ["restore_plan"]}},
 }
 
 
@@ -332,12 +475,36 @@ class ParameterHistoryMEC:
                     "default": 0, "min": 0,
                     "tooltip": "Second run number for diff mode (0 = auto-detect last two)",
                 }),
+                # L9.174 (A25), appended: "none" = the behaviour of every saved workflow
+                "snapshot_action": (SNAPSHOT_ACTIONS, {
+                    "default": "none",
+                    "tooltip": "Branch snapshots. save: store the parameters of run_b (0 = the latest run) under "
+                               "snapshot_name; snapshots are kept when old runs are pruned. compare: differences "
+                               "between snapshot_name and compare_to. restore_plan: only the parameters matching "
+                               "restore_filter from snapshot_name (empty = latest run). Result in snapshot_json.",
+                }),
+                "snapshot_name": ("STRING", {
+                    "default": "",
+                    "tooltip": "Name of the snapshot to save, compare or restore from (e.g. 'branch-A').",
+                }),
+                "compare_to": ("STRING", {
+                    "default": "",
+                    "tooltip": "compare: the second snapshot's name; empty = the latest run.",
+                }),
+                "restore_filter": ("STRING", {
+                    "default": "",
+                    "tooltip": "restore_plan: comma-separated node classes, node titles, node ids, parameter names "
+                               "or Class.param (e.g. 'KSampler, cfg'). Only matching parameters are listed; the "
+                               "output is the exact patch to apply, nothing else is touched.",
+                }),
             },
         }, _HISTORY_LAYOUT)
 
-    RETURN_TYPES = ("STRING",)
-    RETURN_NAMES = ("history_report",)
-    OUTPUT_TOOLTIPS = ("Human-readable parameter history report for the chosen mode.",)
+    RETURN_TYPES = ("STRING", "STRING")
+    RETURN_NAMES = ("history_report", "snapshot_json")
+    OUTPUT_TOOLTIPS = ("Human-readable parameter history report for the chosen mode.",
+                       "snapshot_action result as JSON: the saved snapshot, the differences, or the restore patch "
+                       "{node_id: {params}}. Empty when snapshot_action is none.")
     OUTPUT_NODE = True
     FUNCTION = "query"
     CATEGORY = "C2C/Utils"
@@ -347,7 +514,8 @@ class ParameterHistoryMEC:
     )
 
     @classmethod
-    def IS_CHANGED(cls, mode="all_history", last_n_runs=5, node_class_filter="", run_a=0, run_b=0, **_kw):
+    def IS_CHANGED(cls, mode="all_history", last_n_runs=5, node_class_filter="", run_a=0, run_b=0,
+                   snapshot_action="none", snapshot_name="", compare_to="", restore_filter="", **_kw):
         """L9.196: the report reads a database the front end keeps writing; without this a re-queue showed the cached,
         stale report. The database's mtime and size are the fingerprint (no read, O(1))."""
         try:
@@ -355,15 +523,29 @@ class ParameterHistoryMEC:
             db = f"{st.st_mtime_ns}:{st.st_size}"
         except OSError:
             db = "missing"
-        return f"{db}|{mode}|{last_n_runs}|{node_class_filter}|{run_a}|{run_b}"
+        base = f"{db}|{mode}|{last_n_runs}|{node_class_filter}|{run_a}|{run_b}"
+        if snapshot_action == "none":
+            return base                                         # the saved-workflow fingerprint, unchanged
+        return f"{base}|{snapshot_action}|{snapshot_name}|{compare_to}|{restore_filter}"
 
-    def query(self, mode, last_n_runs, node_class_filter="", run_a=0, run_b=0):
+    def query(self, mode, last_n_runs, node_class_filter="", run_a=0, run_b=0, snapshot_action="none",
+              snapshot_name="", compare_to="", restore_filter=""):
+        if snapshot_action not in SNAPSHOT_ACTIONS:
+            raise ValueError(f"Parameter History: snapshot_action must be one of {SNAPSHOT_ACTIONS}")
         if mode == "last_run_diff":
-            return self._diff_mode(run_a, run_b)
+            report = self._diff_mode(run_a, run_b)
         elif mode == "node_class_filter":
-            return self._filter_mode(node_class_filter, last_n_runs)
+            report = self._filter_mode(node_class_filter, last_n_runs)
         else:
-            return self._all_mode(last_n_runs)
+            report = self._all_mode(last_n_runs)
+        snap = ""
+        if snapshot_action == "save":
+            snap = json.dumps(save_snapshot(snapshot_name, run_b), indent=2, default=str)
+        elif snapshot_action == "compare":
+            snap = json.dumps(compare_snapshots(snapshot_name, compare_to), indent=2, default=str)
+        elif snapshot_action == "restore_plan":
+            snap = json.dumps(restore_plan(snapshot_name, restore_filter), indent=2, default=str)
+        return (report[0], snap)
 
     def _all_mode(self, last_n_runs):
         rows = _query_history(last_n_runs=last_n_runs)

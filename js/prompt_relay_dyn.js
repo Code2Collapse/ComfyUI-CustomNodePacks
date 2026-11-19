@@ -20,7 +20,9 @@ const NODE_NAME = "PromptRelayEncodeC2C";
 // Anything not listed is hidden. "global_prompt", "epsilon", "backend" and
 // "relay_options" are universal.
 const COMMON_INPUTS  = new Set(["relay_options"]);
-const COMMON_WIDGETS = new Set(["backend", "global_prompt", "epsilon"]);
+const COMMON_WIDGETS = new Set(["backend", "global_prompt", "epsilon", "role_sections"]);  // role_sections: L9.174
+// L9.174: the segment inspector output is filled by every backend.
+const COMMON_OUTPUTS = new Set(["segment_report"]);
 
 const BACKEND_INPUTS = {
     native: new Set(["model", "clip", "latent"]),
@@ -95,7 +97,7 @@ function applyBackend(node) {
     }
     if (Array.isArray(node.outputs)) {
         node.outputs.forEach((slot, idx) => {
-            setOutputVisible(node, idx, visOuts.has(slot.name));
+            setOutputVisible(node, idx, COMMON_OUTPUTS.has(slot.name) || visOuts.has(slot.name));
         });
     }
     if (Array.isArray(node.widgets)) {

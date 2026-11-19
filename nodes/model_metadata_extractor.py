@@ -248,6 +248,237 @@ def _extract_lineage(meta: dict) -> dict:
     return lineage
 
 
+# ── L9.174 (A25): checkpoint comparison + provenance / integrity report ────────────────────────────────────────────
+# Structure only: headers, zip directories and pickle OPCODES are read; nothing is unpickled or loaded.
+
+_DTYPE_BYTES = {"F64": 8, "F32": 4, "F16": 2, "BF16": 2, "I64": 8, "I32": 4, "I16": 2, "I8": 1, "U8": 1,
+                "U16": 2, "U32": 4, "U64": 8, "BOOL": 1, "F8_E4M3": 1, "F8_E5M2": 1, "F8_E8M0": 1}
+_HASH_CHUNK = 8 * 1024 * 1024
+_LIST_CAP = 200
+# GLOBAL references a torch checkpoint legitimately makes; anything else is reported (never imported).
+_SAFE_GLOBAL_PREFIXES = ("torch.", "collections.OrderedDict", "numpy.core.multiarray._reconstruct",
+                         "numpy._core.multiarray._reconstruct", "numpy.dtype", "numpy.ndarray", "_codecs.encode",
+                         "builtins.set", "builtins.frozenset", "builtins.slice", "__builtin__.set")
+
+
+def _read_safetensors_full(path: str):
+    """-> (header_len, {name: spec}, metadata). Raises ValueError on a malformed header."""
+    with open(path, "rb") as fh:
+        b = fh.read(8)
+        if len(b) < 8:
+            raise ValueError("Truncated safetensors header.")
+        hdr_len = struct.unpack("<Q", b)[0]
+        if hdr_len <= 0 or hdr_len > 100 * 1024 * 1024:
+            raise ValueError(f"Implausible safetensors header length: {hdr_len}")
+        hdr = fh.read(hdr_len)
+    if len(hdr) < hdr_len:
+        raise ValueError("Truncated safetensors header.")
+    parsed = json.loads(hdr.decode("utf-8"))
+    meta = parsed.pop("__metadata__", None) or {}
+    return hdr_len, parsed, meta
+
+
+def _structure(path: str) -> dict:
+    """Comparable structure of one model file: {'format', 'tensors': {name: (shape, dtype)} or 'members'}."""
+    if not path or not os.path.isfile(path):
+        raise FileNotFoundError(f"Model file not found: {path!r}")
+    ext = os.path.splitext(path)[1].lower()
+    if ext == ".safetensors":
+        _hl, parsed, _m = _read_safetensors_full(path)
+        return {"format": "safetensors",
+                "tensors": {k: (list(v.get("shape", [])), v.get("dtype", "?")) for k, v in parsed.items()}}
+    if zipfile.is_zipfile(path):
+        with zipfile.ZipFile(path, "r") as zf:
+            return {"format": "torch_zip", "members": {zi.filename.split("/", 1)[-1]: zi.file_size
+                                                       for zi in zf.infolist()}}
+    return {"format": "legacy_pickle"}
+
+
+def _capped(items):
+    items = list(items)
+    return {"count": len(items), "items": items[:_LIST_CAP]}
+
+
+def compare_models(path_a: str, path_b: str) -> dict:
+    """Tensor names / shapes / dtypes (safetensors) or archive members (torch zip) of two files, side by side."""
+    a, b = _structure(path_a), _structure(path_b)
+    out = {"a": os.path.basename(path_a), "b": os.path.basename(path_b), "format_a": a["format"],
+           "format_b": b["format"]}
+    if a["format"] != b["format"]:
+        out.update(same_structure=False, note="different file formats: only the formats can be compared")
+        return out
+    if a["format"] == "safetensors":
+        ta, tb = a["tensors"], b["tensors"]
+
+        def params(t):
+            n = 0
+            for shape, _d in t.values():
+                p = 1
+                for d in shape:
+                    p *= int(d)
+                n += p
+            return n
+        common = sorted(set(ta) & set(tb))
+        shape_mm = [{"name": k, "a": ta[k][0], "b": tb[k][0]} for k in common if ta[k][0] != tb[k][0]]
+        dtype_mm = [{"name": k, "a": ta[k][1], "b": tb[k][1]} for k in common if ta[k][1] != tb[k][1]]
+        only_a, only_b = sorted(set(ta) - set(tb)), sorted(set(tb) - set(ta))
+        pa, pb = params(ta), params(tb)
+        out.update(tensor_count_a=len(ta), tensor_count_b=len(tb), total_params_a=pa, total_params_b=pb,
+                   param_delta=pb - pa, common=len(common), only_in_a=_capped(only_a), only_in_b=_capped(only_b),
+                   shape_mismatches=_capped(shape_mm), dtype_mismatches=_capped(dtype_mm),
+                   same_structure=not (only_a or only_b or shape_mm or dtype_mm))
+        return out
+    if a["format"] == "torch_zip":
+        ma, mb = a["members"], b["members"]
+        common = sorted(set(ma) & set(mb))
+        size_mm = [{"name": k, "a": ma[k], "b": mb[k]} for k in common if ma[k] != mb[k]]
+        only_a, only_b = sorted(set(ma) - set(mb)), sorted(set(mb) - set(ma))
+        out.update(member_count_a=len(ma), member_count_b=len(mb), only_in_a=_capped(only_a),
+                   only_in_b=_capped(only_b), size_mismatches=_capped(size_mm),
+                   same_structure=not (only_a or only_b or size_mm),
+                   note="torch zip: archive members compared (tensor shapes live in the pickle, which is not run)")
+        return out
+    out.update(same_structure=None, note="legacy pickle: no structure can be read without unpickling")
+    return out
+
+
+def _magic_format(path: str) -> str:
+    with open(path, "rb") as fh:
+        head = fh.read(16)
+    if head[:4] == b"PK\x03\x04":
+        return "zip"
+    if head[:4] == b"GGUF":
+        return "gguf"
+    if len(head) >= 9:
+        n = struct.unpack("<Q", head[:8])[0]
+        if 0 < n < 100 * 1024 * 1024 and head[8:9] == b"{":
+            return "safetensors"
+    if head[:1] == b"\x80":
+        return "pickle"
+    return "unknown"
+
+
+_EXT_FORMAT = {".safetensors": ("safetensors",), ".sft": ("safetensors",), ".gguf": ("gguf",),
+               ".pt": ("zip", "pickle"), ".pth": ("zip", "pickle"), ".ckpt": ("zip", "pickle"),
+               ".bin": ("zip", "pickle")}
+
+
+def _full_sha256(path: str) -> str:
+    h = hashlib.sha256()
+    with open(path, "rb") as fh:
+        for chunk in iter(lambda: fh.read(_HASH_CHUNK), b""):
+            h.update(chunk)
+    return h.hexdigest()
+
+
+def _pickle_globals(data: bytes):
+    """GLOBAL / STACK_GLOBAL references in a pickle stream, from the opcodes only (never executed)."""
+    refs, strings, error = [], [], None
+    try:
+        for op, arg, _pos in pickletools.genops(data):
+            if op.name in ("SHORT_BINUNICODE", "BINUNICODE", "UNICODE", "BINUNICODE8", "SHORT_BINSTRING",
+                           "BINSTRING", "STRING"):
+                strings.append(str(arg))
+            elif op.name == "GLOBAL":
+                refs.append(str(arg).replace(" ", ".").replace("\n", "."))
+            elif op.name == "STACK_GLOBAL" and len(strings) >= 2:
+                refs.append(f"{strings[-2]}.{strings[-1]}")
+            if op.name == "STOP":
+                break
+    except Exception as exc:  # noqa: BLE001 - truncated / garbage stream: report, never crash
+        error = f"{type(exc).__name__}: {str(exc)[:200]}"
+    return sorted(set(refs)), error
+
+
+def _safetensors_checks(path: str, size: int, warnings: list) -> dict:
+    hdr_len, parsed, _meta = _read_safetensors_full(path)
+    data_len = size - 8 - hdr_len
+    spans = []
+    for name, spec in parsed.items():
+        off = spec.get("data_offsets")
+        if not (isinstance(off, list) and len(off) == 2 and all(isinstance(x, int) for x in off)):
+            warnings.append(f"tensor {name!r}: missing or malformed data_offsets")
+            continue
+        b, e = off
+        if b < 0 or e < b or e > data_len:
+            warnings.append(f"tensor {name!r}: data_offsets {off} outside the data area (0..{data_len})")
+            continue
+        n = 1
+        for d in spec.get("shape", []):
+            n *= int(d)
+        width = _DTYPE_BYTES.get(str(spec.get("dtype")))
+        if width is not None and n * width != e - b:
+            warnings.append(f"tensor {name!r}: {e - b} bytes for shape {spec.get('shape')} x {spec.get('dtype')} "
+                            f"(expected {n * width})")
+        spans.append((b, e, name))
+    spans.sort()
+    gap, end = 0, 0
+    for b, e, name in spans:
+        if b < end:
+            warnings.append(f"tensor {name!r} overlaps the previous tensor's bytes")
+        elif b > end:
+            gap += b - end
+        end = max(end, e)
+    if gap:
+        warnings.append(f"{gap} unused byte(s) between tensors")
+    if data_len > end:
+        warnings.append(f"{data_len - end} trailing byte(s) after the last tensor")
+    return {"header_bytes": hdr_len, "tensors": len(parsed), "data_bytes": data_len}
+
+
+def _integrity_report(path: str, full_hash: bool = False) -> dict:
+    """Format by magic bytes vs extension, optional full SHA-256, structure checks, suspicious pickle globals."""
+    size = os.path.getsize(path)
+    ext = os.path.splitext(path)[1].lower()
+    warnings: list = []
+    suspicious: list = []
+    rep: dict = {"file": os.path.basename(path), "bytes": size, "extension": ext}
+    try:
+        magic = _magic_format(path)
+    except OSError as exc:
+        magic = "unreadable"
+        warnings.append(f"cannot read the file: {exc}")
+    rep["format_by_magic"] = magic
+    expected = _EXT_FORMAT.get(ext)
+    if expected and magic not in expected:
+        warnings.append(f"extension {ext} but the content looks like {magic}")
+    if full_hash:
+        rep["sha256_full"] = _full_sha256(path)
+    try:
+        if magic == "safetensors":
+            rep["safetensors"] = _safetensors_checks(path, size, warnings)
+        elif magic in ("zip", "pickle"):
+            data = b""
+            if magic == "zip":
+                with zipfile.ZipFile(path, "r") as zf:
+                    names = [n for n in zf.namelist() if n == "data.pkl" or n.endswith("/data.pkl")]
+                    if not names:
+                        warnings.append("zip archive without data.pkl: not a torch checkpoint")
+                    else:
+                        with zf.open(names[0]) as fh:
+                            data = fh.read(1_000_000)
+            else:
+                with open(path, "rb") as fh:
+                    data = fh.read(1_000_000)
+            if data:
+                refs, err = _pickle_globals(data)
+                rep["pickle_globals"] = refs
+                if err:
+                    warnings.append(f"pickle stream could not be fully parsed ({err})")
+                suspicious = [r for r in refs if not r.startswith(_SAFE_GLOBAL_PREFIXES)]
+    except (ValueError, zipfile.BadZipFile, json.JSONDecodeError, OSError, struct.error) as exc:
+        warnings.append(f"structure could not be read: {type(exc).__name__}: {exc}")
+    rep["suspicious_globals"] = suspicious
+    rep["warnings"] = warnings
+    rep["verdict"] = "suspicious" if suspicious else ("warnings" if warnings else "ok")
+    rep["note"] = ("structure-only audit: nothing was unpickled or loaded. 'suspicious' = the pickle names "
+                   "callables outside the torch / numpy / collections set (code that would run on torch.load).")
+    return rep
+
+
+integrity_report = _integrity_report
+
+
 class ModelMetadataExtractorMEC:
     """Read .safetensors / .pt / .pth / .ckpt metadata without loading weights."""
 
@@ -268,16 +499,36 @@ class ModelMetadataExtractorMEC:
                         "Suitable cache key; far faster than full-file hashing."
                     ),
                 }),
+                # L9.174 (A25), appended: defaults = the behaviour of every saved workflow
+                "compare_path": ("STRING", {
+                    "default": "",
+                    "tooltip": "Checkpoint comparison: absolute path of a second model file. Compares tensor names, "
+                               "shapes and dtypes (safetensors) or archive members (torch zip) without loading "
+                               "weights. Result in comparison_json. Empty = off.",
+                }),
+                "integrity_report": ("BOOLEAN", {
+                    "default": False,
+                    "tooltip": "Provenance and integrity audit: format by magic bytes vs extension, safetensors "
+                               "offset / size checks, and callables a .ckpt / .pt pickle would run on load (read "
+                               "from the opcodes, never executed). Result in audit_json.",
+                }),
+                "full_hash": ("BOOLEAN", {
+                    "default": False,
+                    "tooltip": "Also hash the WHOLE file (SHA-256, comparable with the hashes model sites publish). "
+                               "Reads every byte: seconds per GB. Result in audit_json.",
+                }),
             },
         }
 
-    RETURN_TYPES = ("STRING", "STRING", "INT", "STRING", "STRING")
+    RETURN_TYPES = ("STRING", "STRING", "INT", "STRING", "STRING", "STRING", "STRING")
     RETURN_NAMES = (
         "metadata_json",
         "model_kind",
         "total_params",
         "fingerprint",
         "lineage_json",
+        "comparison_json",
+        "audit_json",
     )
     OUTPUT_TOOLTIPS = (
         "Full metadata as JSON (header fields, training tags, format).",
@@ -285,6 +536,10 @@ class ModelMetadataExtractorMEC:
         "Total parameter count summed across all tensors.",
         "SHA256 fingerprint over (size, first 1 MB, last 1 MB) when enabled.",
         "License + lineage information as JSON when present in metadata.",
+        "compare_path set: tensors only in A / only in B, shape and dtype mismatches, parameter delta, as JSON. "
+        "Empty when off.",
+        "integrity_report or full_hash on: format check, full SHA-256, structure warnings, suspicious pickle "
+        "callables and a verdict (ok / warnings / suspicious), as JSON. Empty when off.",
     )
     FUNCTION = "extract"
     CATEGORY = "C2C/Diagnostics"
@@ -303,9 +558,17 @@ class ModelMetadataExtractorMEC:
                 fp = f"{file_path}:{st.st_mtime_ns}:{st.st_size}"
             except OSError:
                 fp = file_path
+        cp = kwargs.get("compare_path") or ""
+        if cp and os.path.isfile(cp):
+            try:
+                st = os.stat(cp)
+                kwargs = {**kwargs, "compare_path": f"{cp}:{st.st_mtime_ns}:{st.st_size}"}
+            except OSError:
+                pass
         return hash_args_and_kwargs(fp, compute_fingerprint, **kwargs)
 
-    def extract(self, file_path: str, compute_fingerprint: bool = True):
+    def extract(self, file_path: str, compute_fingerprint: bool = True, compare_path: str = "",
+                integrity_report: bool = False, full_hash: bool = False):
         if not file_path or not os.path.isfile(file_path):
             raise FileNotFoundError(f"Model file not found: {file_path!r}")
 
@@ -339,12 +602,21 @@ class ModelMetadataExtractorMEC:
         fp = _quick_fingerprint(file_path) if compute_fingerprint else ""
         meta["fingerprint_sha256"] = fp
 
+        comparison = ""
+        if (compare_path or "").strip():
+            comparison = json.dumps(compare_models(file_path, compare_path.strip()), indent=2, default=str)
+        audit = ""
+        if integrity_report or full_hash:
+            audit = json.dumps(_integrity_report(file_path, bool(full_hash)), indent=2, default=str)
+
         return (
             json.dumps(meta, indent=2, default=str),
             kind,
             total_params,
             fp,
             json.dumps(lineage, indent=2, default=str),
+            comparison,
+            audit,
         )
 
 

@@ -33,6 +33,16 @@ except ImportError:  # loaded as a plain file (tests): the same module by path, 
 
 logger = logging.getLogger("MEC.ModelAnalysis")
 
+try:                                                       # L9.174: heatmap + benchmark helpers
+    from . import _vae_bench as _VB
+except ImportError:  # loaded as a plain file (tests): the same module by path
+    import importlib.util as _vb_ilu
+    import os as _vb_os
+    _vb_spec = _vb_ilu.spec_from_file_location("c2c_vae_bench_by_path", _vb_os.path.join(
+        _vb_os.path.dirname(_vb_os.path.abspath(__file__)), "_vae_bench.py"))
+    _VB = _vb_ilu.module_from_spec(_vb_spec)
+    _vb_spec.loader.exec_module(_VB)
+
 
 _BLOCK_RE = re.compile(
     r"^(encoder|decoder|quant_conv|post_quant_conv)"
@@ -131,7 +141,52 @@ def _compare(vae_a, vae_b, include_per_tensor: bool = False) -> tuple[str, float
 _INSPECT_LAYOUT = {
     "anomaly_threshold": {"c2c_show_if": {"mode": ["inspect"]}},
     "include_per_tensor": {"c2c_show_if": {"mode": ["compare"]}},
+    "benchmark_resolutions": {"c2c_show_if": {"benchmark": [True]}},
 }
+
+
+def _inspect_heatmap(report: dict):
+    """Inspect: one row per block, columns mean / std / abs_mean / outliers, each normalised over the blocks."""
+    blocks = report.get("blocks", {})
+    names = sorted(blocks)
+    out_count = {}
+    for o in report.get("outliers_detail", []):
+        out_count[o.get("block")] = out_count.get(o.get("block"), 0) + 1
+    cols = ["mean", "std", "abs_mean", "outliers"]
+    raw = [[blocks[n]["mean"], blocks[n]["std"], blocks[n]["abs_mean"], float(out_count.get(n, 0))] for n in names]
+    norm = []
+    for j in range(len(cols)):
+        col = [r[j] for r in raw]
+        lo, hi = (min(col), max(col)) if col else (0.0, 0.0)
+        norm.append([(v - lo) / (hi - lo) if hi > lo else 0.0 for v in col])
+    values = [[norm[j][i] for j in range(len(cols))] for i in range(len(names))]
+    return _VB.render_grid(names, ["mn", "sd", "abs", "out"], values, marks=[out_count.get(n, 0) > 0 for n in names])
+
+
+def _compare_heatmap(report_json: str):
+    """Compare: one row per block, cell = 1 - cosine (red = divergent)."""
+    rep = json.loads(report_json)
+    cos = rep.get("per_block_cosine", {})
+    names = sorted(cos)
+    red = lambda v: (0.15 + 0.80 * v, 0.55 * (1.0 - v) + 0.10, 0.20 * (1.0 - v) + 0.10)   # noqa: E731
+    values = [[max(0.0, min(1.0, 1.0 - float(cos[n])))] for n in names]
+    return _VB.render_grid(names, ["1-c"], values, colour=red)
+
+
+def _benchmark(vae, vae_b, mode: str, resolutions: str) -> str:
+    res = _VB.parse_resolutions(resolutions)
+    out = {"resolutions": res, "image_types": list(_VB.IMAGE_TYPES),
+           "not_included": ["precision modes (would change the dtype of the connected VAE)"],
+           "vae": {"reconstruction": _VB.reconstruction_suite(vae, res), "latents": _VB.latent_suite(vae, res[0])}}
+    if mode == "compare":
+        out["vae_b"] = {"reconstruction": _VB.reconstruction_suite(vae_b, res), "latents": _VB.latent_suite(vae_b, res[0])}
+        delta = []
+        for ca, cb in zip(out["vae"]["reconstruction"]["cases"], out["vae_b"]["reconstruction"]["cases"]):
+            pa, pb = ca.get("psnr_db"), cb.get("psnr_db")
+            delta.append({"type": ca["type"], "resolution": ca["resolution"],
+                          "psnr_delta_db_b_minus_a": None if pa is None or pb is None else round(pb - pa, 3)})
+        out["psnr_delta"] = delta
+    return json.dumps(out, indent=2)
 
 
 class VAEBlockInspectorMEC:
@@ -160,11 +215,20 @@ class VAEBlockInspectorMEC:
                 "include_per_tensor": ("BOOLEAN", {"default": False,
                                        "tooltip": "Compare: include per-tensor cosine entries in the JSON report "
                                                   "(verbose)."}),
+                # L9.174 (A25), appended: defaults = the behaviour of every saved workflow
+                "benchmark": ("BOOLEAN", {"default": False, "tooltip": "Run the reconstruction benchmark: five "
+                              "fixed synthetic images (flat grey, gradient, 2 px checker, colour bars, noise) at each "
+                              "benchmark resolution through encode -> decode, plus decodes of random latents; PSNR, "
+                              "max error, colour shift and clipping per case (compare: both VAEs and the PSNR "
+                              "difference). Runs the VAE: seconds on CPU per case. Result in benchmark_json."}),
+                "benchmark_resolutions": ("STRING", {"default": "64,128", "tooltip": "Benchmark sizes in pixels, "
+                                          "comma-separated: multiples of 8 from 32 to 1024, at most 4."}),
             },
         }, _INSPECT_LAYOUT)
 
-    RETURN_TYPES = ("STRING", "STRING", "FLOAT", "FLOAT", "STRING")
-    RETURN_NAMES = ("report_json", "outlier_tensor_names", "anomaly_score", "global_cosine", "most_divergent_blocks")
+    RETURN_TYPES = ("STRING", "STRING", "FLOAT", "FLOAT", "STRING", "IMAGE", "STRING")
+    RETURN_NAMES = ("report_json", "outlier_tensor_names", "anomaly_score", "global_cosine", "most_divergent_blocks",
+                    "block_heatmap", "benchmark_json")
     OUTPUT_TOOLTIPS = (
         "Inspect: per-block weight statistics plus outlier details. Compare: per-block cosine, missing keys and "
         "optional per-tensor entries. JSON.",
@@ -172,6 +236,10 @@ class VAEBlockInspectorMEC:
         "Inspect: aggregate anomaly score in [0, 1] (higher means more outliers detected).",
         "Compare: global cosine similarity across all common tensors.",
         "Compare: JSON list of the 10 most divergent blocks (lowest cosine first).",
+        "Heatmap image. Inspect: one row per block, columns mean / std / abs mean / outlier count (each scaled over "
+        "the blocks, dark = low, bright = high), red marker = block with outliers. Compare: 1 - cosine per block "
+        "(red = divergent).",
+        "benchmark on: reconstruction and latent-decode results as JSON. Empty when off.",
     )
     FUNCTION = "inspect"
     CATEGORY = "C2C/ModelAnalysis"
@@ -179,15 +247,21 @@ class VAEBlockInspectorMEC:
                    "block (cosine similarity) - for checking merges and broken checkpoints.")
 
     def inspect(self, vae, anomaly_threshold: float = 5.0, mode: str = "inspect", vae_b=None,
-                include_per_tensor: bool = False):
+                include_per_tensor: bool = False, benchmark: bool = False, benchmark_resolutions: str = "64,128"):
+        if benchmark:
+            _VB.parse_resolutions(benchmark_resolutions)          # fail fast, before any analysis
         if mode == "compare":
             if vae_b is None:
                 raise ValueError("VAE Inspect (compare): connect the second VAE to vae_b.")
             report, global_cos, divergent = _compare(vae, vae_b, include_per_tensor)
-            return (report, "[]", 0.0, global_cos, divergent)
+            bench = _benchmark(vae, vae_b, mode, benchmark_resolutions) if benchmark else ""
+            return (report, "[]", 0.0, global_cos, divergent, _compare_heatmap(report), bench)
         if mode != "inspect":
             raise ValueError(f"VAE Inspect: unknown mode {mode!r}; choose inspect or compare")
-        return (*self._inspect(vae, anomaly_threshold), 0.0, "[]")
+        res = self._inspect(vae, anomaly_threshold)
+        heat = _inspect_heatmap(json.loads(res[0]))
+        bench = _benchmark(vae, None, mode, benchmark_resolutions) if benchmark else ""
+        return (*res, 0.0, "[]", heat, bench)
 
     def _inspect(self, vae, anomaly_threshold: float = 5.0):
         sd = _to_state_dict(vae)
