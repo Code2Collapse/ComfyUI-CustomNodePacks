@@ -3327,8 +3327,8 @@ Segment (C2C): find objects by words, clicks or boxes with ComfyUI's own SAM 3 /
 |---|---|---|---|
 | `image` | `IMAGE` |  | A still or a clip (B,H,W,C). |
 | `model` | choice: `MISSING: sam3.1_multiplex_fp16.safetensors` |  | SAM 3 / 3.1 checkpoint (ComfyUI's own SAM 3, the same file the Mask + Matting viewer uses; it is loaded once and shared). |
-| `target` | choice: `objects` | default `"objects"` | What to segment. objects: things named by words, or picked by clicks and boxes. |
-| `prompt` | `STRING` | default `""` | Words, e.g. 'person', 'person:3, dog'. With words, clicks and boxes are ignored in this slice. Empty: use clicks / boxes. |
+| `target` | choice: `objects`, `face parts`, `clothes` | default `"objects"` | What to segment. objects: things named by words, or picked by clicks and boxes (SAM 3). face parts / clothes: the classes named in the prompt, one mask each (face / clothes parser; model is not used). |
+| `prompt` | `STRING` | default `""` | objects: words, e.g. 'person', 'person:3, dog' (with words, clicks and boxes are ignored; empty: use clicks / boxes). face parts: classes such as 'skin, hair, l_eye, mouth' (empty = skin, hair). clothes: 'upper_clothes, pants, dress' (empty = upper_clothes). |
 | `picks` | `STRING` | default `""`, multiline | Clicks and boxes in pixels: {"positive": [[x, y]], "negative": [[x, y]], "boxes": [[x0, y0, x1, y1]]}. One object per box (the clicks go with every box), else one object from the clicks. |
 | `max_objects` | `INT` | default `20`, range 1…200 | Keep at most this many objects per frame (strongest first). |
 
@@ -3339,6 +3339,7 @@ Segment (C2C): find objects by words, clicks or boxes with ComfyUI's own SAM 3 /
 | `video` | choice: `track whole clip`, `per frame` | default `"track whole clip"` | A clip: find the objects on seed_frame and follow them through every frame (forward and backward, one tracking state, objects keep their order), or segment each frame on its own. |
 | `seed_frame` | `INT` | default `0`, range 0…100000 | The frame the objects are found on before tracking (pick a frame where they are clearly visible). |
 | `refine` | `BOOLEAN` | default `False` | EXPERIMENTAL: refine each object's mask once more with SAM, from prompts mined out of the mask itself (SAMRefiner, ICLR 2025). Off by default until it is measured better on your kind of shot; info reports what each pass changed. |
+| `allow_download` | `BOOLEAN` | default `False` | face parts / clothes: allow downloading the parsing model when it is missing (otherwise a model-free stand-in runs and info says so). |
 
 **Outputs**
 

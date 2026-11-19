@@ -1692,8 +1692,9 @@ read any file path. Through an SSH tunnel the page still counts as local.
   objects found on `seed_frame` are followed forward and backward with one tracking state (`video = per frame` does
   each frame on its own). `refine` (EXPERIMENTAL, off by default) re-decodes each mask with prompts mined from it
   (SAMRefiner, ICLR 2025). Measured on three synthetic shapes with exact truth (SAM 3.1, CPU): boundary F 0.983 ->
-  0.995 but IoU 0.995 -> 0.991, at 1.7-2x the time - not better overall on easy cases, so it stays off. Face / clothes
-  parsing and automatic masks follow. Design:
+  0.995 but IoU 0.995 -> 0.991, at 1.7-2x the time - not better overall on easy cases, so it stays off. Targets
+  `face parts` and `clothes` give one mask per class named in the prompt ("skin, hair, mouth"; "upper_clothes,
+  pants") from the face / clothes parser (a separate download: tick `allow_download`). Automatic masks follow. Design:
   docs in the C2C workspace (L7.123).
 - **Mask Tools (C2C)** `grade` (2026-11-19) works like Nuke's Grade on a matte: black point, white point, lift and
   offset join gain / gamma / clamp / invert (new controls at their defaults change nothing). The report's coverage now

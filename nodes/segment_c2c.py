@@ -26,7 +26,9 @@ import torch
 
 log = logging.getLogger("C2C.Segment")
 
-TARGETS = ["objects"]          # appended to in later slices (face parts, clothes, semantic classes, everything)
+TARGETS = ["objects", "face parts", "clothes"]   # appended to in later slices (semantic classes, everything)
+# slice 4: the parsing targets run the Semantic Segment parsers (SegFormer face / clothes, nodes/semantic_segment.py)
+_PARSERS = {"face parts": ("segformer_face", "skin,hair"), "clothes": ("segformer_clothes", "upper_clothes")}
 
 
 def _parse_picks(raw: str, W: int, H: int) -> Tuple[List[Tuple[float, float]], List[Tuple[float, float]], List[Tuple]]:
@@ -118,10 +120,13 @@ class SegmentC2C:
                                               "Matting viewer uses; it is loaded once and shared)."}),
                 "target": (TARGETS, {"default": "objects",
                                      "tooltip": "What to segment. objects: things named by words, or picked by clicks "
-                                                "and boxes."}),
+                                                "and boxes (SAM 3). face parts / clothes: the classes named in the "
+                                                "prompt, one mask each (face / clothes parser; model is not used)."}),
                 "prompt": ("STRING", {"default": "", "multiline": False,
-                                      "tooltip": "Words, e.g. 'person', 'person:3, dog'. With words, clicks and boxes "
-                                                 "are ignored in this slice. Empty: use clicks / boxes."}),
+                                      "tooltip": "objects: words, e.g. 'person', 'person:3, dog' (with words, clicks "
+                                                 "and boxes are ignored; empty: use clicks / boxes). face parts: "
+                                                 "classes such as 'skin, hair, l_eye, mouth' (empty = skin, hair). "
+                                                 "clothes: 'upper_clothes, pants, dress' (empty = upper_clothes)."}),
                 "picks": ("STRING", {"default": "", "multiline": True,
                                      "tooltip": "Clicks and boxes in pixels: {\"positive\": [[x, y]], \"negative\": "
                                                 "[[x, y]], \"boxes\": [[x0, y0, x1, y1]]}. One object per box (the "
@@ -145,16 +150,23 @@ class SegmentC2C:
                                                   "prompts mined out of the mask itself (SAMRefiner, ICLR 2025). "
                                                   "Off by default until it is measured better on your kind of shot; "
                                                   "info reports what each pass changed."}),
+                # slice 4 (appended): the parsing targets' model download consent
+                "allow_download": ("BOOLEAN", {"default": False,
+                                               "tooltip": "face parts / clothes: allow downloading the parsing model "
+                                                          "when it is missing (otherwise a model-free stand-in runs "
+                                                          "and info says so)."}),
             },
         }
 
     def execute(self, image, model, target, prompt, picks, max_objects, video="track whole clip", seed_frame=0,
-                refine=False):
+                refine=False, allow_download=False):
         from .c2c_viewer.detect import get_detector, resolve_model
         if not isinstance(image, torch.Tensor) or image.ndim != 4:
             raise ValueError("Segment (C2C) expects an IMAGE tensor [B,H,W,C].")
         if target not in TARGETS:
             raise ValueError(f"Segment (C2C): target {target!r} is not built yet (this version has {TARGETS}).")
+        if target in _PARSERS:
+            return self._parse(image, target, prompt, bool(allow_download))
         B, H, W = int(image.shape[0]), int(image.shape[1]), int(image.shape[2])
         text = str(prompt or "").strip()
         pos, neg, boxes = _parse_picks(picks, W, H)
@@ -253,6 +265,50 @@ class SegmentC2C:
                 "per_frame": per_frame, "edge_stability": edge, "refine": refine_log if refine else None,
                 "seconds": round(time.time() - t0, 3), "notes": notes}
         return (torch.from_numpy(union), masks, [o["box"] for o in first], json.dumps(info))
+
+
+def _parse_target(self, image, target, prompt, allow_download):
+    """face parts / clothes: one mask per named class (the prompt, comma separated; empty = a default set) from the
+    Semantic Segment parser, their union, boxes from the first frame. Unknown class names are refused in words."""
+    from .semantic_segment import CLOTHES_CLASSES, FACE_CLASSES, SemanticSegmentMEC
+    model_name, default = _PARSERS[target]
+    valid = [c for c in (FACE_CLASSES if target == "face parts" else CLOTHES_CLASSES) if c != "background"]
+    classes = [c.strip() for c in (str(prompt or "").strip() or default).split(",") if c.strip()]
+    bad = [c for c in classes if c not in valid]
+    if bad:
+        raise ValueError(f"Segment (C2C) {target}: unknown class name(s) {bad}. Use any of: {', '.join(valid)}.")
+    t0 = time.time()
+    parser = SemanticSegmentMEC()
+    B, H, W = int(image.shape[0]), int(image.shape[1]), int(image.shape[2])
+    per_class, parser_info = [], None
+    with torch.no_grad():
+        for c in classes:
+            m, info_c = parser.parse(image, model_name, c, 0.5, False, True, allow_download)
+            m = m.float()
+            if m.dim() == 2:
+                m = m.unsqueeze(0)
+            per_class.append((c, (m > 0.5).float()))
+            parser_info = parser_info or info_c
+    union = torch.stack([m for _c, m in per_class]).amax(0)
+    first = [(c, m[0].numpy()) for c, m in per_class]
+    per_frame = [[{"label": c, "score": 1.0, "box": _bbox_of(m[b].numpy()), "area": int(m[b].sum())}
+                  for c, m in per_class] for b in range(B)]
+    notes = []
+    try:
+        pi = json.loads(parser_info) if isinstance(parser_info, str) else (parser_info or {})
+    except (TypeError, ValueError):
+        pi = {"raw": str(parser_info)[:300]}
+    if isinstance(pi, dict) and any("model-free" in str(v) or "needs_the_model" in str(k) for k, v in pi.items()):
+        notes.append("The parsing model is not installed, so a model-free stand-in ran (approximate); turn on "
+                     "allow_download or install it.")
+    info = {"target": target, "parser": model_name, "classes": classes, "frames": B, "tracked": False,
+            "objects_first_frame": len(first), "per_frame": per_frame, "parser_info": pi,
+            "seconds": round(time.time() - t0, 3), "notes": notes}
+    masks = torch.stack([torch.from_numpy(m) for _c, m in first]) if first else torch.zeros((1, H, W))
+    return (union, masks, [_bbox_of(m) for _c, m in first], json.dumps(info))
+
+
+SegmentC2C._parse = _parse_target
 
 
 NODE_CLASS_MAPPINGS = {"SegmentC2C": SegmentC2C}
