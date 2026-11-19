@@ -302,4 +302,10 @@ register(
             tooltip="Load Video (C2C) with decoder 'auto': exact = always the exact reader (measured as fast on the "
                     "CPU); fast / gpu = allow the ffmpeg fast path (gpu: NVDEC) for large loads after a self-check.",
             consumer="nodes.c2c_video.fast_decode:plan_decoder"),
+    # L9.262: the Frame Player's proxy threshold (docs/research/L9.262_frame_player_proxy_design.md)
+    Setting("c2c.framePlayer.proxyAbove", "number", 120, "Frame Player: one proxy video above (frames)",
+            ("Video", "Preview"), min=0, max=100000, step=1, env="C2C_FRAME_PLAYER_PROXY_ABOVE",
+            tooltip="Clips longer than this reach the Video Frame Player as ONE small proxy video instead of a "
+                    "picture per frame (bounded disk and browser memory). 0 = always one picture per frame.",
+            consumer="nodes.video_frame_player:_proxy_above"),
 )

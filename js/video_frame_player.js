@@ -54,6 +54,80 @@ const ASPECT_VALUES = {
     "custom":   null,    // dynamic -> custom_aspect_w/h
 };
 
+// L9.262: long clips arrive as ONE all-intra H.264 proxy (every frame a keyframe, so a seek lands on the exact
+// frame). A hidden <video> is seeked to the middle of frame i and drawn to the player canvas; playback steps S.idx
+// with the existing clock, and each step is a seek. Only the newest wanted frame is chased while a seek is in flight.
+function releaseProxyVideo(S) {
+    const v = S.video;
+    S.video = null;
+    S.videoReady = false;
+    S.videoShown = -1;
+    S.videoWant = -1;
+    S.videoSeeking = false;
+    S.videoError = false;
+    if (!v) return;
+    try { v.pause(); } catch (_e) { /* ignore */ }
+    try { v.removeAttribute("src"); v.load(); } catch (_e) { /* ignore */ }
+}
+
+function proxySeek(S, i) {
+    const v = S.video;
+    if (!v || !S.videoReady) return;
+    S.videoWant = i;
+    if (S.videoSeeking || S.videoShown === i) return;
+    S.videoSeeking = true;
+    S.videoTarget = i;
+    const fps = Math.max(0.1, S.videoFps || S.fps || 24);
+    const t = (i + 0.5) / fps;
+    const dur = Number.isFinite(v.duration) ? v.duration : t;
+    try {
+        v.currentTime = Math.max(0, Math.min(t, Math.max(0, dur - 0.5 / fps)));
+    } catch (_e) {
+        S.videoSeeking = false;
+    }
+}
+
+function attachProxyVideo(node, S, info, url) {
+    const v = document.createElement("video");
+    v.muted = true;
+    v.preload = "auto";
+    v.playsInline = true;
+    S.video = v;
+    S.videoFps = Number(info?.fps) || S.fps;
+    S.videoReady = false;
+    S.videoShown = -1;
+    S.videoWant = -1;
+    S.videoSeeking = false;
+    S.videoError = false;
+    const redraw = () => { node._render?.(); app.graph?.setDirtyCanvas?.(true); };
+    v.addEventListener("loadeddata", () => {
+        if (S.video !== v) return;
+        S.videoReady = true;
+        if (S.width > 0 && S.height > 0) {
+            node.setSize([Math.max(node.size[0], 360), node.size[1]]);
+            node._fitPlayer?.();                     // A28: the height follows the clip's aspect
+        }
+        proxySeek(S, S.idx);
+        redraw();
+    });
+    v.addEventListener("seeked", () => {
+        if (S.video !== v) return;
+        S.videoSeeking = false;
+        S.videoShown = S.videoTarget;
+        if (S.videoWant >= 0 && S.videoWant !== S.videoShown) proxySeek(S, S.videoWant);
+        redraw();
+    });
+    v.addEventListener("error", () => {
+        if (S.video !== v) return;
+        S.videoError = true;
+        S.videoSeeking = false;
+        redraw();
+    });
+    v.src = url;
+    try { v.load(); } catch (_e) { /* ignore */ }
+    redraw();
+}
+
 function getAspect(node, S) {
     const wAR = node.widgets?.find(w => w.name === "aspect_ratio");
     const ar = wAR?.value ?? "free";
@@ -684,9 +758,10 @@ app.registerExtension({
         nodeType.prototype.onExecuted = function (msg) {
             _exec?.apply(this, arguments);
             const S = this._S;
-            if (!S || !msg?.frames) return;
+            if (!S || (!msg?.frames && !msg?.proxy?.length)) return;
+            releaseProxyVideo(S);                        // L9.262: new output -> the previous proxy goes
 
-            const frames = msg.frames;
+            const frames = msg.frames || [];
             S.frameCount = msg.frame_count?.[0] ?? frames.length;
             S.idx = Math.max(0, Math.min(S.frameCount - 1, msg.current_index?.[0] ?? S.idx));
             S.width = msg.width?.[0] ?? 0;
@@ -708,8 +783,13 @@ app.registerExtension({
                     `&subfolder=${encodeURIComponent(info.subfolder || "")}`
                 );
 
-            S.images = new Array(frames.length);
             const node = this;
+            if (msg.proxy?.length) {                     // L9.262: ONE all-intra proxy video instead of a still per frame
+                S.images = [];
+                attachProxyVideo(node, S, msg.proxy[0], mkURL(msg.proxy[0]));
+                return;
+            }
+            S.images = new Array(frames.length);
             let loaded = 0;
             const onLoad = () => {
                 if (++loaded >= frames.length) {
@@ -722,11 +802,15 @@ app.registerExtension({
                     app.graph.setDirtyCanvas(true);
                 }
             };
+            const byURL = new Map();                     // L9.262 capped-stills fallback repeats files: one Image each
             for (let i = 0; i < frames.length; i++) {
+                const url = mkURL(frames[i]);
+                if (byURL.has(url)) { S.images[i] = byURL.get(url); onLoad(); continue; }
                 const im = new Image();
+                byURL.set(url, im);
                 im.onload = onLoad;
                 im.onerror = onLoad;
-                im.src = mkURL(frames[i]);
+                im.src = url;
                 S.images[i] = im;
             }
         };
@@ -798,8 +882,21 @@ app.registerExtension({
             ctx.fill();
             ctx.restore();
 
-            const cur = S.images?.[S.idx];
-            if (cur && cur.complete && cur.naturalWidth > 0) {
+            const vid = S.video;
+            if (vid) proxySeek(S, S.idx);                // L9.262: the canvas shows the proxy frame of S.idx
+            const cur = vid ? null : S.images?.[S.idx];
+            if (vid) {
+                if (S.videoShown >= 0 && vid.readyState >= 2) {
+                    ctx.drawImage(vid, px, py, pw, ph);
+                } else {
+                    ctx.fillStyle = C.overlay1;
+                    ctx.font = "12px sans-serif";
+                    ctx.textAlign = "center";
+                    ctx.textBaseline = "middle";
+                    ctx.fillText(S.videoError ? "proxy video failed to load - re-queue the node" : "loading…",
+                                 px + pw / 2, py + ph / 2);
+                }
+            } else if (cur && cur.complete && cur.naturalWidth > 0) {
                 ctx.drawImage(cur, px, py, pw, ph);
             } else if (!S.images || !S.images.length) {
                 // Nothing connected/queued yet → a helpful empty state (matches the
@@ -1036,6 +1133,7 @@ app.registerExtension({
         nodeType.prototype.onRemoved = function () {
             try { this._stopPlay?.(); } catch (__c2cErr) { __c2cReport("video_frame_player", __c2cErr); }
             try { this._vfpZoomOff?.(); } catch (_e) { /* ignore */ }
+            try { if (this._S) releaseProxyVideo(this._S); } catch (_e) { /* ignore */ }
             _onRemoved?.apply(this, arguments);
         };
     },

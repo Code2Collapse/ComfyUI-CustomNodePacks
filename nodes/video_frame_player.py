@@ -194,6 +194,90 @@ def _preview_batch_id(frames, prefix: str) -> str:
     q = (grid * 1024.0).round().to(torch.int32).cpu().numpy()
     return _hl.sha256(prefix.encode() + q.tobytes()).hexdigest()[:12]
 
+
+# L9.262 (design docs/research/L9.262_frame_player_proxy_design.md): above this many frames the browser gets ONE
+# all-intra H.264 proxy instead of a still per frame (disk and browser memory bounded by one file / one <video>).
+_PROXY_ABOVE_DEFAULT = 120
+_PROXY_CRF = "14"          # preview-size all-intra: measured >= 35 dB PSNR on the unit clip (tests/test_l9262_vfp_proxy.py)
+
+
+def _proxy_above() -> int:
+    """Frame-count threshold: env C2C_FRAME_PLAYER_PROXY_ABOVE, else the C2C setting c2c.framePlayer.proxyAbove,
+    else 120. 0 (or less) = always stills."""
+    try:
+        try:
+            from . import _c2c_saved_setting as _SS
+        except ImportError:  # loaded top-level (tests)
+            import _c2c_saved_setting as _SS  # type: ignore
+        v = _SS.get("c2c.framePlayer.proxyAbove", _PROXY_ABOVE_DEFAULT,
+                    env="C2C_FRAME_PLAYER_PROXY_ABOVE", parse=lambda s: int(float(s)))
+        return int(v)
+    except Exception:  # noqa: BLE001 - a broken setting never breaks the preview
+        raw = os.environ.get("C2C_FRAME_PLAYER_PROXY_ABOVE", "").strip()
+        try:
+            return int(float(raw)) if raw else _PROXY_ABOVE_DEFAULT
+        except ValueError:
+            return _PROXY_ABOVE_DEFAULT
+
+
+def _write_preview_proxy(frames: torch.Tensor, path: str, size: Tuple[int, int], fps: float) -> None:
+    """One all-intra (every frame a keyframe, so every browser seek lands on the exact frame) H.264 yuv420p mp4 of
+    the whole batch at `size` (w, h, both even), BT.709-tagged, written in chunks to `path` (via a .part file, so an
+    interrupted run never leaves a half file that a re-run would reuse). Raises on any failure (caller falls back)."""
+    from fractions import Fraction
+
+    import av  # noqa: F401 - ImportError -> caller falls back to stills
+    try:
+        from ._c2c_preview_encode import preview_frames
+    except ImportError:  # loaded top-level (tests)
+        from _c2c_preview_encode import preview_frames
+    try:
+        from .c2c_video.testmedia import _rgb_to_yuv, _tag_bt709
+    except (ImportError, ValueError):
+        from c2c_core.video.testmedia import _rgb_to_yuv, _tag_bt709  # type: ignore
+
+    B = int(frames.shape[0])
+    tw, th = int(size[0]), int(size[1])
+    tmp = path + ".part"
+    ok = False
+    container = av.open(tmp, mode="w", format="mp4", options={"movflags": "+faststart"})
+    try:
+        stream = container.add_stream("libx264", rate=Fraction(float(fps or 24.0)).limit_denominator(1_000_000))
+        stream.width, stream.height, stream.pix_fmt = tw, th, "yuv420p"
+        _tag_bt709(stream)
+        try:
+            stream.codec_context.gop_size = 1
+        except Exception:  # noqa: BLE001 - the x264 options below say the same
+            pass
+        stream.options = {"crf": _PROXY_CRF, "preset": "veryfast", "g": "1", "keyint_min": "1", "bf": "0",
+                          "x264-params": "keyint=1:min-keyint=1:scenecut=0"}
+        k = 0
+        starts = list(range(0, B, 16))
+        for s0 in _PB.track(starts, len(starts), "FramePlayer: proxy"):
+            _IC.check()
+            arrs, why = preview_frames(frames[..., :3], indices=list(range(s0, min(B, s0 + 16))), size=(tw, th))
+            if arrs is None:
+                raise RuntimeError(f"Frame Player: {why}")
+            for arr in arrs:
+                vf = _rgb_to_yuv(np.ascontiguousarray(arr[..., :3]), "yuv420p")
+                vf.pts = k
+                k += 1
+                for packet in stream.encode(vf):
+                    container.mux(packet)
+        for packet in stream.encode(None):
+            container.mux(packet)
+        ok = True
+    finally:
+        container.close()
+        if ok:
+            os.replace(tmp, path)
+        else:
+            try:
+                os.remove(tmp)
+            except OSError:
+                pass
+
+
 class VideoFramePlayerMEC:
     """Video frame player + drag-crop + integrated resize.
 
@@ -466,7 +550,43 @@ class VideoFramePlayerMEC:
         thumb_h = max(1, int(round(H * preview_width / max(W, 1))))
         names = [f"vfp_{batch_id}_{i:05d}.{ext}" for i in range(B)]
         previews = [{"filename": n, "subfolder": "", "type": "temp"} for n in names]
-        todo = [i for i in range(B) if not os.path.exists(os.path.join(temp_dir, names[i]))]
+        # L9.262: a long clip gets ONE all-intra proxy video instead of B stills; short clips are unchanged.
+        proxy_above = _proxy_above()
+        proxy = None
+        proxy_note = None
+        still_set = range(B)
+        if proxy_above > 0 and B > proxy_above:
+            pw2 = max(2, (int(preview_width) // 2) * 2)
+            ph2 = max(2, (thumb_h // 2) * 2)
+            fps_tag = f"{float(playback_fps):g}".replace(".", "p")
+            pid = _preview_batch_id(frames, f"{B}x{H}x{W}x{C}_{pw2}x{ph2}_proxy_")
+            pname = f"vfp_{pid}_{fps_tag}fps.mp4"
+            ppath = os.path.join(temp_dir, pname)
+            try:
+                if not os.path.exists(ppath):           # identical clip + size + fps: reuse, no rewrite
+                    os.makedirs(temp_dir, exist_ok=True)
+                    _write_preview_proxy(frames, ppath, (pw2, ph2), float(playback_fps))
+                proxy = [{"filename": pname, "subfolder": "", "type": "temp",
+                          "fps": float(playback_fps), "frames": int(B), "width": pw2, "height": ph2}]
+            except Exception as e:  # noqa: BLE001 - no PyAV / libx264: capped stills instead
+                try:
+                    from comfy.model_management import InterruptProcessingException as _IPE
+                except Exception:  # noqa: BLE001
+                    _IPE = ()
+                if _IPE and isinstance(e, _IPE):
+                    raise
+                # capped, evenly spaced stills; every frame index maps to its nearest kept still
+                keep = sorted({int(round(j * (B - 1) / max(1, proxy_above - 1))) for j in range(proxy_above)})
+                still_set = keep
+                near = np.searchsorted(np.asarray(keep), np.arange(B))
+                near = np.clip(near, 0, len(keep) - 1)
+                prev = np.clip(near - 1, 0, len(keep) - 1)
+                ka = np.asarray(keep)
+                pick = np.where(np.abs(ka[prev] - np.arange(B)) <= np.abs(ka[near] - np.arange(B)), prev, near)
+                previews = [previews[int(ka[j])] for j in pick]
+                proxy_note = (f"Proxy video unavailable ({type(e).__name__}: {e}); showing {len(keep)} of {B} frames "
+                              f"as stills (scrubbing shows the nearest kept frame).")
+        todo = [] if proxy else [i for i in still_set if not os.path.exists(os.path.join(temp_dir, names[i]))]
         if todo:
             # L9.282: the shared chunked encoder (area downscale on the tensor's device, a few frames at a time,
             # rounded - the old cast truncated, half a code value too dark) + parallel encoding (Pillow releases
@@ -566,6 +686,11 @@ class VideoFramePlayerMEC:
             "crop_w_px": [int(crop_w_px)],
             "crop_h_px": [int(crop_h_px)],
         }
+        if proxy:                                       # L9.262: one video replaces the per-frame stills
+            del ui_payload["frames"]
+            ui_payload["proxy"] = proxy
+        if proxy_note:
+            ui_payload["proxy_note"] = [proxy_note]
 
         trimmed_count = int(processed.shape[0])
 
