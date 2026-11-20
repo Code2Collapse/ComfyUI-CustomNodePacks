@@ -1,9 +1,151 @@
-# C2C Distributed: multi-GPU for ComfyUI (design, L9.38)
+# C2C Distributed: multi-GPU for ComfyUI
 
-Status 2026-10-24: slices 0, 1 and 2a built and tested (GPU Inventory node; exact Ulysses / Ring / USP attention;
-C2C Multi-GPU Split node for Wan 2.1 / 2.2 and MiniMax H3 on one box). Speed-up is **not measured yet**: that needs a machine with
-two or more GPUs (see "What is measured"). This file is the A7 design record: what the subsystem does, what it refuses
-to do, how it fails, what it costs, and how to turn it off.
+Two nodes for machines with several GPUs. **C2C GPU Inventory** tells you what this machine can do; **C2C Multi-GPU
+Split** spreads each model call over the GPUs. With one GPU, the split node passes the model through unchanged.
+
+| Node | Use it to |
+|---|---|
+| [C2C GPU Inventory](#c2c-gpu-inventory-c2cgpuinventory) | List the GPUs, their links and the multi-GPU modes this machine can run; watch memory; check whether a job fits |
+| [C2C Multi-GPU Split](#c2c-multi-gpu-split-c2csequenceparallel) | Run every model call of one generation on several GPUs |
+
+**Honest status.** Speed-up on real multi-GPU hardware is **not measured**. The owner's machine has one GPU; the
+exactness checks ran with simulated ranks on one GPU, on the CPU, and in WSL (see
+[What is measured](#what-is-measured-2026-10-24-owners-pc-one-rtx-4060-laptop-cpu-testbed)). The 2026-11-19
+additions (live monitor, fit estimate, memory-aware GPU choice, preflight; commit 4ebaa55) were tested on the CPU with
+stand-ins: GPU behaviour NOT VERIFIED.
+
+**Turning it off.** Settings > C2C > Multi-GPU > **C2C Distributed (multi-GPU)** (needs a restart), or the
+environment variable `C2C_DISTRIBUTED=off` (it wins over the setting). Off: both nodes stop with that reason.
+
+## C2C GPU Inventory (`C2CGPUInventory`)
+
+**Menu:** 🐺 C2C/🧰 Core/Distributed · **Parameters:** [NODE_REFERENCE](../NODE_REFERENCE.md#c2cgpuinventory)
+
+### What it is for
+
+A report on this machine: each GPU (architecture, memory, bf16 / fp8 / fp4 support, whether this torch build has
+kernels for it), how the GPUs are linked (P2P, NVLink), Grace / aarch64 hosts, whether NCCL and gloo really work
+here, and which multi-GPU modes can run. Run it before setting up C2C Multi-GPU Split, or to see why a mode is not
+available.
+
+### Minimal wiring
+
+The node needs no inputs. Its text shows on the node; wire `summary` or `report_json` to a text display if you want
+them elsewhere.
+
+### Key controls
+
+- `probe_backends` (on): really creates a NCCL / gloo process group in a subprocess to see whether it works. A few
+  seconds, cached until ComfyUI restarts. Off: only what the hardware reports.
+- `qualify` (off): the full qualification. One process per physical GPU, collectives checked, latency and
+  bandwidth, a hung rank detected, fp16 / bf16 kernel tests on every GPU. Tens of seconds.
+- `live_monitor` (off, new 2026-11-19): also reads the live state into `live_json`. While on, the node runs again on
+  every queue.
+- `workload_vram_gb` (0 = off, new 2026-11-19), with `workload_precision` and `workload_gpus`: checks whether a job
+  that needs this much memory per GPU fits, in `suitability`.
+
+### Reading the outputs
+
+- `summary`: readable text: GPUs, links, working backends, usable modes.
+- `report_json`: the full inventory (`host`, `torch`, `gpus`, `comfy`, `backends`, the `modes` rows with
+  `can_run`, `how` and `why_not`), plus `qualification` when `qualify` is on. The qualification `status` is
+  `MULTI_GPU_VERIFIED` only for two or more distinct physical GPUs that passed; otherwise `SINGLE_GPU_ONLY`,
+  `NO_GPU` or `FAILED`.
+- `live_json` (live monitor on): per GPU the free / total memory, this process's allocated / reserved memory,
+  utilisation (null without the `pynvml` package), how many models ComfyUI has loaded there and their size; plus the
+  ComfyUI queue (`active_jobs`, `pending_jobs`) and `notes` for anything that could not be read.
+- `suitability` (`workload_vram_gb` above 0): per GPU `fits_total`, `fits_free` (with the live monitor), `precision`
+  (`native` or emulated, with the reason), `kernels_ok` and `suitable`, and a `verdict` line such as "fits: 2 of 2
+  GPU(s) qualify, 2 needed". The need is checked with 10% headroom. It is an estimate from memory sizes and
+  architecture flags, not a measured run. The verdict also shows on the node.
+
+### Common mistakes
+
+- **Expecting the modes to pool memory.** Every mode except weight sharding keeps a full model copy on each GPU. The
+  weight-sharding row stays `can_run: false`: no node shards a ComfyUI model yet.
+- **Reading `MULTI_GPU_VERIFIED` into a one-GPU result.** With one GPU the qualification says `SINGLE_GPU_ONLY`;
+  nothing multi-GPU can be verified on such a machine.
+
+## C2C Multi-GPU Split (`C2CSequenceParallel`)
+
+**Menu:** 🐺 C2C/🧰 Core/Distributed · **Parameters:** [NODE_REFERENCE](../NODE_REFERENCE.md#c2csequenceparallel)
+Needs two or more CUDA GPUs to do anything, and ComfyUI core with `comfy/multigpu.py` (0.39 or later). Speed-up NOT
+MEASURED.
+
+### What it is for
+
+It takes a MODEL and returns one whose every call is split over the GPUs of this machine:
+- **Any model:** the batch items of a call (cond and uncond, an image batch, Tile Split's tiles) go to different GPUs.
+  No data is exchanged between them.
+- **Wan 2.1 / 2.2 and MiniMax H3:** the tokens of one item are also split (Ulysses all-to-all and / or Ring), with an
+  exact result.
+
+Each GPU holds a full copy of the model, made by ComfyUI's own multi-GPU clones: weight memory is not pooled.
+
+### When to pick it
+
+- To spread one long generation over several GPUs on one machine. It replaces core's **MultiGPU CFG Split** for this
+  model.
+- To render many separate jobs on many GPUs or machines, use the render farm instead ([render-farm.md](render-farm.md)).
+- A model that does not fit one GPU cannot be helped by this node.
+
+### Minimal wiring
+
+```
+Load Diffusion Model ──► (LoRA, attention nodes) ──► C2C Multi-GPU Split ──► model ──► KSampler
+                                                                       └─► plan
+```
+
+Put it **last** in the model chain, after LoRA and attention nodes. Use a core loader: the clones need core's reload
+recipe.
+
+### Key controls
+
+- `gpus`: how many GPUs to use; 0 = all that ComfyUI sees.
+- `strategy`: `auto` (Ulysses as far as heads and fast links allow, Ring for the rest), `ulysses`, or `ring`.
+- `min_tokens_per_gpu` (1024): calls with fewer tokens per GPU run on one GPU, because the exchange would cost more
+  than it saves.
+- `fast_link_gpus`: how many GPUs share fast links (NVLink); 0 = all. Ulysses stays inside this many GPUs.
+- `rank_backend`: `threads` (default; Windows and Linux, any model) or `processes (Linux, NCCL)` (one worker process
+  per GPU; Wan and MiniMax H3 only; verified on CPU test ranks only, not on real GPUs).
+- `memory_policy` (new 2026-11-19): `off` as before; `report` lists each GPU's free memory against one model copy plus
+  `memory_headroom_gb`; `fit` also uses only the GPUs with room. GPUs are taken in core's order (the model's GPU first)
+  and the count stops at the first GPU without room.
+- `preflight_workers` (new 2026-11-19): before splitting, a small matrix multiply on each GPU that would be used,
+  compared with the CPU. A failed GPU is left out together with the GPUs after it.
+
+### Reading the outputs
+
+- `model`: the split model (unchanged with one GPU).
+- `plan`: text, also shown on the node: the chosen mode, devices, memory per GPU and the communication path, before
+  sampling starts. With `memory_policy` or `preflight_workers` on, it adds lines such as "memory: one model copy needs
+  ~X GB per GPU", one line per GPU ("fits" / "DOES NOT FIT"), "memory fit: using N GPU(s)" and "preflight: cuda:1 ok".
+
+### Common mistakes
+
+- **Another node after it** that patches the transformer blocks or sets an attention override: refused at run time
+  ("put C2C Multi-GPU Split last"). A block patch made **before** it (core's MiniMax H3 Fun ControlNet, a block cache)
+  is refused too.
+- **ControlNet or control conditioning** on the token-split path: refused at run time (not supported yet).
+- **A custom loader** (some GGUF loaders) without core's reload recipe: refused, "use a core loader".
+- **The model's own GPU fails `preflight_workers`**: the node stops with an error; fix the GPU / driver or load the
+  model on another device.
+- **A GPU with no kernels in this torch build**: refused with a hint to install a matching torch build, instead of a
+  CUDA error mid-run.
+- **Expecting a speed-up with `C2C_DISTRIBUTED_SIMULATE`**: that variable runs several ranks on one device to test the
+  setup; it is slower than not splitting.
+- **Worker copies stay loaded** (`processes` backend): ComfyUI's "Unload models" also stops the workers. Settings >
+  C2C > Multi-GPU > **Unload idle GPU workers after (s)** (`C2C_DISTRIBUTED_IDLE_UNLOAD_S`; 0 = keep loaded) frees
+  them after that many idle seconds.
+
+---
+
+# Design record (L9.38, A27)
+
+Status 2026-11-19: slices 0, 1, 2a and 2c built and tested; the multi-process path (2b) is built and checked with
+gloo CPU ranks in WSL only; NCCL on real GPUs is not verified. Speed-up is **not measured yet**: that needs a machine
+with two or more GPUs (see "What is measured"). This part is the A7 design record: what the subsystem does, what it
+refuses to do, how it fails, what it costs, and how to turn it off.
 
 ## What it is for
 
@@ -14,7 +156,7 @@ One ComfyUI, several GPUs, used together:
 | **CFG / batch split** | cond and uncond (and batch chunks) of each step on different GPUs | one generation, up to ~2x with CFG > 1 | **ComfyUI core** (`MultiGPU CFG Split`, 0.39+) for any model; inside **C2C Multi-GPU Split** the batch split of each call comes first and is combined with sequence parallelism (e.g. 2 x 4 on 8 GPUs) |
 | **Sequence parallel (Ulysses / Ring / USP)** | every attention layer splits the token sequence over the GPUs | one long video, attention-bound models | **C2C Multi-GPU Split** (this package), one box, any OS |
 | **Data parallel** | each GPU or machine renders whole jobs: seeds, shots, batches | throughput | C2C Farm (`renderfarm/`); fan-out node = slice 3 |
-| **FSDP (weight sharding)** | each GPU holds 1/N of the weights | a model that does not fit one GPU | slice 2b, Linux + NCCL |
+| **FSDP (weight sharding)** | each GPU holds 1/N of the weights | a model that does not fit one GPU | slice 2b' (not built; tensor-parallel building blocks only), Linux + NCCL |
 | **Tile work-stealing** | upscale / refine tiles pulled by whichever GPU is free | big frames | slice 4 |
 
 It lives in `c2c_distributed/` (a sub-package of this pack).
@@ -70,10 +212,9 @@ No ComfyUI model code is copied (ComfyUI is GPL-3.0, this pack Apache-2.0): only
 
 ## Nodes
 
-| Node | Does |
-|---|---|
-| **C2C GPU Inventory** | the report above, on the node and as JSON |
-| **C2C Multi-GPU Split** (id `C2CSequenceParallel`) | MODEL -> MODEL; `gpus` (0 = all), `strategy` auto / ulysses / ring, `min_tokens_per_gpu`, `fast_link_gpus`. Any model: batch items to GPU groups. Wan / MiniMax H3: tokens split inside each group too. Put it last in the model chain. With one GPU the model passes through unchanged. |
+The two nodes are described for users at the top of this page:
+[C2C GPU Inventory](#c2c-gpu-inventory-c2cgpuinventory) and
+[C2C Multi-GPU Split](#c2c-multi-gpu-split-c2csequenceparallel).
 
 ## What is measured (2026-10-24, owner's PC: one RTX 4060 Laptop, CPU testbed)
 
@@ -110,7 +251,10 @@ model memory; never use it for speed.
 | Too few tokens per GPU | that call runs on one GPU; logged as a WARNING with the reason (A27 GPU-007) |
 | A rank raises (OOM, interrupt) | every other rank is released from its collective; the run fails with that rank's error; rank 0's own exception keeps its type (ComfyUI's interrupt still works) |
 | A rank stalls | the collective times out after 600 s and names the rank; the worker-pool drain is bounded too (A27 GPU-003: it used to wait for ever on a stuck GPU thread) |
-| `C2C_DISTRIBUTED=off` while core's MultiGPU clones exist | core's own CFG split runs untouched (A27 GPU-004) |
+| `C2C_DISTRIBUTED=off` (or the setting off) while core's MultiGPU clones exist | core's own CFG split runs untouched (A27 GPU-004) |
+| A GPU whose compute capability has no kernels in this torch build | refused before running, with the torch build hint, instead of a raw CUDA error mid-run (L9.251) |
+| `memory_policy` = fit and a GPU lacks room for one model copy | that GPU and every later one are left out; the plan says so (L9.174) |
+| `preflight_workers` and a GPU fails the small kernel check | that GPU and every later one are left out; a failed model GPU stops the run (L9.174) |
 | Loader without a reload factory (some custom loaders, GGUF) | refused: core's multi-GPU clones need it ("use a core loader") |
 | Core's `MultiGPU CFG Split` also in the chain | this node takes the clones; its own batch split does the cond / uncond part per call |
 | Batch does not divide the GPU count (3 items, 2 GPUs) | tokens are split instead |
@@ -119,15 +263,19 @@ model memory; never use it for speed.
 
 * No cost when unused: importing starts nothing; the Inventory probes run only when its node runs (backend probes
   cached per ComfyUI run).
-* Memory: one full model copy per GPU (as core's CFG split). Weight sharding is slice 2b.
+* Memory: one full model copy per GPU (as core's CFG split). Weight sharding is not built (slice 2b').
+* Worker processes (`rank_backend` processes) keep their model copies loaded between runs. ComfyUI's "Unload models"
+  and its out-of-memory path stop them; the setting **Unload idle GPU workers after (s)**
+  (`C2C_DISTRIBUTED_IDLE_UNLOAD_S`, default 0 = keep) frees them after that many idle seconds (ad8e8ed).
 * Exchange per attention call: Ulysses moves q, k, v and the output once each (3 + 1 all-to-alls of the shard);
   Ring passes K and V N-1 times. On PCIe without P2P the copies go through host memory - the Inventory node warns.
 
 ## Compatibility
 
 * Nothing changes for workflows that do not use the new nodes; with one GPU the model is unchanged.
-* Kill switch: `C2C_DISTRIBUTED=off` - the nodes refuse with that reason, and a model already patched runs as one
-  normal single-GPU call.
+* Kill switch: Settings > C2C > Multi-GPU > C2C Distributed (multi-GPU) (restart; c5d0416), or `C2C_DISTRIBUTED=off`
+  (the variable wins; off / 0 / false / no). The nodes refuse with that reason, and a model already patched runs as
+  one normal single-GPU call.
 * Licences: Apache-2.0 like the pack. raylight (Apache-2.0) and ComfyUI-Distributed (Apache-2.0) were read for
   behaviour; their ComfyUI-derived files (GPL-3.0) were not copied.
 
@@ -143,7 +291,7 @@ model memory; never use it for speed.
 | 2c | Batch (CFG) split x sequence parallel | done (Wan) |
 | 2d | ControlNet; more adapters (VACE, Animate, Flux, LTX); H3 cond / uncond on separate GPU groups (H3 calls run batch 1) | to do |
 | 3 | Data-parallel fan-out to Farm backends, collector | to do |
-| 4 | Tile work-stealing upscale / refine | to do |
+| 4 | Tile work-stealing upscale / refine | tile-task service and dispatch code built (`tasks.py`, `tiles.py`, `tile_dispatch.py`; L9.214 / L9.215), tested with CPU workers; the multi-GPU replica provider is not built and multi-GPU speed is NOT VERIFIED |
 
 ## A27 (2026-11-13): repair audit, four modes, GPU families, multi-process path
 
@@ -153,8 +301,8 @@ Audit against upstream raylight and the fixes: `MASTER_TASK_REGISTER.md` section
 
 | Mode | What it is | VRAM per GPU |
 |---|---|---|
-| 1 | Independent jobs on different GPUs | full model per GPU |
-| 2 | Independent pieces of one job: CFG / batch items, tiles / windows | full model per GPU |
+| 1 | Data parallel: independent jobs on different GPUs, and CFG / batch items of one call (whole items per GPU) | full model per GPU |
+| 2 | Pieces of one item: tiles / windows, recombined | full model per GPU |
 | 3 | Sequence / attention parallelism: Ulysses / Ring / USP | full model per GPU |
 | 4 | Model-weight sharding: tensor parallel / FSDP2 | the only mode that lowers weight memory per GPU |
 

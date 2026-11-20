@@ -1,285 +1,144 @@
-# Video Frame Player (MEC)
+# Video Frame Player
 
-> **Node**: `VideoFramePlayerMEC` — *MaskEditControl/Preview*
-> **File**: [`nodes/video_frame_player.py`](../nodes/video_frame_player.py) + [`js/video_frame_player.js`](../js/video_frame_player.js)
-> **Category icon**: 🎞️
+An in-graph scrubber for a frame batch. It plays inside the node, lets you set a trim range on its timeline and drag
+a crop rectangle on the picture, and outputs the trimmed, cropped, rotated, padded and resized batch. It replaces a
+chain of Trim -> Crop -> Resize -> Preview nodes.
 
-A single, in-graph video scrubber that combines four common video pre-processing
-steps into one node so you don't have to chain `Load Video → Trim → Crop →
-Resize → Preview` every time. Plays inside the node, lets you drag a crop
-rectangle directly on the preview, and emits the trimmed/cropped/resized
-batch ready to feed a sampler or video saver.
+## Video Frame Player (`VideoFramePlayerMEC`)
 
----
+**Menu:** 🐺 C2C/🧰 Core/Preview · **Parameters:** [NODE_REFERENCE](../NODE_REFERENCE.md#videoframeplayermec)
+· **Files:** [`nodes/video_frame_player.py`](../nodes/video_frame_player.py),
+[`js/video_frame_player.js`](../js/video_frame_player.js)
 
-## What it's for
+The dashed rotate / pad outline on the node's picture (2026-11-19, f6d8917) is NOT VERIFIED in the browser yet; the
+rotate / pad outputs themselves are unit tested.
 
-| You want to… | Use this node because… |
+### What it is for
+
+| You want to… | Use |
 |---|---|
-| Quickly inspect every frame of a video batch | Built-in scrubber with play/pause, FPS control, ping-pong loop |
-| Cut a long batch down to the useful range before sampling | Trim handles on the timeline (`frame_start` / `frame_end`) |
-| Run a long video at half rate without re-encoding | `frame_stride` emits every Nth frame |
-| Crop a video to a specific aspect (e.g. 16:9 → 9:16 for TikTok) | Drag-crop overlay with aspect lock |
-| Match a target resolution before sampling | `target_width` / `target_height` + lanczos resize |
-| Upscale 2× with the best CPU/GPU resampler available | `upscale_factor` + `resize_method = lanczos` |
-| Lock the crop while you fine-tune other parameters | `crop_locked = true` (handles disappear, border becomes dashed orange) |
-| Pick a single hero frame for an img2img refine pass | `output_mode = current_frame` |
+| Look through every frame of a batch | the built-in player: play / pause, `playback_fps`, `loop_mode` (`once`, `loop`, `ping-pong`) |
+| Cut a batch down to the useful range | the green / red trim markers on the timeline (`frame_start` / `frame_end`) |
+| Keep every Nth frame | `frame_stride` (with `output_mode` = `all_frames`) |
+| Crop to an aspect (e.g. 16:9 -> 9:16) | `crop_enabled` + `aspect_ratio`, then drag the rectangle |
+| Straighten a tilted shot, or add room for outpainting | `rotate_degrees`, `pad_left` / `pad_top` / `pad_right` / `pad_bottom`, and the `pad_mask` output |
+| Reach a target size | `target_width` / `target_height`, `upscale_factor`, `resize_method` |
+| Pick one frame for an image pass | `output_mode` = `current_frame` |
 
-It is **not** a video loader (use ComfyUI's built-in or `VHS` for that) and
-**not** a sampler. It sits between a loader and a sampler/saver.
+### When to pick it
 
----
+It is not a loader. Put it after one, for example [Load Video (C2C)](video-io.md#load-video-c2c-loadvideoc2c), which
+already has its own player, crop tool and in / out handles for choosing what to LOAD. Use the Frame Player when the
+frames are already in the graph (a sampler's output, a mid-graph batch), or for rotate / pad and the `source_map`.
+To compare two clips use the [Video Comparer](video-comparer.md).
 
-## Inputs
+### Minimal wiring
 
-There are 23 widgets, organized into five groups.
+```
+Load Video (C2C) ──IMAGE──► Video Frame Player ──processed──────► next node
+                                               ──playback_fps───► Save Video (C2C).fps
+                                               ──pad_mask───────► inpaint / outpaint mask   (when padding)
+```
 
-### 1. Source
+### Key controls
 
-| Parameter | Type | Default | Notes |
-|---|---|---|---|
-| `frames` | IMAGE (B,H,W,C) | — | The frame batch from any video loader. B = number of frames. |
-| `frame_index` | INT | `0` | Which frame to emit on the `frame` output. The timeline drags this. Clamped to the trim range. |
-| `output_mode` | combo | `current_frame` | `current_frame` = emit the single selected frame on `processed`. `all_frames` = emit the whole trimmed/strided batch on `processed`. |
+The full list with defaults is in [NODE_REFERENCE](../NODE_REFERENCE.md#videoframeplayermec). In the node, the
+controls are folded into the sections Range, Player, Crop, Resize, Transform and Preview.
 
-### 2. Trim / playback (Timeline group)
+- `output_mode`: `current_frame` puts the selected frame on `processed`; `all_frames` puts the whole trimmed /
+  strided batch there.
+- `frame_index`: the frame shown and emitted on `frame`. The timeline drags it.
+- `frame_start` / `frame_end` (inclusive; `-1` = the last frame) and `frame_stride`.
+- Crop: `crop_enabled`, `aspect_ratio` (`free`, `original`, `1:1`, `4:3`, `3:4`, `16:9`, `9:16`, `2:1`, `21:9`,
+  `custom` with `custom_aspect_w` / `custom_aspect_h`). The rectangle is stored as fractions of the frame
+  (`crop_x` ... `crop_h`), so it survives a resolution change, and it is aspect-snapped and clamped on the server too.
+- Transform (2026-11-19, f6d8917; mapped from AusBoss's Video Crop + Rotate + Pad, own implementation):
+  `rotate_degrees` turns the picture inside the crop window (positive = clockwise) about its centre. Pixels come
+  from the whole source frame, so the corners fill with real picture where there is any. `pad_*` adds pixels on
+  each side. `pad_mode` fills the padding and any empty rotation corners: `color` (`pad_color`, `R, G, B` 0-255 or
+  `#RRGGBB`), `edge` (nearest edge pixel) or `mirror`.
+- Resize: `target_width` / `target_height` (0 = keep; one of them set = the other follows the aspect), then
+  `upscale_factor` multiplies the result. `resize_method`: `lanczos` uses PIL Lanczos for up to 4 frames and
+  antialiased bicubic for larger batches; `bicubic`, `bilinear`, `area`, `nearest-exact` as named.
+- Preview: `preview_width`, `preview_format` (`png` default, lossless; `jpeg` smaller), `preview_quality` (JPEG
+  only). These change only what the browser shows; the IMAGE outputs always use the full source frames.
 
-These only affect the `processed` output (and the live preview). The
-`frame` output is always the single picked frame.
+Order of operations when you queue:
 
-| Parameter | Type | Default | Behavior |
-|---|---|---|---|
-| `frame_start` | INT | `0` | First frame of the trim range. Drag the **green** marker on the timeline. |
-| `frame_end` | INT | `-1` | Last frame (inclusive). `-1` = "last frame in batch" so it auto-tracks variable-length inputs. Drag the **red** marker. |
-| `frame_stride` | INT | `1` | In `all_frames` mode, output every Nth frame. Useful to halve a 60 fps batch to 30 fps without re-encoding. Marked with orange ticks on the timeline. |
-| `playback_fps` | FLOAT | `24.0` | Preview-only playback speed. Echoed on the `playback_fps` output for video savers. |
-| `loop_mode` | combo | `loop` | Preview behavior at end of trim range: `once`, `loop`, or `ping-pong`. |
+```
+frames ─► current_frame: frames[frame_index]  |  all_frames: frames[frame_start : frame_end+1 : frame_stride]
+       ─► crop (if crop_enabled)
+       ─► rotate (if rotate_degrees ≠ 0) ─► pad (if any pad_* > 0)      pad_mask = 1 where filled
+       ─► resize to target_width / target_height, × upscale_factor
+       ─► processed
+```
 
-**Hotkeys (canvas focused):**
+The `frame` output skips all of this: it is the untouched source frame at `frame_index`.
+
+### Hotkeys and the crop overlay
+
+Click the picture first so it has keyboard focus.
 
 | Key | Action |
 |---|---|
 | `Space` | Play / pause |
-| `←` / `→` | Step ±1 frame (Shift = ±10) |
+| `←` / `→` | Step 1 frame (Shift: 10) |
 | `Home` / `End` | Jump to `frame_start` / `frame_end` |
-| `I` | Mark IN at current frame (sets `frame_start`) |
-| `O` | Mark OUT at current frame (sets `frame_end`) |
-| `R` | Reset crop to full frame (no-op when `crop_locked`) |
+| `I` / `O` | Set `frame_start` / `frame_end` to the current frame |
+| `R` | Reset the crop to the full frame (not while `crop_locked`) |
 
-### 3. Crop
+The crop rectangle has 4 corner and 4 edge handles; drag inside it to move it. The outside is dimmed, rule-of-thirds
+guides are drawn inside, and the crop size in source pixels is shown in its corner. With `crop_locked` on, the
+handles disappear and the border turns dashed. With rotate or pad on, a dashed outline shows the source area the
+output comes from, and a label lists the angle and the padding.
 
-The crop is stored as **normalized** [0..1] fractions, so it survives
-resolution swaps. Server-side it's also clamped & aspect-snapped, so the
-emitted frame can never escape the source rectangle.
+### Long clips: one proxy video (2026-11-19, c2ed103)
 
-| Parameter | Type | Default | Behavior |
-|---|---|---|---|
-| `crop_enabled` | BOOLEAN | `false` | When false the rectangle isn't drawn and crop is bypassed. |
-| `crop_locked` | BOOLEAN | `false` | Disables drag/resize. Border switches to dashed orange. Use this once you've dialled in the crop. |
-| `aspect_ratio` | combo | `free` | `free`, `original`, `1:1`, `4:3`, `3:4`, `16:9`, `9:16`, `2:1`, `21:9`, `custom`. When non-free the rectangle is aspect-locked during drag and snapped on the server. |
-| `custom_aspect_w` | FLOAT | `16.0` | Used only when `aspect_ratio = custom`. |
-| `custom_aspect_h` | FLOAT | `9.0` | Used only when `aspect_ratio = custom`. |
-| `crop_x` / `crop_y` | FLOAT [0..1] | `0` / `0` | Top-left corner. Set automatically by the drag overlay. |
-| `crop_w` / `crop_h` | FLOAT (0..1] | `1` / `1` | Width / height as a fraction of source. |
+For clips longer than 120 frames the node writes ONE preview-size H.264 video instead of a picture per frame. Every
+frame of it is a keyframe, so a seek in the browser lands on the exact frame. The file sits in ComfyUI's temp folder
+and is reused when the same clip, size and fps come back. Shorter clips still get one PNG / JPEG per frame. Measured
+in that commit, 300 frames at 320x180: 300 PNGs / 54.8 MB became one mp4 / 10.8 MB; writing took 2.84 s instead of
+0.63 s.
 
-**Drag overlay UX:**
+- Change the threshold with the setting *C2C > Video > Preview > Frame Player: one proxy video above (frames)*, or
+  the environment variable `C2C_FRAME_PLAYER_PROXY_ABOVE` (it wins). 0 = always one picture per frame.
+- Without PyAV / libx264 the node shows at most that many evenly spaced stills, and says so; scrubbing then shows
+  the nearest kept frame.
 
-- 4 corner handles (resize from corner, opposite corner stays fixed)
-- 4 edge handles (resize one side; aspect-snap re-anchors the opposite edge)
-- Drag inside the rectangle to **move** without resizing
-- Outside the crop is dimmed; rule-of-thirds guides drawn inside
-- Live `W × H` (in source pixels) shown in the top-left of the rect
-- Cropping NEVER scrolls outside the canvas border (clamped client + server)
+### Reading the outputs
 
-### 4. Resize / upscale
+- `frame` (the untouched frame at `frame_index`), `frame_index`, `frame_count` (all input frames).
+- `processed`, `out_width`, `out_height`, `trimmed_count` (frames on `processed`).
+- `crop_x_px`, `crop_y_px`, `crop_w_px`, `crop_h_px`: the crop in source pixels.
+- `frames_trimmed`: the trimmed / strided source batch with NO crop or resize, for a saver that should keep the
+  source size. `trim_start_idx` / `trim_end_idx`, `width` / `height` (source), `duration` (seconds, at
+  `playback_fps`), `playback_fps`.
+- `video_info` (JSON): width, height, frame_count, trim range and stride, trimmed_count, fps, duration_sec,
+  loop_mode, crop (`crop_norm`, `crop_px`), output size, aspect_ratio, dtype, channels, preview_format.
+- `pad_mask` (MASK, same size as `processed`): 1 where padding or an empty rotation corner was filled, 0 on real
+  picture. All 0 without rotate / pad.
+- `source_map` (JSON): for each frame on `processed` its `source_frame`, `seconds` and `timecode` (non-drop, at
+  `playback_fps`, from 00:00:00:00), plus a `transform` block (crop in pixels, rotation, padding, sizes before and
+  after the resize, scale) and `out_to_source_affine`: a 2x3 matrix that takes a `processed` pixel back to source
+  pixels.
 
-Applied **after** crop, to whatever the cropped resolution is.
+### Common mistakes
 
-| Parameter | Type | Default | Behavior |
-|---|---|---|---|
-| `resize_method` | combo | `none` | `none`, `lanczos`, `bicubic`, `bilinear`, `area`, `nearest-exact`. Use `lanczos` for the best quality (PIL Lanczos for B≤4, GPU antialiased bicubic for larger batches — visually equivalent at moderate scale). |
-| `target_width` | INT | `0` | Output width. `0` = keep crop width. If only one of W/H is set, the other is computed to preserve aspect. |
-| `target_height` | INT | `0` | Output height. `0` = keep crop height. |
-| `upscale_factor` | FLOAT | `1.0` | Multiplier applied **after** target W/H. So `target=512×512, upscale=2` → 1024×1024. |
-
-### 5. Preview cache
-
-| Parameter | Type | Default | Notes |
-|---|---|---|---|
-| `preview_width` | INT | `480` | Width of the JPEG thumbnails sent to the browser. Lower = faster scrubbing. |
-| `preview_quality` | INT | `80` | JPEG quality (30..95). Cached to disk by content digest, so the second execution is near-instant. |
-
----
-
-## Outputs
-
-| # | Name | Type | Meaning |
-|---|---|---|---|
-| 0 | `frame` | IMAGE (1,H,W,C) | The single full-resolution selected frame, **pre-crop, pre-resize**. Use this when you want a hero frame untouched. |
-| 1 | `frame_index` | INT | Echo of the clamped `frame_index`. |
-| 2 | `frame_count` | INT | Total frames in the input batch (B). |
-| 3 | `processed` | IMAGE | The main output: 1 frame in `current_frame` mode, or N frames after trim+stride in `all_frames` mode, **with crop + resize + upscale applied**. |
-| 4 | `out_width` | INT | Final width of `processed`. |
-| 5 | `out_height` | INT | Final height of `processed`. |
-| 6 | `crop_x_px` | INT | Crop left edge in source pixels. |
-| 7 | `crop_y_px` | INT | Crop top edge in source pixels. |
-| 8 | `crop_w_px` | INT | Crop width in source pixels (= width of `processed` before resize). |
-| 9 | `crop_h_px` | INT | Crop height in source pixels. |
-| 10 | `trimmed_count` | INT | How many frames `processed` actually contains (useful as the frame count to a video saver). |
-| 11 | `playback_fps` | FLOAT | Echo of `playback_fps` — wire straight into a video saver. |
-
----
-
-## Pipeline order (what happens when you press Queue)
-
-```
-frames (B,H,W,C)
-  └─► pick mode ─────────────────────────────────┐
-       current_frame: take frames[idx:idx+1]     │
-       all_frames:    take frames[start:end+1:stride]
-                                                 │
-       └─► crop_enabled? ─────────────────────────┤
-            yes: snap to aspect, clamp, slice     │
-            no:  pass-through                     │
-                                                 │
-       └─► resize_method != none? ────────────────┤
-            yes: target_w/h (auto-derive missing) │
-                 lanczos / bicubic / bilinear / area / nearest
-            no:  pass-through                     │
-                                                 │
-       └─► upscale_factor != 1.0? ────────────────┤
-            yes: × factor with same resize_method │
-            no:  pass-through                     │
-                                                 ▼
-                                            processed
-```
-
-The single-frame `frame` output never goes through this pipeline — it is the
-raw source frame. Useful when you want the same frame for both a preview
-chip and a refine pass.
-
----
-
-## Recipes
-
-### A. Trim a 240-frame load to frames 30–180, half rate, 1024-wide
-
-| Widget | Value |
+| What you see | Why / what to do |
 |---|---|
-| `output_mode` | `all_frames` |
-| `frame_start` | `30` |
-| `frame_end` | `180` |
-| `frame_stride` | `2` |
-| `crop_enabled` | `false` |
-| `resize_method` | `lanczos` |
-| `target_width` | `1024` |
-| `target_height` | `0`   *(auto-keep aspect)* |
+| The crop rectangle will not move | `crop_enabled` is off, or `crop_locked` is on (dashed border). |
+| The aspect "snaps back" while dragging | That is the aspect lock; pick `free`. |
+| `processed` has 1 frame in `all_frames` | The trim range is one frame wide; check `frame_start` / `frame_end`. |
+| The output did not change size | Both `target_width` and `target_height` are 0 and `upscale_factor` is 1. |
+| The output was resized although `resize_method` is `none` | A target size or upscale is set; `none` then resizes with bilinear. |
+| "mirror padding needs each pad smaller than the picture" | Use `edge` or `color` for wide pads. |
+| "pad_color ... is not 'R, G, B' (0-255) or #RRGGBB" | Fix the text, e.g. `127, 127, 127`. |
+| "proxy video failed to load - re-queue the node" (on the picture) | The temp proxy is gone; queue the node again. |
+| Scrubbing a long clip jumps between frames | No PyAV / libx264: only evenly spaced stills were written (the node says so). |
 
-`processed` will contain **76 frames** (`(180−30)/2 + 1`) at 1024×auto.
+### Acknowledgements
 
-### B. Convert 16:9 plate → 9:16 vertical for TikTok
-
-| Widget | Value |
-|---|---|
-| `output_mode` | `all_frames` |
-| `crop_enabled` | `true` |
-| `aspect_ratio` | `9:16` |
-| `crop_w`/`crop_h` | drag in the canvas to position the vertical band |
-| `resize_method` | `lanczos` |
-| `target_width` | `1080` |
-| `target_height` | `1920` |
-
-### C. Pick one hero frame and refine via img2img
-
-| Widget | Value |
-|---|---|
-| `frame_index` | drag timeline to the right shot |
-| `output_mode` | `current_frame` |
-
-Wire `frame` (output 0) → KSampler. The crop/resize section is ignored
-unless you also need a cropped hero — in which case wire `processed` (3) and
-set `output_mode = current_frame`.
-
-### D. Lock the crop and tweak the resize independently
-
-1. Drag the crop rect to the right framing.
-2. Set `crop_locked = true` (border becomes dashed orange).
-3. Now changing `target_width`, `upscale_factor`, etc. won't move the rect
-   even if you click on the canvas.
-
-### E. 2× lanczos upscale of an existing crop
-
-| Widget | Value |
-|---|---|
-| `resize_method` | `lanczos` |
-| `target_width` | `0` |
-| `target_height` | `0` |
-| `upscale_factor` | `2.0` |
-
-When both targets are 0, the upscale multiplies the **post-crop** size, so
-this is "make the crop 2× bigger with lanczos".
-
----
-
-## Performance notes
-
-- **Preview thumbnails are cached** under `ComfyUI/temp/` keyed by a
-  content digest of the batch + `preview_width` + `preview_quality`. The
-  second run with the same input is nearly instantaneous.
-- **GPU lanczos for batches > 4** uses `F.interpolate(antialias=True,
-  bicubic)` — visually equivalent to PIL Lanczos at moderate scale and
-  100× faster. Single frames go through PIL Lanczos for max fidelity.
-- **Crop is a tensor slice**, not a copy + paste, so it's effectively free.
-- **Interrupt-aware**: hits `_interrupt_check.check()` inside the preview
-  loop, so pressing the ComfyUI ⏹ button stops it cleanly.
-
----
-
-## Wiring it into a video pipeline
-
-```
-VHS Load Video ──▶ Video Frame Player ──┬──▶ KSampler (img2img per frame)
-                                        │
-                                        ├── trimmed_count ──▶ (frame count to saver)
-                                        └── playback_fps ───▶ (fps to saver)
-```
-
-A typical full pipeline:
-
-```
-Load Video → Video Frame Player → KSampler → VAE Decode → VHS Combine
-                  │
-                  └── set output_mode=all_frames, crop_enabled=true,
-                       aspect_ratio=16:9, target_width=1280, lanczos
-```
-
-Then in `VHS Video Combine` wire `frame_rate ← playback_fps` from the
-Player so the output FPS automatically follows what you see in the
-preview.
-
----
-
-## Troubleshooting
-
-| Symptom | Fix |
-|---|---|
-| Crop rectangle won't drag | Toggle `crop_enabled`. If still stuck, `crop_locked` is true (border is dashed orange) — turn it off. |
-| Aspect ratio "snaps back" mid-drag | That's the aspect lock. Choose `free` if you want unrestricted drag. |
-| `processed` has only 1 frame in `all_frames` mode | Check `frame_start` ≤ `frame_end`. The trim range may be 1 frame wide. |
-| Preview is laggy on long clips | Lower `preview_width` (e.g. 320) or `preview_quality` (e.g. 60). The cached JPEGs get smaller. |
-| Output is wrong size | If both `target_width` and `target_height` are 0, the post-crop size is kept. Set at least one. |
-| Loop won't stop at the trim end | `loop_mode = once` plays the trim range once and pauses. `loop` and `ping-pong` are infinite. |
-| `R` key doesn't reset crop | Click on the canvas first to give it focus, or `crop_locked` is on. |
-
----
-
-## Acknowledgements
-
-The drag-crop UX was inspired by **Olm DragCrop** by [Olli Sorjonen](https://github.com/o-l-l-i/ComfyUI-Olm-DragCrop)
-(source-available, not OSS) and the trim/timeline + resize widget layout
-was inspired by **WhatDreamsCost-ComfyUI**'s Load Video UI by
-[Jonathan Watkins](https://github.com/WhatDreamsCost/WhatDreamsCost-ComfyUI)
-(GPL-3.0). **No source code was copied** from either project — both the
-overlay and the timeline are clean-room implementations using standard
-HTML5 canvas patterns. See [NOTICE.md](../NOTICE.md) for the full
-attribution and license-compatibility statement.
+The drag-crop interaction was inspired by Olm DragCrop by Olli Sorjonen
+(<https://github.com/o-l-l-i/ComfyUI-Olm-DragCrop>), and the trim timeline and resize layout by WhatDreamsCost's
+Load Video UI (<https://github.com/WhatDreamsCost/WhatDreamsCost-ComfyUI>, GPL-3.0). Both are clean-room
+implementations; no code was copied.

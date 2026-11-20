@@ -1,113 +1,140 @@
-# Anamorphic / Pixel-Aspect-Ratio round trip
+# Anamorphic / pixel-aspect round trip
 
-> AI models — and ComfyUI itself — assume **square pixels**. An anamorphic
-> plate (e.g. a `4448×3840` scan with a pixel aspect ratio of `1.7266` that
-> displays as `2:1` in Nuke) reads here as a squarish `1.158:1` image. Run AI
-> on it directly and everything comes back distorted the moment the lens
-> squeeze is reapplied. These two nodes are the standard fix: **desqueeze to
-> square pixels before AI, resqueeze back to the plate after.**
+ComfyUI and the image models treat every pixel as square. An anamorphic plate, for example a `4448×3840` scan with a
+pixel aspect ratio (PAR) of `1.7266` that Nuke displays as `2:1`, reads here as a squarish `1.158:1` picture. Anything
+generated for that shape comes back distorted once the squeeze is reapplied. These two nodes convert the plate to
+square pixels before the AI step and back to the plate's pixel size after it.
 
-Nodes: **PARDesqueezeMEC** and **PARResqueezeMEC** (category **MEC/Plate**).
-The identical pair also ships in NukeMax as **PAR Desqueeze / PAR Resqueeze**
-(category NukeMax/Transform) — the `par_info` strings are interchangeable
-between the two packs.
-
----
-
-## Why your 4448×3840 plate looks wrong
-
-If the pixels were square, `4448×3840` would be a `1.158:1` frame. But your
-footage is anamorphic: Nuke's *format* carries a pixel aspect ratio of
-`1.7266`, so it displays the frame stretched horizontally to `2:1`
-(`4448 × 1.7266 ÷ 3840 ≈ 2.0`). ComfyUI has no concept of pixel aspect ratio —
-it treats every pixel as square — so it sees the un-stretched `1.158:1` and any
-generation is made for *that* shape. Bring the result back into Nuke, the
-`1.7266` squeeze is reapplied, and circles become ovals, faces widen, etc.
-
----
-
-## The pipeline
-
-```
-Nuke plate 4448×3840 (PAR 1.7266, displays 2:1)
-        │
-        ▼
-  PARDesqueezeMEC  ── par_info ───────────────┐   (stretch_width)
-        │                                      │
-        ▼                                      │
-  7680×3840  ← true 2:1, SQUARE pixels         │
-        │                                      │
-        ▼                                      │
-  … your AI graph (SDXL / Wan / inpaint / …)   │
-        │                                      │
-        ▼                                      │
-  PARResqueezeMEC ◀── par_info ────────────────┘
-        │
-        ▼
-  4448×3840  ← exact original pixel dims, back into Nuke
-```
-
-Everything the resqueeze needs to undo the transform travels in the `par_info`
-string, so the round trip restores the **exact** original `W×H` — even if your
-AI graph changed the resolution (an upscale, a crop-and-stitch).
-
----
-
-## PARDesqueezeMEC — parameters
-
-| Parameter | Default | Effect |
-|---|---|---|
-| `image` | — | The anamorphic plate |
-| `par_preset` | `ARRI 4448x3840→2:1 (1.7266)` | Named pixel aspect ratio. Presets: square `1.0`, anamorphic `2.0` / `1.8` / `1.5` / `1.33`, the `1.7266` 2:1 case, NTSC DV `0.9091`, PAL DV `1.0940`, or `custom` |
-| `pixel_aspect` | `1.7266` | Used only when `par_preset = custom`. `>1` = pixels wider than tall |
-| `method` | `stretch_width` | `stretch_width` keeps every scanline (recommended — `4448×3840 → 7680×3840`); `squash_height` keeps the pixel count low (`4448×3840 → 4448×2224`) |
-| `filter` | `bicubic` | Resample filter (`bicubic` / `bilinear` / `nearest` / `area`) |
-
-**Outputs:** `image` (square-pixel frame) and `par_info` (JSON — wire this into
-the resqueeze node's `par_info` input).
-
-## PARResqueezeMEC — parameters
-
-| Parameter | Default | Effect |
-|---|---|---|
-| `image` | — | The AI-processed square-pixel frame |
-| `par_info` | — | Connect from the desqueeze node's `par_info` output |
-| `filter` | `bicubic` | Resample filter |
-
-**Outputs:** `image` (restored to the plate's exact original pixel dimensions)
-and `info` (JSON of what was restored).
-
----
-
-## Recipes
-
-**Standard desqueeze → AI → resqueeze:**
-
-```
-Load plate → PARDesqueezeMEC (stretch_width, 1.7266) → [square 7680×3840]
-   → your AI nodes → PARResqueezeMEC (par_info wired from desqueeze)
-   → Save / back to Nuke
-```
-
-**Custom camera PAR:** set `par_preset = custom` and type your exact pixel
-aspect in `pixel_aspect` (e.g. `1.79` for a specific ARRI open-gate mode).
-
-**Non-anamorphic (square) footage:** set `par_preset = square 1.0` — the node
-is a no-op and passes the image through untouched, so you can leave it in a
-template graph safely.
-
----
-
-## Troubleshooting
-
-| Symptom | Cause / fix |
+| Node | Use it to |
 |---|---|
-| Resqueeze errors "par_info is not valid" | The `par_info` input isn't wired from a PARDesqueeze node (or is empty). Connect the desqueeze node's `par_info` output |
-| Output still looks stretched in Nuke | Check your Nuke *format's* pixel aspect matches what you desqueezed with. The resqueeze restores pixel **dimensions**; Nuke reapplies the PAR |
-| Want square-pixel delivery instead of a Nuke round trip | Skip the resqueeze — the desqueezed frame *is* correct at `1.0` PAR for any square-pixel target |
+| [PAR Desqueeze](#par-desqueeze-pardesqueezemec) (`PARDesqueezeMEC`) | Turn non-square-pixel frames into square pixels, optionally with an overscan border |
+| [PAR Resqueeze](#par-resqueeze-parresqueezemec) (`PARResqueezeMEC`) | Bring the processed frames back to the plate's original width × height, and check the round trip |
 
----
+### Why a 4448×3840 plate looks wrong
+
+With square pixels, `4448×3840` is a `1.158:1` frame. Nuke's format carries a PAR of `1.7266`, so it displays the
+frame stretched to `2:1` (`4448 × 1.7266 ÷ 3840 ≈ 2.0`). ComfyUI has no pixel aspect, so it sees the unstretched
+`1.158:1`. Bring that result back into Nuke, the `1.7266` squeeze is reapplied, and circles become ovals.
+
+### The round trip
+
+```
+Plate 4448×3840 (PAR 1.7266) ─┬─▶ PAR Desqueeze (stretch_width)
+                              │      ├─ image 7680×3840, square pixels ─▶ your AI graph ─▶ image ──┐
+                              │      └─ par_info ──────────────────────────────────────▶ par_info ──┤ PAR Resqueeze
+                              └─ (optional) ─────────────────────────────────────────▶ reference ─┘   └─ image 4448×3840 ─▶ Save / Nuke
+```
+
+Everything Resqueeze needs travels in the `par_info` string. Resqueeze always returns the plate's original
+width × height, even if the AI graph changed the resolution. The geometry is exact; with a PAR other than 1.0 the
+pixels are resampled on the way there and back, so they are not bit-identical. Wire `reference` to measure the difference (see PAR Resqueeze below).
+
+## PAR Desqueeze (`PARDesqueezeMEC`)
+
+**Menu:** 🐺 C2C/🧰 Core/Plate, shown as "PAR Desqueeze (anamorphic → square px)" ·
+**Parameters:** [NODE_REFERENCE](../NODE_REFERENCE.md#pardesqueezemec)
+
+### What it is for
+
+Resampling frames shot with non-square pixels (anamorphic lens, DV, HDV) to square pixels, and recording what it did
+in `par_info` so PAR Resqueeze can undo it.
+
+### When to pick it
+
+Before any AI step on anamorphic or DV footage. For square-pixel footage you do not need it: with `par_preset` =
+`square 1.0` the image passes through unchanged (an overscan border is still added if you ask for one), so it is safe
+to leave in a template graph.
+
+### Key controls
+
+- `par_preset`: the camera or format. Presets: `square 1.0`, `anamorphic 2x (2.0)`, `anamorphic 1.8x (1.8)`,
+  `ARRI 4448x3840→2:1 (1.7266)` (the default), `anamorphic 1.5x (1.5)`, `anamorphic 1.33x (1.33)`,
+  `NTSC DV (0.9091)`, `PAL DV (1.0940)`, or `custom` to type the value in `pixel_aspect`.
+- `method`: `stretch_width` keeps every scanline (`4448×3840` -> `7680×3840`); `squash_height` keeps the pixel count
+  low (`4448×3840` -> `4448×2224`).
+- `filter`: `bicubic`, `bilinear`, `nearest` (no new values; for masks and IDs) or `area`. `bicubic` is clamped to
+  the input's own value range, so scene-linear highlights and negatives survive.
+- `lens_metadata` (added 2026-11-19, commit f6d8917): camera and lens facts as `key: value` lines or a JSON object,
+  for example `camera: ARRI Alexa 35`, `lens: Cooke 2x`, `squeeze: 2`. They are stored in `par_info` and given back
+  by PAR Resqueeze. If a `pixel_aspect`, `par`, `squeeze`, `anamorphic_squeeze` or `lens_squeeze` value differs from
+  the PAR used by more than 0.5 %, a warning is recorded.
+- `overscan_percent` and `overscan_multiple` (added 2026-11-19, commit f6d8917): add an edge-extended border of this
+  percent of each side, so the AI step has room at the edges, then round the padded size up to a multiple (for
+  example 16 or 64 for a model's size rule). PAR Resqueeze crops the border off again. 0 / 1 = no border, as before.
+
+### Reading the outputs
+
+| Output | What it holds |
+|---|---|
+| `image` | The square-pixel frames, with the overscan border if you asked for one |
+| `par_info` | JSON: `orig_width`, `orig_height`, `pixel_aspect`, `method`, `filter`, `square_width`, `square_height`, `display_aspect`; plus `lens` and `warnings` with lens metadata, and `overscan` (left / right / top / bottom, padded size, percent, multiple) with a border |
+| `overscan_mask` | 1 on the added border, 0 on the real picture; all 0 without overscan. Use it to let the AI step repaint only the border |
+
+### Common mistakes
+
+| Message | What to do |
+|---|---|
+| `pixel_aspect must be > 0` | With `custom`, type a positive `pixel_aspect` |
+| `lens_metadata starts with '{' but is not valid JSON` | Fix the JSON, or write `key: value` lines instead |
+| `lens_metadata line '...' is not 'key: value' or 'key=value'` | One `key: value` per line (or separated by `;`) |
+
+## PAR Resqueeze (`PARResqueezeMEC`)
+
+**Menu:** 🐺 C2C/🧰 Core/Plate, shown as "PAR Resqueeze (back to plate)" ·
+**Parameters:** [NODE_REFERENCE](../NODE_REFERENCE.md#parresqueezemec)
+
+### What it is for
+
+Returning processed square-pixel frames to the plate's original pixel size, so Nuke can reapply the PAR. It leaves
+the pixel aspect itself to Nuke.
+
+### When to pick it
+
+At the end of every graph that started with PAR Desqueeze, when the result goes back to the anamorphic plate.
+For a square-pixel delivery, skip it: the desqueezed frame is already correct at PAR 1.0.
+
+### Key controls
+
+- `par_info`: wire it from PAR Desqueeze, unchanged.
+- `filter`: the same choices as on PAR Desqueeze.
+- `reference` (optional, added 2026-11-19, commit f6d8917): the original plate, as it went into PAR Desqueeze. The
+  result is then compared with it.
+
+If `par_info` holds an overscan border, the node first crops it off, scaled to the size of the incoming frames, then
+resizes to the original size.
+
+### Reading the outputs
+
+| Output | What it holds |
+|---|---|
+| `image` | The frames at the plate's original width × height |
+| `info` | JSON: `restored_width`, `restored_height`, `pixel_aspect`, and `overscan_removed` when a border was cropped |
+| `pixel_aspect` | The plate's PAR from `par_info`, as a number to wire into a writer or format |
+| `metadata` | JSON: size, `pixel_aspect`, `display_aspect`, `method`, a `nuke_format` line (`W H 0 0 W H PAR c2c_plate`), the lens metadata and warnings from PAR Desqueeze, the overscan removed, and with `reference` the `validation` block |
+| `difference` | With `reference`: \|result − reference\| per pixel (mean of the channels, 0-1). All 0 without a reference |
+
+The `validation` block: `result_size`, `reference_size`, `result_frames`, `reference_frames`, `geometry_ok`,
+`frame_count_ok`, and when the sizes match `frames_compared`, `max_abs_diff`, `mean_abs_diff`, `psnr_db` and
+`pixels_over_1_255_pct` (the percent of pixels that changed by more than 1/255). When the sizes differ there is no
+pixel comparison and a `note` asks whether the `par_info` came from this plate.
+
+### Common mistakes
+
+| Message or symptom | What to do |
+|---|---|
+| `par_info is not valid PARDesqueezeMEC output` | `par_info` is empty or not from PAR Desqueeze: wire PAR Desqueeze's `par_info` output |
+| `par_info has a broken overscan entry` | The `par_info` text was edited: wire it unchanged |
+| `the overscan crop ... does not fit the ... input` | Wire the `par_info` of the PAR Desqueeze that made these frames, unchanged |
+| The result still looks stretched in Nuke | The node restores pixel **dimensions**; check that your Nuke format's pixel aspect matches the one you desqueezed with |
+
+## The NukeMax pair
+
+ComfyUI-NukeMaxNodes has its own PAR Desqueeze / PAR Resqueeze (`NukeMax_PARDesqueeze`, `NukeMax_PARResqueeze`). They
+use the same presets and the same core `par_info` keys (`orig_width`, `orig_height`, `pixel_aspect`, ...), but they
+do not have the 2026-11-19 additions: no lens metadata, overscan, reference check or extra outputs. A `par_info` with
+no overscan works in either pack's Resqueeze. A `par_info` made with overscan needs this pack's PAR Resqueeze: the
+NukeMax one ignores the border and would squeeze it into the picture.
 
 ## License
 
-Apache-2.0. Behaviour mirrors Nuke's Reformat pixel-aspect handling.
+Apache-2.0.

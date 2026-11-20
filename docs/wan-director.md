@@ -1,5 +1,11 @@
 # WanDirector — timeline video direction inside a node
 
+> **Not a node of this pack any more.** `WanDirectorC2C` and `WanDirectorExtraArgs` are registered by
+> [ComfyUI-WanNodeExperiments](https://github.com/Code2Collapse/ComfyUI-WanNodeExperiments); this pack's copy was
+> deleted in the 2026-08-29 dedup (CNP `__init__.py`, "Wan Director is owned by ComfyUI-WanNodeExperiments").
+> Install WanNodeExperiments to use it. Current parameters: WanNodeExperiments' `NODE_REFERENCE.md`. This page is
+> kept as history and was not re-checked against the WanNodeExperiments code.
+
 > **WanDirectorC2C** is a full timeline editor embedded in a ComfyUI node: an
 > image/text track, an audio track, a Control-Video track, and four automation
 > lanes (LoRA / camera / seed / pose), plus a live preview player. It compiles
@@ -7,9 +13,7 @@
 > pipeline. This is the "direct a multi-shot video on a familiar timeline"
 > workflow, with the professional editing tools you'd expect from an NLE.
 
-The node ships in both **ComfyUI-CustomNodePacks** and
-**ComfyUI-WanNodeExperiments** (identical; guarded against double
-registration). Companion node: **WanDirectorExtraArgs** bundles the advanced
+The node ships in **ComfyUI-WanNodeExperiments** only. Companion node: **WanDirectorExtraArgs** bundles the advanced
 quality stack so the main node stays uncluttered.
 
 ---

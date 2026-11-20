@@ -1,13 +1,17 @@
 # Load / Save Video (C2C): colour management, formats, Load -> Save link - design (A7, L9.53-L9.58)
 
+User guide: [video-io.md](video-io.md)
+
 Owner request + six answer rounds, verbatim: `docs/evidence/L9.52/owner_answers_2026-10-25_video.md` (workspace).
 Research and sources: `docs/evidence/L9.53/research_2026-10-25.md`. Order (owner): visible bugs (L9.52, done) ->
-Vault front end (L9.46) -> this. Nothing here is built yet.
+Vault front end (L9.46) -> this. Written before the code. Status checked against the code on 2026-11-19: built,
+except the parts marked **NOT BUILT** below.
 
 ## Constraints
 
 - **No new nodes.** Everything lives in Load Video (C2C), Load Video Path (C2C) and Save Video (C2C). The
-  model-boundary conversion happens INSIDE Load Video (owner).
+  model-boundary conversion happens INSIDE Load Video (owner). (Load Video Path (C2C) was later merged into Load
+  Video (C2C) as its `location` = `server path` mode, L9.89; saved workflows migrate.)
 - **Saved workflows never change behaviour.** New widgets are appended. A saved workflow keeps what it did: a
   missing new widget means "off / as before" (the `widget_migration.js` tail-pad). Defaults for NEW nodes may differ.
 - Both renderers, inside subgraphs, Linux + Windows. Frontend 1.53.10 is the floor (owner production).
@@ -30,19 +34,27 @@ Vault front end (L9.46) -> this. Nothing here is built yet.
 The active config (and its source) is shown in both nodes' info line. A config that fails to load says so and falls
 back to the built-in one, with a warning. It never silently uses a different config.
 
+As built: the settings under C2C > Video > Colour Management are *OCIO config file (used when $OCIO is not set)*,
+*Built-in OCIO config*, *Display view* and *Processing* (section 10). Mode, Working space and Default output space
+are **NOT BUILT** as settings: the working space is Load Video's `working_space` input, the output space Save
+Video's `colorspace_out` input.
+
 ## 2. Load Video: what the file is
 
-New appended widgets: `colorspace_in` = auto / any space; `working_space` = inherit / any space.
+New appended widgets: `colorspace_in` = auto / any space; `working_space` = inherit / any space. As built:
+`colorspace_in` = `off (as before)` (the default) / `auto (detect)` / any space; `working_space` =
+`sRGB display (keep Rec.709 / sRGB)` / `preserve source` / any space.
 
 Detection. Every source reports a confidence, and the first confident answer wins:
 
 1. **Camera vendor metadata** (high). ARRI `com.arri.camera.*` gamma + EI -> "ARRI LogC3 (EI800)" / "ARRI LogC4";
    Sony / RED / Canon / Panasonic / BMD keys likewise. A real camera sample is needed to verify which keys PyAV 17
-   exposes (research note 4). Until then this source is marked UNVERIFIED and not shipped.
+   exposes (research note 4). Until then this source is marked UNVERIFIED and not shipped. (Still **NOT BUILT**
+   on 2026-11-19: nodes/c2c_video/colour_cm.py does not read camera vendor keys.)
 2. **EXR / DPX header** (high). An explicit colour-space attribute (`oiio:ColorSpace`, a Nuke-written name),
    chromaticities (AP0 / AP1 / Rec.709 / P3 / Rec.2020) plus a linear transfer for EXR, the DPX transfer field.
 3. **Sidecar / Nuke script** (high). `<file>.c2c.json` or `<file>.colorspace` next to the file, or the Write node
-   of a `.nk` the user points at.
+   of a `.nk` the user points at. (The sidecars are built; reading a `.nk` is **NOT BUILT**.)
 4. **MOV / MP4 colour tags** (medium). They can lie (an ARRI LogC ProRes is tagged BT.709), so they are confirmed by
    the pixel check (5). They decide alone only when the check agrees.
 5. **Pixel sanity check** (warn only). It reads the first frames' black floor, white peak and over-range: log-like
@@ -51,7 +63,8 @@ Detection. Every source reports a confidence, and the first confident answer win
 6. **OCIO file rules** (suggestion). `config.getColorSpaceFromFilepath()`: shown as "suggested by the config's file
    rules - confirm", never used without a click.
 7. Nothing confident -> **Unknown**: the node runs in Preserve Source for that clip and shows "Pick the colour space
-   this file was rendered in".
+   this file was rendered in". (As built, following the owner answers below: an EXR with no colour metadata is the
+   config's scene_linear role, an untagged movie or image is display; the record says which rule decided.)
 
 The transform happens on decode, source -> working (OCIO CPU processor, float32, chunked like decode; GPU later).
 Preserve Source = no transform. `video_info["c2c_colour"] = {source, detected_from, confidence, working,
@@ -60,7 +73,9 @@ config, transform}`.
 ## 3. Save Video: back to the file's space
 
 Appended: `colorspace_out` (gets "auto (from Load)"), `transform` = automatic / explicit / bypass.
-`colorspace_in` gets "auto (from Load)".
+`colorspace_in` gets "auto (from Load)". (As built: both `auto (from Load)` choices exist; the `transform` input is
+**NOT BUILT** - `auto (from Load)` on both inputs is the automatic case, explicit spaces the explicit case, and
+`colorspace_out` = `same as input` means no conversion.)
 
 - **automatic**: in = the frames' actual working space (from the link, section 4), out = the Load's source space
   (reversed, owner). No Load link -> the default output space.
@@ -146,7 +161,8 @@ LUT on torch) comes first. Detection runs once per file: probe metadata plus at 
 
 ## Kill switches
 
-`C2C_VIDEO_CM=off`: no detection, no transform, today's behaviour. `C2C_VIDEO_LINK=off`: no trace (wire only).
+`C2C_VIDEO_CM=off`: no detection, no transform, today's behaviour. `C2C_VIDEO_LINK=off`: no trace (wire only) -
+**NOT BUILT** (no such variable in the code; a wired `video_info` or Save's `follow_load` picks the Load instead).
 `C2C_SAVE_V2_MATRIX=off` keeps working.
 
 ## Owner answers (2026-10-26, verbatim in docs/evidence/L9.52/owner_answers_2026-10-26_cm.md)

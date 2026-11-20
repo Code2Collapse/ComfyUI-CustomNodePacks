@@ -1,10 +1,17 @@
 # C2C Vault v2 - audit, threat model, design (owner directive A17, 2026-10-19)
 
+How to use a vault: [vault_howto.md](vault_howto.md). What ships now: [VAULT_DESIGN_A18.md](VAULT_DESIGN_A18.md).
+
+Status 2026-11-19: this is the historical A17 design. The envelope (section 4), sealed custody (section 5) and the
+second factor (section 6) ship. The separate edit tab (section 7) and the in-process executor (section 8) were
+replaced by A18: a vault now opens as a native subgraph and runs on ComfyUI's own scheduler. Section 1 describes
+the v1 vault as it was on 2026-10-19.
+
 Written before the code (A7). Owner decisions: `docs/evidence/A17/owner_answers_2026-10-19_vault.md` in the C2C
 workspace (D0.25). Source read: `nodes/vault_crypto.py`, `vault_node.py`, `vault_exec.py`, `vault_boundary.py`,
 `vault_promote.py`, `_c2c_secrets.py`, `js/c2c_vault.js` (1,970 lines), `docs/vault_howto.md`, and the 84 vault tests.
 
-## 1. What exists (v1)
+## 1. What existed (v1, 2026-10-19)
 
 - **Locked.** AES-256-GCM over the node list. The key is PBKDF2-HMAC-SHA256 (600k iterations) of the password. The
   header (vault id, KDF parameters, interface hash) is authenticated as associated data. Wrong password and

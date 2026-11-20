@@ -1,247 +1,155 @@
-# ProPainter Suite (MEC)
+# ProPainter video inpaint
 
-> **One node now: `ProPainterMEC`.** The five nodes this page was written for are its `mode` values (temporal, remove, stitch, stitch_refine, flow); saved workflows with the old nodes are migrated on load. The outputs are the same five slots in every mode: image_out, mask_out, aux_image (QC: difference x4; flow: the flow field), aux_mask (QC: changed pixels; flow: unreliable flow), info. `InpaintCompositeMEC` was removed: use `InpaintStitchProMEC` or `InpaintPasteBackMEC`.
+One node, `ProPainterMEC`, fills a masked region across the frames of a clip and blends inpainted crops back into
+video. It wraps ProPainter (RAFT flow + recurrent flow completion + InpaintGenerator), which you install yourself, and
+since 2026-11-19 has a model-free OpenCV fallback for its two filling modes.
 
-
-> **Temporal video inpainting + object/wire/plate removal with ProPainter.**
-> Wraps ProPainter (RAFT + Recurrent Flow Completion + InpaintGenerator) with a
-> ComfyUI-native API and chunked VRAM-safe execution.
+| Node | Use it to |
+|---|---|
+| [ProPainter](#propainter-propaintermec) (`ProPainterMEC`) | Remove an object, wire or rig across a clip; fill an inpaint crop over time; hide the seam of a stitched inpaint; look at the optical flow between two frames |
 
 ## Installing ProPainter (your decision)
 
 ProPainter is licensed under the **S-Lab License 1.0 - non-commercial use only**
-(<https://github.com/sczhou/ProPainter/blob/main/LICENSE>). This pack does not ship,
-download or install it, nor its weights. The nodes use it when you already have it:
+(<https://github.com/sczhou/ProPainter/blob/main/LICENSE>). The weights carry the same licence. This pack does not
+ship, download or install the code or the weights. The node uses ProPainter only when you already have it:
 
-1. Get the code yourself, e.g. `git clone https://github.com/sczhou/ProPainter.git`, and
-   either set the environment variable `C2C_PROPAINTER_DIR` to that folder or put it at
+1. Get the code yourself, for example `git clone https://github.com/sczhou/ProPainter.git`. Then either set the
+   environment variable `C2C_PROPAINTER_DIR` to that folder, or put it at
    `ComfyUI-CustomNodePacks/third_party/ProPainter`.
 2. Put the three weights from the official release
-   (<https://github.com/sczhou/ProPainter/releases/tag/v0.1.0>: `raft-things.pth`,
-   `recurrent_flow_completion.pth`, `ProPainter.pth`) in `models/propainter/`.
+   (<https://github.com/sczhou/ProPainter/releases/tag/v0.1.0>: `raft-things.pth`, `recurrent_flow_completion.pth`,
+   `ProPainter.pth`) in `models/propainter/`.
 3. Restart ComfyUI.
 
-Without it, the ProPainter nodes say what is missing and how to add it. (Until 2026-10-12 the
-pack fetched the code from GitHub on its first start; it no longer does.)
+Until 2026-10-12 the pack fetched the code from GitHub on its first start; it no longer does. For commercial work,
+use `backend` = `auto_no_propainter` or `opencv_flow` (below), which never use ProPainter.
 
-All ProPainter nodes live under `MaskEditControl/Inpaint` (except
-`Flow Refine — RAFT (MEC)` which lives under `MaskEditControl/VFX`).
+## ProPainter (`ProPainterMEC`)
 
-| Class | Display name | Purpose |
+**Menu:** 🐺 C2C/🧰 Core/Inpaint, shown as "ProPainter — Temporal / Remove / Stitch / Refine / Flow" ·
+**Parameters:** [NODE_REFERENCE](../NODE_REFERENCE.md#propaintermec)
+`temporal`, `remove`, `stitch` and `stitch_refine` need ProPainter (code + the three weights) unless `backend`
+picks the OpenCV fallback, which exists for `temporal` and `remove` only. The OpenCV fallback is APPROXIMATE and
+was tested on a synthetic clip only; there is no real-footage A/B against ProPainter (commit b9ec253).
+
+### What it is for
+
+Pick a `mode`; the node shows only the controls that mode reads.
+
+| `mode` | What it does | Wire |
 |---|---|---|
-| `ProPainterTemporalMEC` | ProPainter Temporal Inpaint (MEC) | Drop-in temporal inpainter between Crop Pro and Composite |
-| `ProPainterStitchMEC` | ProPainter Stitch (MEC) | Drop-in for InpaintStitchProMEC; flow-consistent seam blend |
-| `ProPainterStitchRefineMEC` | ProPainter Stitch Refine (MEC) | Refine only the seam ring — cheapest of the three stitches |
-| `ProPainterRemoveMEC` | ProPainter Remove (MEC) | Object / wire / plate removal — no SD model needed |
-| `FlowRefineMEC` | Flow Refine — RAFT (MEC) | Standalone RAFT bidirectional flow + warp + consistency |
+| `remove` (default) | Fills the masked region of every frame from what other frames show: object, wire or rig removal. No diffusion model | `images`, `masks` |
+| `temporal` | The same fill for a crop from Inpaint Crop Pro, with a blend at the crop boundary | `images`, `masks`, optional `stitch_data` |
+| `stitch` | Pastes a generative inpaint back into the frames and repaints a band around the seam with ProPainter, so the seam stays steady over time | `stitch_data`, `inpainted_image` |
+| `stitch_refine` | Repaints only a thin ring along the mask edge of an already-stitched clip | `stitched_image`, `stitch_data` or `mask_override` |
+| `flow` | Optical flow between two frames, with a warp and a forward / backward consistency mask | `frame_a`, `frame_b` |
 
----
+The five old nodes are these modes. Saved workflows with `ProPainterTemporalMEC` load as this node in mode
+`temporal`. The other four (`ProPainterRemoveMEC`, `ProPainterStitchMEC`, `ProPainterStitchRefineMEC`,
+`FlowRefineMEC`) have no automatic migration: replace them by hand with this node in the matching mode.
 
-## When to use which node
+### When to pick it
+
+- To remove something and the background is visible in other frames: `remove`. Nothing generative is involved, so
+  it cannot invent what no frame shows.
+- To generate new content in a region: run a diffusion inpaint first (see [inpaint-suite.md](inpaint-suite.md)),
+  then blend it back with Inpaint Stitch Pro, or with `stitch` here when the seam flickers over time.
+- For a single image: use the [Inpaint Suite](inpaint-suite.md); this node works across frames.
+- For a flow-based re-vectoring of frames: Optical Flow Re-Vector (`OpticalFlowMEC`, see
+  [optical-flow.md](optical-flow.md)). The `flow` mode here is for
+  looking at the flow and its consistency.
+
+### Minimal wiring
 
 ```
-                         ┌─ ProPainterMEC mode=temporal       (full temporal repaint)
-Generative video         │
-inpaint pipeline ────────┼─ ProPainterMEC mode=stitch         (replaces InpaintStitchProMEC)
-                         │
-                         └─ ProPainterMEC mode=stitch_refine  (only seam ring repainted)
+Remove an object:
+Load Video ──────────▶ images ──┐
+(a mask per frame) ──▶ masks ───┤ ProPainter (mode remove, backend auto) ─┬─ image_out ─▶ Save
+                                                                          └─ info ─▶ (which engine ran)
 
-Removal pipeline ───────── ProPainterMEC mode=remove          (no diffusion model required)
-
-Flow analysis only ────── ProPainterMEC mode=flow            (debug / control wiring)
+Blend a generative inpaint back:
+Inpaint Crop Pro ─┬─ stitcher ──────────────────────────────▶ stitch_data ─────┐
+                  └─ cropped_image ─▶ your inpaint ─▶ image ─▶ inpainted_image ─┤ ProPainter (mode stitch) ─ image_out ─▶ Save
 ```
 
----
+### Key controls
 
-## mode = temporal (was ProPainterTemporalMEC)
+- `backend` (`temporal` / `remove` only; added 2026-11-19, commit b9ec253, the last input):
+  - `propainter` (default, and what every older save runs): ProPainter only. Fails with the install hint when
+    ProPainter is missing.
+  - `auto`: ProPainter when you installed the code **and** all three weights, otherwise the OpenCV fallback. Nothing
+    is downloaded.
+  - `auto_no_propainter`: never ProPainter (licence-safe for commercial work).
+  - `opencv_flow`: always the OpenCV fallback.
 
-**Pipeline**: bidirectional RAFT flow → consistency check → RFC flow
-completion → sliding-window InpaintGenerator → per-frame Reinhard / LAB
-color match → boundary blend with `stitch_blend_mask_crop` → SSIM check.
+  The OpenCV fallback is model-free: Farneback optical flow at up to 512 px, with the masked object erased from
+  both frames first; the flow inside the hole is filled in from its surroundings; the background is pulled from the
+  nearest frames forwards and backwards in time; OpenCV Telea inpainting fills what no frame shows. Pixels outside
+  the mask come back unchanged. It has no learned prior, so it cannot invent structure the way ProPainter can.
+- `remove_quality` (`remove`): a preset that overrides `raft_iter`, `neighbor_stride`, `ref_stride` and
+  `subvideo_length`:
 
-### Parameters
+  | Preset | RAFT iters | neighbor_stride | ref_stride | subvideo_length |
+  |---|---:|---:|---:|---:|
+  | `fast` | 8 | 10 | 20 | 8 |
+  | `balanced` | 12 | 5 | 10 | 8 |
+  | `quality` | 20 | 3 | 6 | 12 |
 
-| Parameter | Default | Range | Description |
-|---|---|---|---|
-| `images` | — | IMAGE (B,H,W,3) | Cropped clip from `InpaintCropProMEC` (or any video) |
-| `masks` | — | MASK (B,H,W) | Inpaint mask. Auto-broadcast across frames if B=1 |
-| `stitch_data` | — | STITCH_DATA | From `InpaintCropProMEC`. Pass `{}` if not stitching |
-| `neighbor_stride` | `5` | 1–20 | Frame stride for neighbor sampling inside the InpaintGenerator window |
-| `ref_stride` | `10` | 1–50 | Frame stride for global reference sampling |
-| `raft_iter` | `20` | 1–100 | RAFT iterations per pair — higher = more accurate flow, more VRAM |
-| `subvideo_length` | `30` | 8–300 | Frames per InpaintGenerator window. **8 GB cards: 20–30, 12 GB: 40–60, 24 GB: 80+** |
-| `raft_chunk` | `16` | 1–64 | Frame-pairs per RAFT forward pass. Lower if OOM at flow stage |
-| `use_half` | `true` | bool | fp16 inference (recommended) |
-| `blend_boundary` | `true` | bool | Apply `stitch_blend_mask_crop` boundary defense (BOUNDARY_SEAM) |
-| `color_match_mode` | `reinhard` | `none` / `reinhard` / `lab_transfer` | Per-frame color matching |
+- `remove_dilate_pixels` (`remove`): grows the mask before filling, to cover anti-aliased edges.
+- `color_match_mode`: per-frame colour match of the fill to its surroundings. `off` and `none` mean no match;
+  `lab` and `lab_transfer` are the same.
+- `subvideo_length` and `raft_chunk` (Windowing section): frames per InpaintGenerator window and frame pairs per RAFT
+  pass. Lower them if you run out of VRAM. The tooltip suggests 8-30 frames on 8 GB cards, 40-60 on 12 GB, 80+ on
+  24 GB.
+- `use_half`: fp16 on CUDA, ignored on the CPU.
+- `blend_boundary` (`temporal`): blends the fill with the original at the crop boundary, using the blend mask in
+  `stitch_data`.
+- `boundary_band_pixels`, `preserve_inpaint_center`, `upscale_method` (`stitch`): the width of the seam band
+  ProPainter repaints (0 = none), whether the generative inpaint stays untouched in the centre, and how the crop is
+  scaled to its place.
+- `ring_pixels` (`stitch_refine`): half-width of the repainted ring.
+- `flow_consistency_thr` (`flow`): forward / backward agreement threshold in pixels.
 
-### Outputs
+In `temporal` mode the node unloads the other models in ComfyUI (checkpoint, VAE, encoders) before it loads
+ProPainter.
 
-| Output | Type | Description |
+### Reading the outputs
+
+The node always has the same five outputs, so links survive a mode change:
+
+| Output | `temporal` / `remove` / `stitch` / `stitch_refine` | `flow` |
 |---|---|---|
-| `inpainted_image` | IMAGE | Filled clip at crop resolution |
-| `info` | STRING | RAFT valid ratio, timings, mode flags |
+| `image_out` | The filled / stitched / refined frames | `frame_b` pulled onto `frame_a`'s pixel grid along the flow |
+| `mask_out` | The region filled (`remove`: the dilated mask), the repainted band, or the ring | The consistency mask: 1 where forward and backward flow agree |
+| `aux_image` | QC: \|output − input\| × 4 | The flow field as colour (R = U, G = V, B = magnitude) |
+| `aux_mask` | QC: pixels the node changed (by more than 1.5/255 in any channel) | Where the flow is unreliable (1 − consistency) |
+| `info` | `mode=...`, the engine's settings and timings, then `qc: changed X% of pixels, Y% outside mask_out` | `mode=flow` with the iterations and threshold |
 
-### VRAM behaviour
+- With a `backend` other than `propainter`, `info` adds `backend=<engine> (requested <value>: <reason>)`. With the
+  OpenCV fallback it starts with `APPROXIMATE model-free fallback ...` and gives the flow resolution and how much of
+  the hole was filled from other frames versus Telea (a spatial guess).
+- A high "outside mask_out" share means the node changed pixels outside the region: look for spill or seams in
+  `aux_image`.
+- The QC outputs compare against the mode's input (`images`, the stitch canvas, or `stitched_image`). When the sizes
+  differ they stay at zero and `info` says `qc: off (...)`.
+- The `flow` mode uses ProPainter's RAFT when ProPainter and its weights are installed, otherwise a multi-scale
+  Lucas-Kanade flow. Only the console says which one ran.
 
-The node calls `comfy.model_management.unload_all_models()` + cache
-flush **before** loading ProPainter so your SD/Flux/Wan checkpoint is
-unloaded automatically. After execution the bundle remains resident; if
-you want to free it, queue any node that calls `unload_all_models` or
-restart ComfyUI.
+### Common mistakes
 
-### Recipes
-
-| Goal | Settings |
-|---|---|
-| 8 GB card, ≤ 720p, ≤ 60 frames | `subvideo_length=24`, `raft_chunk=8`, `raft_iter=12`, `use_half=true` |
-| 12 GB card, 1080p, 60 frames | `subvideo_length=48`, `raft_chunk=16`, `raft_iter=20` |
-| 24 GB card, 4K, 120+ frames | `subvideo_length=80`, `raft_chunk=32`, `raft_iter=20` |
-| Long-shot single character removal | `color_match_mode=lab_transfer`, `blend_boundary=true` |
-| Quick test | `raft_iter=8`, `subvideo_length=16` |
-
----
-
-## mode = stitch (was ProPainterStitchMEC)
-
-Drop-in replacement for `InpaintStitchProMEC`. Honours the same
-`STITCH_DATA` (v2/v3) but blends the seam with ProPainter instead of
-Laplacian / FFT.
-
-### Parameters (key)
-
-| Parameter | Default | Description |
+| Message or symptom | Why | What to do |
 |---|---|---|
-| `inpainted_image` | — | Generative inpaint sized to the crop |
-| `boundary_band_pixels` | `12` | Width of the boundary band repainted by ProPainter (`0` disables boundary repaint) |
-| `preserve_inpaint_center` | `true` | Keep the SD/Flux output untouched at the centre, only repaint the seam |
-| `raft_iter` | `12` | RAFT iters |
-| `neighbor_stride` | `5` | InpaintGenerator neighbor stride |
-| `ref_stride` | `10` | Global reference stride |
-| `subvideo_length` | `8` | Frames per window |
-| `use_half` | `true` | fp16 |
-| `color_match_mode` | `reinhard` | `off` / `reinhard` / `lab` |
-| `upscale_method` | `lanczos` | `lanczos` / `bicubic` / `bilinear` / `nearest` |
+| `ProPainter is not installed. This node uses it only when you already have it.` | `backend` is `propainter` (the default), or a stitch mode, without a ProPainter checkout | Install it as above, or for `temporal` / `remove` set `backend` to `auto` or `opencv_flow` |
+| `ProPainter weight '...' is not in .../models/propainter` | A weight file is missing | Put the three official `.pth` files in `models/propainter/` |
+| `mode='remove' requires 'images' and 'masks'.` (and the same for the other modes' inputs) | The mode's inputs are not wired | Wire the inputs listed in the mode table |
+| `the STITCHER's crop size (width) changes from frame to frame` | The stitch modes need one crop size for the whole clip | Use a fixed crop size in Inpaint Crop Pro |
+| `the STITCHER's canvases differ in size from frame to frame` | Same cause, for the canvas | Same fix |
+| `No inpaint backend is available` / `The OpenCV inpaint backend is not available` | OpenCV (`opencv-python`) is missing | Reinstall the pack requirements |
+| Out of memory | Windows too large | Lower `subvideo_length`, then `raft_chunk` |
+| `info` says `NOOP_empty_mask` (or `NOOP_empty_ring`, `NOOP_empty_repaint_mask`) | The mask, ring or band is empty | Check the mask input |
 
-### Outputs
+## Credits
 
-`(IMAGE, MASK, STRING)` — final canvas, the combined boundary∪mask
-actually repainted, and an info string.
-
-### When to choose this over the legacy stitch
-
-Use `ProPainterStitchMEC` when the seam between the SD/Flux inpaint and
-the surrounding plate is **wobbling temporally** — Laplacian/FFT blends
-are spatially clean but temporally independent. ProPainter sees all
-frames and produces a flow-consistent seam.
-
----
-
-## mode = stitch_refine (was ProPainterStitchRefineMEC)
-
-Repaints **only a thin ring along the original mask boundary**.
-Cheapest of the three. Inpaint content (centre) and the surroundings
-are preserved bit-for-bit. Use when the SD/Flux inpaint is good and
-you only need to hide the seam.
-
-### Parameters (key)
-
-| Parameter | Default | Description |
-|---|---|---|
-| `boundary_ring_pixels` | `12` | Half-width of the ring along the mask boundary that gets repainted |
-| All other ProPainter params | same as above | |
-
-### Output
-
-Same shape as `ProPainterStitchMEC`. The returned mask shows the ring
-that was actually touched.
-
----
-
-## mode = remove (was ProPainterRemoveMEC)
-
-**No diffusion model required.** Just `(IMAGE, MASK) → IMAGE`. Best when
-the masked object moves and the background is visible at *some* other
-frame.
-
-### Use cases
-
-- Remove a character from a static plate
-- Wire / rig removal in VFX
-- Watermark / logo cleanup across video
-- Cleaning tracker patches before stabilisation
-
-### Parameters
-
-| Parameter | Default | Description |
-|---|---|---|
-| `images` | — | Source clip |
-| `masks` | — | Region to fill (`1`=fill, `0`=keep). Auto-broadcast if B=1 |
-| `quality` | `balanced` | `fast` / `balanced` / `quality` — sets RAFT iters + strides + window |
-| `use_half` | `true` | fp16 |
-| `dilate_mask_pixels` | `3` | Pre-dilate the mask to cover anti-aliasing pixels |
-| `color_match_mode` | `reinhard` | `off` / `reinhard` / `lab` |
-
-#### Quality presets
-
-| Preset | RAFT iters | neighbor_stride | ref_stride | subvideo_length |
-|---|---:|---:|---:|---:|
-| `fast` | 8 | 10 | 20 | 8 |
-| `balanced` | 12 | 5 | 10 | 8 |
-| `quality` | 20 | 3 | 6 | 12 |
-
-### Outputs
-
-`(filled_image, fill_mask_used, info)`.
-
----
-
-## mode = flow (was FlowRefineMEC)
-
-Standalone two-frame RAFT — useful as a debug / control node for
-flow-driven workflows.
-
-### Parameters
-
-| Parameter | Default | Description |
-|---|---|---|
-| `frame_a` / `frame_b` | — | Two frames |
-| `iters` | `20` | RAFT iterations |
-| `consistency_thr` | `1.5` | Forward+backward agreement threshold |
-| `mask` | (optional) | Restricts the visualisation, not the flow |
-
-### Outputs
-
-| Output | Format | Description |
-|---|---|---|
-| `flow_field_rgb` | IMAGE | R = normalised U, G = normalised V, B = magnitude |
-| `warped` | IMAGE | `frame_a` warped to `frame_b` via `grid_sample` |
-| `consistency` | MASK | 1 where forward+backward flow agrees |
-
-Falls back to multi-scale Lucas-Kanade when ProPainter / RAFT isn't
-installed.
-
----
-
-## Image vs. video
-
-| Stage | Pure image inpaint | Video inpaint |
-|---|---|---|
-| Mask preparation | InpaintCropProMEC | InpaintCropProMEC with `video_stable_crop=true` |
-| Generative fill | KSampler / Flux / SDXL | (skip — use ProPainterRemove) **or** KSampler per frame |
-| Stitch back | InpaintStitchProMEC / InpaintCompositeMEC | **ProPainterStitchMEC** or **ProPainterTemporalMEC** |
-| Seam-only fix | n/a | **ProPainterStitchRefineMEC** |
-
----
-
-## Troubleshooting
-
-| Symptom | Cause | Fix |
-|---|---|---|
-| `ProPainterMissingError` | ProPainter is not installed | See *Installing ProPainter* above (`C2C_PROPAINTER_DIR` or `third_party/ProPainter/`) |
-| `weight 'ProPainter.pth' is not in models/propainter` | Weights not placed | Put the three official `.pth` files in `models/propainter/` |
-| OOM at RAFT stage | `raft_chunk` too high | Drop to 8 or 4 |
-| OOM at InpaintGenerator | `subvideo_length` too high | Drop to 16–24 on 8 GB |
-| Flicker on filled region | Color shift between windows | Set `color_match_mode=lab_transfer` |
-| Visible seam ring | `blend_boundary=false` | Re-enable, or use `ProPainterStitchRefineMEC` |
-| Filled region is gray | All frames have the masked region — no ground truth | Switch to a generative inpaint pipeline |
+ProPainter by sczhou and contributors, <https://github.com/sczhou/ProPainter>, S-Lab License 1.0
+(non-commercial). Not included in this pack.

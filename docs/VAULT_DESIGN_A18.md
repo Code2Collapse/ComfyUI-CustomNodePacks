@@ -1,5 +1,7 @@
 # C2C Vault as a protected native subgraph (design, A18)
 
+How to use a vault: [vault_howto.md](vault_howto.md).
+
 Owner directive A18 (2026-10-25, workspace `docs/evidence/A18/`). Supersedes the execution part of
 `VAULT_DESIGN_A17.md`; the A17 envelope (Argon2id + AES-256-GCM, data key wrapped per opener) stays.
 
@@ -74,10 +76,11 @@ payloads of old Locked / Sealed nodes stay readable; their `api` is derived from
 |---|---|---|---|---|
 | Sealed - authorized installations (default) | no password, only on installs whose key was added | password + TOTP + editor list | none | those installs' processes |
 | Locked | password once per browser tab (held in server memory for that tab's client id) | same | none | the running process |
-| Sealed - owner-hosted | inputs sent to the owner's server, outputs returned (explicit consent) | owner only | owner's server | the owner's server only |
+| Sealed - owner-hosted (NOT BUILT: shown as "coming" in the dialog and cannot be chosen, L9.49; the C2C App Gateway covers whole workflows, `APP_GATEWAY_DEPLOY.md`) | inputs sent to the owner's server, outputs returned (explicit consent) | owner only | owner's server | the owner's server only |
 | Legacy portable | anywhere | same | none | anyone with a debugger - labelled OBFUSCATION ONLY |
 
 Installations are added by installation code, key file, or registration on the owner's server (owner: all three).
+Built: installation code and key file (L9.48). Registration on the owner's server is not built.
 
 ### Old vaults
 
@@ -142,7 +145,7 @@ plus added ones). Change the vault password. All without exposing the inside.
 
 **Flow**:
 
-1. Right-click a vault: *Manage access / password...*.
+1. Right-click a vault: *👥 Manage installations & editors…* or *🔐 Change password…*.
 2. Authorize: password + second factor + editor check, the same as opening for editing. The server answers with the
    access lists only - never the graph.
 3. The dialog shows recipients and editors as labelled installation codes (this install marked) and lets you:

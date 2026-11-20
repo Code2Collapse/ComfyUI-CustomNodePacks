@@ -1,6 +1,6 @@
 # EXR I/O Nodes (MEC)
 
-> **These nodes now ship in [ComfyUI-NukeMaxNodes](https://github.com/Code2Collapse/ComfyUI-NukeNodePack)** under the same node ids, so saved workflows load them from there. This page is kept for reference; the current parameters are in NukeMax's `NODE_REFERENCE.md`.
+> **Both nodes were merged into ComfyUI-NukeMaxNodes** ([repo](https://github.com/Code2Collapse/ComfyUI-NukeNodePack)): `LoadEXRMEC` is now `NukeMax_EXRSequenceLoad` and `SaveEXRMEC` is now `NukeMax_EXRSequenceSave`. A saved workflow that uses an old id loads with the NukeMax node when NukeMax is installed (CNP `nodes/_legacy_replacements.json`). This page is kept as history; the current parameters are in NukeMax's `NODE_REFERENCE.md`. For loading EXR sequences inside this pack, see [Load Video (C2C)](video-io.md).
 
 
 Two nodes for reading and writing OpenEXR images, under
@@ -44,6 +44,6 @@ storing HDR output for compositing.
 
 ## See also
 
-- [`EXRMetadataReaderMEC`](utility-nodes.md) — pure-python EXR header
+- `EXRMetadataReaderMEC` (now in ComfyUI-NukeMaxNodes) — pure-python EXR header
   reader for shot-metadata workflows that only need the header
   (channels, dataWindow, custom attributes).

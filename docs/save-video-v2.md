@@ -1,5 +1,7 @@
 # Save Video (C2C) v2, built-in handles, Video Comparer v2: design (ledger L9.40)
 
+User guide: [video-io.md](video-io.md) (Load / Save Video, AV Handles) and [video-comparer.md](video-comparer.md).
+
 Written before the code (A7). Owner request and answers: `docs/evidence/L9.40/owner_answers_2026-10-23.md`
 (workspace). Everything here extends the existing nodes; no node is added or renamed.
 
@@ -66,7 +68,7 @@ what was done to it. Tags are refused with a sentence where they cannot apply (R
   with the global defaults.
 - One version per save: the counter is advanced only when the file is actually written (not on a preview run, not
   on a cached run), and a write that fails does not consume a version.
-- `GET /c2c/save_video/next_path` returns the path the next write would use; the node shows it under the naming
+- `/c2c/save_video/next_path` (built as a POST route) returns the path the next write would use; the node shows it under the naming
   control and refreshes it when a naming input changes (no polling).
 
 ## Handles (`nodes/c2c_video/handles_io.py`)
@@ -74,9 +76,12 @@ what was done to it. Tags are refused with a sentence where they cannot apply (R
 - Load Video (C2C): appended inputs `handles` (off / fit / add), `handle_frames`, `handle_side`, `handle_grid`
   (the AV Handles grids: H3 17n+5, Wan 4n+1, LTX 8n+1, custom step / plus) and the custom step / plus. The existing
   `format` (model preset) already picks a frame grid: when it names a model, the handles use that grid and the
-  handle grid control shows it read-only - one grid, not two. Audio is shifted with the frames (av_handles.
+  handle grid control shows it read-only - one grid, not two. (As built: `handle_grid` is a normal choice whose
+  default `from format` uses the preset's grid; another grid can be picked. `handle_target` and `extra_handles`
+  were added too.) Audio is shifted with the frames (av_handles.
   shift_audio_ends). `video_info["c2c_handles"] = {head, tail, fps, grid, source_frames}`.
-- Save Video (C2C): appended `handles_trim` (auto / manual / off) + `trim_head` / `trim_tail`. auto takes
+- Save Video (C2C): appended `handles_trim` (auto / manual / off) + `trim_head` / `trim_tail` (built as
+  `trim_frames` + `trim_side`). auto takes
   `video_info["c2c_handles"]`, else AV Handles' remembered record, else nothing - and the report says which.
   Trimming happens before the export range; the range is in the trimmed clip's frames.
 - AV Handles stays as it is (saved workflows, and the separate-node case).
@@ -158,3 +163,7 @@ Changes made while building and testing, all covered by tests and the live check
 - Video Comparer: previews of image batches use the full-length proxy (the old 600-frame cap would have put the
   metrics strip and the picture out of step). `b_offset` is a widget, so the player and the metrics use the same
   number.
+
+Later additions, outside this design: `C2C_SAVE_SOURCE_PROXY` also became the setting *Video > Save > Write a source
+proxy* (cc72ec8); Save Video got `pingpong` and `write_manifest` (9a20c0c), and the Video Comparer the `annotated` /
+`change_report` outputs (f6d8917). See the user guides above.

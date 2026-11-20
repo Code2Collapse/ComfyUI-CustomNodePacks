@@ -47,18 +47,38 @@ Wan approx decoders into `ComfyUI/models/vae_approx/`:
 (available from Kijai's WanVideo_comfy on Hugging Face). With those present,
 Auto's TAESD path shows a proper decoded video preview.
 
+**Automatic fetch.** When a model's preview decoder is missing, the pack starts a
+background download into `models/vae_approx/` (the sample you are watching keeps
+the Latent2RGB fallback; the next one uses the decoder). Sources it knows:
+`taesd`, `taesdxl`, `taesd3`, `taef1` (madebyollin/taesd on GitHub) and, for Wan,
+Kijai's `taew2_1` / `taew2_2` from Hugging Face. One attempt per decoder per
+server run. It does not fetch when **Settings → C2C → Models & Downloads → Never
+download models** is on, or when `C2C_NO_TAE_DOWNLOAD` is set
+(`nodes/_c2c_preview_guard.py`, `_ensure_decoder`). To add your own source, put a
+JSON map `{"decoder_name": "https://..."}` in
+`models/vae_approx/_c2c_tae_sources.json`.
+
+## Which frame of a video is previewed
+
+**Settings → C2C → Previews → Video preview frame** (`sweep` default, `middle`,
+`first`; env `C2C_PREVIEW_VIDEO_FRAME`, needs a restart). `sweep` shows the next
+frame of the video latent on every preview, so motion problems become visible;
+`middle` shows one frame from the centre; `first` is ComfyUI's own behaviour
+(frame 0). Image latents are not affected.
+
 ---
 
-## How it's implemented (safe by design)
+## How it is implemented
 
 This is **backend-only** and **purely additive**. It does not draw anything,
 does not touch any node, and does not overlap ComfyUI's own UI — it only
-ensures ComfyUI's *native* in-node previewer runs, and picks the best method
+ensures ComfyUI's *native* in-node previewer runs, and picks the method
 for the model. The `get_previewer` wrapper is fully guarded: any change in a
 future ComfyUI release simply no-ops and leaves core untouched, and the
 previewer can never return `None` (so previews never silently stop).
 
-Opt out entirely with the environment variable `C2C_NO_FORCE_PREVIEW=1`.
+Opt out entirely with **Settings → C2C → Previews → Do not force sampler previews on**
+(or the environment variable `C2C_NO_FORCE_PREVIEW=1`, which still wins); it needs a restart.
 
 ---
 
@@ -68,7 +88,7 @@ Opt out entirely with the environment variable `C2C_NO_FORCE_PREVIEW=1`.
 |---|---|
 | Wan preview blank | Setting is on `Latent2RGB` — switch to **Auto** or **TAESD** |
 | Wan preview rough/low-res | Add `taew2_1`/`taew2_2.safetensors` to `models/vae_approx/` |
-| No preview at all | Setting is **Off**, or ComfyUI launched with `--preview-method none` and the guard is disabled by `C2C_NO_FORCE_PREVIEW=1` |
+| No preview at all | Setting is **Off**, or ComfyUI launched with `--preview-method none` and the guard is disabled (setting *Do not force sampler previews on*, or `C2C_NO_FORCE_PREVIEW=1`) |
 | Existing install still on `taesd` | The default changed to Auto for new installs; older installs keep the saved value — set it to **Auto** once |
 
 ---

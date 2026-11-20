@@ -24,7 +24,7 @@ equivalent exists (MEC / C2C / NukeMax / WanDirector namespaces are preferred
 over stock nodes), validates it against the live node registry, and — after
 you confirm — loads it onto the canvas.
 
-### How it works (and why it won't hallucinate junk)
+### How it works
 
 The design follows the "compact tool mode" pattern: a small local model is
 never handed the full 2000-node schema. Instead:
@@ -109,7 +109,7 @@ Open **Settings → C2C AI**. Three tiers, independently toggleable:
 |---|---|---|
 | **Tier 1** | Curated pattern library (no model) | Always on — instant answers for common errors |
 | **Tier 2** | Local model: a GGUF via llama.cpp, or Ollama | Private, offline, free — the recommended default |
-| **Tier 3** | Hosted API (OpenAI / Anthropic / Gemini / others) | Highest quality; needs an API key |
+| **Tier 3** | Hosted API (OpenAI / Anthropic / Gemini / others) | Needs an API key; requests leave your machine and may cost money |
 
 ### Local model (Tier 2)
 
