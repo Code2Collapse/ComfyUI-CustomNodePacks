@@ -24,6 +24,7 @@ VRAM Tier: 1 (pure tensor ops, no models)
 from __future__ import annotations
 
 import gc
+import json as _json
 import math
 import logging
 from typing import Dict, List, Tuple, Optional, Any
@@ -34,6 +35,7 @@ import torch.nn.functional as F
 from ._is_changed_util import hash_args_and_kwargs, hash_kwargs
 from . import smart_crop as _sc
 from .smart_crop import SmartImageCropMEC, SmartImageStitcherMEC, plan_crop
+from . import _inpaint_pro_extras as _px
 
 try:
     import cv2
@@ -1062,6 +1064,9 @@ _CROP_SECTIONS = {
     **dict.fromkeys(("wan_temporal_smooth_frames",), "Video"),
     **dict.fromkeys(("inpaint_mask_mode", "blend_radius", "fill_masked_area", "roto_quality"), "Stitch"),
     **dict.fromkeys(("device_mode",), "Device"),
+    # L9.172 (A25): regions and context-aware sizing
+    **dict.fromkeys(("region_mode", "region_min_area", "max_regions", "context_detail_aware",
+                     "context_detail_max_grow", "max_crop_megapixels"), "Regions / context"),
 }
 
 
@@ -1073,6 +1078,9 @@ _GEOMETRY_KEYS = (
     "extend_down_factor", "extend_left_factor", "extend_right_factor", "context_from_mask_extend_factor",
     "auto_context_factor", "aspect_preset", "output_target_width", "output_target_height",
     "wan_temporal_smooth_frames", "wan_stable_crop", "wan_mask_polarity",
+    # L9.172 (A25): context-aware sizing (context_detail_map = the run's detail map, kept so the live preview draws
+    # the same windows; not an input)
+    "context_detail_aware", "context_detail_max_grow", "max_crop_megapixels", "context_detail_map",
 )
 _LIVE_KEYS = _GEOMETRY_KEYS + ("output_resize_to_target_size", "output_padding", "wan_align_multiple", "preview_frame",
                                 # L7.65 P08: Roto-Sync's erosion (the cache keeps the mask as it arrived), the mode and
@@ -1119,6 +1127,19 @@ def _linked_outputs(prompt, unique_id) -> set:
     return out
 
 
+_CROP_CORE_ARGS = (
+    "image", "downscale_algorithm", "upscale_algorithm", "preresize", "preresize_mode", "preresize_min_width",
+    "preresize_min_height", "preresize_max_width", "preresize_max_height", "mask_fill_holes", "mask_expand_pixels",
+    "mask_invert", "mask_blend_pixels", "mask_hipass_filter", "extend_for_outpainting", "extend_up_factor",
+    "extend_down_factor", "extend_left_factor", "extend_right_factor", "context_from_mask_extend_factor",
+    "auto_context_factor", "aspect_preset", "output_resize_to_target_size", "output_target_width",
+    "output_target_height", "output_padding", "device_mode", "wan_align_multiple", "wan_temporal_smooth_frames",
+    "wan_stable_crop", "wan_mask_polarity", "inpaint_mask_mode", "stitch_blend_mode", "blend_radius",
+    "video_stable_temporal_sigma", "video_stable_dilate_px", "video_stable_blur_sigma", "fill_masked_area", "mask",
+    "optional_context_mask", "roto_quality", "preview_frame", "unique_id",
+)
+
+
 class InpaintCropProMEC:
     """lquesada-style crop + Wan 2.2 Animate-aware extras."""
 
@@ -1147,7 +1168,8 @@ class InpaintCropProMEC:
     MASK_POLARITY = ["regenerate_subject", "preserve_subject"]
     INPAINT_MASK_MODES = ["hard_binary", "slight_feather", "soft_blend"]
     STITCH_BLEND_MODES = ["gaussian", "edge_aware", "laplacian_pyramid", "frequency_blend", "video_stable"]
-    FILL_MODES = ["none", "edge_pad", "neutral_gray", "original"]
+    # L9.172 (A25, audit L7.92 fix 4): telea / navier_stokes appended (OpenCV cv2.inpaint); the default stays "none"
+    FILL_MODES = ["none", "edge_pad", "neutral_gray", "original", "telea", "navier_stokes"]
 
     @classmethod
     def INPUT_TYPES(cls):
@@ -1274,7 +1296,9 @@ class InpaintCropProMEC:
                                 "-1 = derive from blend_radius (×0.75). Match to dilate value.")}),
                 "fill_masked_area": (cls.FILL_MODES, {
                     "default": "none",
-                    "tooltip": "Fill masked region in the cropped image: none, edge_pad (Gaussian smear), neutral_gray, original."}),
+                    "tooltip": "Fill masked region in the cropped image: none, edge_pad (Gaussian smear), neutral_gray, "
+                               "original, telea / navier_stokes (OpenCV inpaint from the surrounding pixels, radius "
+                               "3 px; only masked pixels change). A pre-fill for low-denoise inpaints."}),
             },
             "optional": {
                 "image": ("IMAGE", {"tooltip": "The frames to inpaint (a still or a clip)."}),
@@ -1304,6 +1328,37 @@ class InpaintCropProMEC:
                                ("image", "mask")),
                 **_mode_inputs(InpaintMaskPrepareMEC.INPUT_TYPES()["required"], "prepare_", "mask prepare",
                                ("mask",)),
+                # L9.172 (A25 spec 5.5 item 18): appended last, defaults = the crop exactly as before
+                "region_mode": (_px.REGION_MODES, {
+                    "default": "single (as before)",
+                    "tooltip": ("single: one crop around the whole mask (as before). per region: every separate "
+                                "part of the mask (8-connected, over the whole clip) gets its own crop and a stable "
+                                "region id; the crops come out region by region (all frames of region 0, then "
+                                "region 1 ...) and Inpaint Stitch Pro (blend) puts every region back. Regions and "
+                                "their boxes are listed in info. mask_invert is applied before the split.")}),
+                "region_min_area": ("INT", {
+                    "default": 64, "min": 1, "max": 100000000, "step": 1,
+                    "tooltip": "per region: parts of the mask smaller than this many pixels are ignored."}),
+                "max_regions": ("INT", {
+                    "default": 8, "min": 1, "max": 64, "step": 1,
+                    "tooltip": "per region: keep at most this many regions (the largest), numbered top to bottom, "
+                               "left to right."}),
+                "context_detail_aware": ("BOOLEAN", {
+                    "default": False,
+                    "tooltip": ("Move each crop edge outward, off detail: when an edge of the context box cuts "
+                                "through more detail (mean luma gradient over the clip) than the image's median, it "
+                                "moves out to the quietest line within context_detail_max_grow. Never inward, so "
+                                "the mask stays inside. The aspect / target step runs after it.")}),
+                "context_detail_max_grow": ("FLOAT", {
+                    "default": 0.25, "min": 0.0, "max": 2.0, "step": 0.05,
+                    "tooltip": "context_detail_aware: how far an edge may move, as a fraction of the box size "
+                               "(0.25 = a quarter of its width / height per side)."}),
+                "max_crop_megapixels": ("FLOAT", {
+                    "default": 0.0, "min": 0.0, "max": 64.0, "step": 0.05,
+                    "tooltip": ("Memory / model cap: when output_resize_to_target_size is on and the target size "
+                                "is larger than this many megapixels, it is scaled down (aspect kept) so that, after "
+                                "rounding to output_padding / wan_align_multiple, it fits; never below one multiple "
+                                "or 64 px. The change is noted in info. 0 = no cap (as before).")}),
             },
             # L7.99 slice 2: which node ran, so the live preview finds this run's masks (no widget)
             "hidden": {"unique_id": "UNIQUE_ID", "prompt": "PROMPT"},
@@ -1351,7 +1406,10 @@ class InpaintCropProMEC:
                      fill_masked_area="none",
                      mask=None, optional_context_mask=None,
                      roto_quality: bool = False, preview_frame: int = 0, unique_id=None,
-                     crop_mode: str = "pro", prompt=None, **mode_values):
+                     crop_mode: str = "pro", prompt=None,
+                     region_mode: str = "single (as before)", region_min_area: int = 64, max_regions: int = 8,
+                     context_detail_aware: bool = False, context_detail_max_grow: float = 0.25,
+                     max_crop_megapixels: float = 0.0, **mode_values):
         args = {k: v for k, v in locals().items() if k not in ("self", "mode_values", "prompt")}
         unknown = set(mode_values) - set(_SMART_CROP_KEYS) - set(_PREPARE_KEYS)
         if unknown:
@@ -1382,6 +1440,14 @@ class InpaintCropProMEC:
                     f"InpaintCropProMEC {_label} expects MASK tensor [H,W] or [B,H,W]"
                 )
 
+        if region_mode not in _px.REGION_MODES:
+            raise ValueError(f"Inpaint Crop Pro: unknown region_mode {region_mode!r} (use one of {_px.REGION_MODES}).")
+        extra = dict(context_detail_aware=bool(context_detail_aware),
+                     context_detail_max_grow=float(context_detail_max_grow),
+                     max_crop_megapixels=float(max_crop_megapixels))
+        if region_mode == "per region":
+            with torch.no_grad():
+                return self._crop_regions(args, live_settings, int(region_min_area), int(max_regions), extra)
         with torch.no_grad():
             return self._inpaint_crop_core(
                 image, downscale_algorithm, upscale_algorithm,
@@ -1406,7 +1472,54 @@ class InpaintCropProMEC:
                 fill_masked_area,
                 mask, optional_context_mask,
                 roto_quality, preview_frame, unique_id, live_settings,
+                **extra,
             )
+
+    # ── L9.172 (A25 spec 5.5 item 18.1): one crop per mask region, stable region ids ────────────────────────────
+    def _crop_regions(self, args: dict, live_settings: dict, min_area: int, max_regions: int, extra: dict):
+        image, mask = args["image"], args["mask"]
+        if mask is None:
+            raise ValueError("Inpaint Crop Pro: region_mode 'per region' needs a mask.")
+        B, H, W = int(image.shape[0]), int(image.shape[1]), int(image.shape[2])
+        masks, records = _px.split_regions(
+            mask, B, H, W, preserve_polarity=args["wan_mask_polarity"] == "preserve_subject",
+            invert=bool(args["mask_invert"]), min_area=min_area, max_regions=max_regions)
+        if not masks:
+            raise ValueError(f"Inpaint Crop Pro (per region): no part of the mask is at least {min_area} px - lower "
+                             "region_min_area, or use region_mode 'single'.")
+        core = {k: args[k] for k in _CROP_CORE_ARGS}
+        core["mask_invert"] = False                     # applied by the split (see the region_mode tooltip)
+        runs = []
+        for rid, rmask in enumerate(masks):
+            core["mask"] = rmask
+            # the live preview follows region 0 (one picture per node)
+            core["unique_id"] = args["unique_id"] if rid == 0 else None
+            runs.append(self._inpaint_crop_core(**core, live_settings=live_settings, **extra))
+        res = [r["result"] for r in runs]
+        stitcher = _px.merge_region_stitchers([r[0] for r in res], B)
+        ref_h, ref_w = int(res[0][1].shape[1]), int(res[0][1].shape[2])
+        alg = args["upscale_algorithm"]
+
+        def fit_img(t):
+            return t if tuple(t.shape[1:3]) == (ref_h, ref_w) else _resize_image_alg(t, ref_h, ref_w, alg)
+
+        def fit_msk(t):
+            return t if tuple(t.shape[1:3]) == (ref_h, ref_w) else _resize_mask_alg(t, ref_h, ref_w, alg)
+
+        cropped = torch.cat([fit_img(r[1]) for r in res], dim=0)
+        inpaint_mask = torch.cat([fit_msk(r[2]) for r in res], dim=0)
+        blend_mask = torch.cat([fit_msk(r[3]) for r in res], dim=0)
+        for rec, r in zip(records, res):
+            st = r[0]
+            rec["batch_range"] = [rec["id"] * B, rec["id"] * B + B - 1]
+            rec["crop_window_frame0"] = [int(st["cropped_to_canvas_x"][0] - st["canvas_to_orig_x"][0]),
+                                         int(st["cropped_to_canvas_y"][0] - st["canvas_to_orig_y"][0]),
+                                         int(st["cropped_to_canvas_w"][0]), int(st["cropped_to_canvas_h"][0])]
+        info = (f"Inpaint Crop Pro (per region): {len(records)} region(s) x {B} frame(s) = {cropped.shape[0]} crops, "
+                f"each {ref_w}x{ref_h}; batch is region-major (all frames of region 0, then region 1 ...)\n"
+                f"  regions: {_json.dumps(records, separators=(',', ':'))}\n"
+                f"--- region 0 ---\n{res[0][4]}")
+        return {"ui": runs[0]["ui"], "result": (stitcher, cropped, inpaint_mask, blend_mask, info, res[0][5])}
 
     # ── L7.65 P08: crop_mode "smart aspect" (the former Smart Image Crop) ─────────────────────────────────────────
     def _smart_crop(self, image, mask, mv, preview_frame, unique_id, live_settings):
@@ -1507,7 +1620,13 @@ class InpaintCropProMEC:
                      video_stable_temporal_sigma, video_stable_dilate_px, video_stable_blur_sigma,
                      fill_masked_area,
                      mask=None, optional_context_mask=None,
-                     roto_quality: bool = False, preview_frame: int = 0, unique_id=None, live_settings=None):
+                     roto_quality: bool = False, preview_frame: int = 0, unique_id=None, live_settings=None,
+                     context_detail_aware: bool = False, context_detail_max_grow: float = 0.25,
+                     max_crop_megapixels: float = 0.0):
+        # L9.172: the detail map is measured on the image as it arrived (normalised coordinates), before the clone
+        dmap = _px.detail_map(image) if context_detail_aware else None
+        if dmap is not None and live_settings is not None:
+            live_settings = {**live_settings, "context_detail_map": dmap}
         image = image.clone()
         raw_mask = mask                         # L7.65 P08: the live cache keeps the mask as it arrived
         # ── Roto-Sync: tighten seam for clean alpha boundaries ───────────
@@ -1573,6 +1692,9 @@ class InpaintCropProMEC:
             output_target_height=output_target_height,
             wan_temporal_smooth_frames=wan_temporal_smooth_frames, wan_stable_crop=wan_stable_crop,
             wan_mask_polarity=wan_mask_polarity,
+            context_detail_aware=context_detail_aware, context_detail_max_grow=context_detail_max_grow,
+            max_crop_megapixels=max_crop_megapixels, context_detail_map=dmap,
+            output_padding=output_padding_int, wan_align_multiple=wan_align_multiple,
         )
         if geo["preresize"] is not None:                                # Step 1 for the image
             new_w, new_h, alg = geo["preresize"]
@@ -1666,7 +1788,9 @@ class InpaintCropProMEC:
             blend_src = torch.stack(tmp_bs, dim=0)
 
         # ── Step 6: post-process cropped image (fill_masked_area) ─────────
-        if fill_masked_area != "none" and fill_masked_area != "original":
+        if fill_masked_area in _px.CLASSIC_FILLS:              # L9.172: OpenCV Telea / Navier-Stokes
+            out_image = _px.classic_fill(out_image, out_mask, fill_masked_area)
+        elif fill_masked_area != "none" and fill_masked_area != "original":
             binary_3d = (out_mask > 0.5).float().unsqueeze(-1)
             if fill_masked_area == "neutral_gray":
                 out_image = out_image * (1.0 - binary_3d) + 0.5 * binary_3d
@@ -1716,6 +1840,8 @@ class InpaintCropProMEC:
             f"blend_radius={blend_radius} fill={fill_masked_area}\n"
             f"  device={device_mode}"
         )
+        if geo.get("context_notes"):                          # L9.172 context-aware sizing, only when on
+            info += "\n  " + "\n  ".join(geo["context_notes"])
         # L7.99 D4: the preview is drawn from what just ran (the stitcher's windows), never estimated
         plan = _crop_plan_record(result_stitcher, (H, W), (int(out_image.shape[1]), int(out_image.shape[2])),
                                  bool(wan_stable_crop), B)
@@ -1843,6 +1969,17 @@ class InpaintCropProMEC:
             s["aspect_preset"], int(s["output_target_width"]), int(s["output_target_height"]),
             bbox_mask,
         )
+        notes = []
+        cap = float(s.get("max_crop_megapixels", 0.0) or 0.0)       # L9.172: memory / model cap (0 = off)
+        if cap > 0:
+            mult = max(int(s.get("output_padding", 0) or 0), int(s.get("wan_align_multiple", 1) or 1), 1)
+            capped = _px.cap_megapixels(resolved_tgt_w, resolved_tgt_h, cap, mult)
+            if capped != (resolved_tgt_w, resolved_tgt_h):
+                notes.append(f"max_crop_megapixels={cap:g}: target {resolved_tgt_w}x{resolved_tgt_h} -> "
+                             f"{capped[0]}x{capped[1]}")
+                resolved_tgt_w, resolved_tgt_h = capped
+            else:
+                notes.append(f"max_crop_megapixels={cap:g}: target {resolved_tgt_w}x{resolved_tgt_h} fits")
         # P0.4 AUTO context factor — overrides manual slider when ON.
         resolved_factor = float(s["context_from_mask_extend_factor"])
         if bool(s["auto_context_factor"]):
@@ -1885,7 +2022,26 @@ class InpaintCropProMEC:
                 by_list.append(fy)
                 bw_list.append(fw)
                 bh_list.append(fh)
-        return {"B": B, "H": H, "W": W, "mask": mask, "bbox_mask": bbox_mask,
+        if s.get("context_detail_aware"):                            # L9.172: move crop edges off detail
+            dmap = s.get("context_detail_map")
+            if dmap is None:
+                notes.append("context_detail_aware: no detail map (image not available) - boxes unchanged")
+            else:
+                pre_hw = (preresize_plan[1], preresize_plan[0]) if preresize_plan is not None else \
+                    (H - (extend_pads[0] + extend_pads[1] if extend_pads else 0),
+                     W - (extend_pads[2] + extend_pads[3] if extend_pads else 0))
+                d = _px.detail_in_processed_space(dmap, pre_hw, extend_pads)
+                grow = float(s.get("context_detail_max_grow", 0.25))
+                cache = {}
+                for i in range(B):
+                    key = (bx_list[i], by_list[i], bw_list[i], bh_list[i])
+                    if key not in cache:
+                        cache[key] = _px.detail_aware_box(*key, d, grow)
+                    bx_list[i], by_list[i], bw_list[i], bh_list[i] = cache[key]
+                k0 = next(iter(cache)) if cache else None
+                if k0 is not None:
+                    notes.append(f"context_detail_aware (max grow {grow:g}): box[0] {list(k0)} -> {list(cache[k0])}")
+        return {"B": B, "H": H, "W": W, "mask": mask, "bbox_mask": bbox_mask, "context_notes": notes,
                 "optional_context_mask": optional_context_mask, "bx": bx_list, "by": by_list, "bw": bw_list,
                 "bh": bh_list, "resolved_tgt": (resolved_tgt_w, resolved_tgt_h), "resolved_factor": resolved_factor,
                 "preresize": preresize_plan, "extend_pads": extend_pads}
@@ -1906,7 +2062,9 @@ class InpaintCropProMEC:
         if s.get("roto_quality") and mask is not None:
             mask = _roto_erode(mask)
         geo = cls._geometry(shape_bhw, mask, optional_context_mask, device=torch.device("cpu"),
-                            dtype=torch.float32, geometry_only=True, **{k: s[k] for k in _GEOMETRY_KEYS})
+                            dtype=torch.float32, geometry_only=True,
+                            **{k: s[k] for k in _GEOMETRY_KEYS + ("output_padding", "wan_align_multiple")
+                               if k in s})
         if s["output_resize_to_target_size"]:
             tgt_w, tgt_h = geo["resolved_tgt"]
         else:
@@ -2418,6 +2576,28 @@ class InpaintStitchProMEC:
                 # (L9.39, added on main after P08 branched - around mask = object removal)
                 **_mode_inputs({"color_reference": MECContextInpainter.INPUT_TYPES()["optional"]["color_reference"]},
                                "context_", "context blend"),
+                # L9.172 (A25 spec 5.5 item 19): appended last, defaults = the stitch exactly as before (blend mode)
+                "registration": (_px.REGISTRATION_MODES, {
+                    "default": "off",
+                    "tooltip": ("[blend] Before compositing, measure how far the generated crop moved against the plate "
+                                "on the context ring (pixels the mask kept) and undo it: translation, or translation + "
+                                "scale (0.94-1.06). Applied only when it improves the match there and stays within "
+                                "registration_max_shift; per-frame results are in info. off = as before.")}),
+                "registration_max_shift": ("INT", {
+                    "default": 16, "min": 1, "max": 256, "step": 1,
+                    "tooltip": "[blend] registration: the largest shift (pixels, in the crop's size at stitch time) "
+                               "that is accepted; a larger measured shift is ignored."}),
+                "seam_qc": ("BOOLEAN", {
+                    "default": False,
+                    "tooltip": ("[blend] Measure the seam on every frame: the mean luma difference to the plate along "
+                                "the blend ring (where the blend weight is between 0.02 and 0.98), and how far each "
+                                "frame is from the clip's median. Reported as JSON in info. Changes nothing unless "
+                                "seam_repair_threshold > 0.")}),
+                "seam_repair_threshold": ("FLOAT", {
+                    "default": 0.0, "min": 0.0, "max": 1.0, "step": 0.005,
+                    "tooltip": ("[blend] seam_qc: frames whose seam error differs from the median by more than this "
+                                "(0-1 image units) are flagged and repaired on the ring only, from the nearest "
+                                "unflagged frames before / after. 0 = report only.")}),
             },
         }
 
@@ -2441,7 +2621,9 @@ class InpaintStitchProMEC:
                        stitch_temporal_sigma: float = 0.0,
                        stitch_dilate_px: int = 0,
                        roto_quality_override: str = "from_crop",
-                       stitch_mode: str = "blend", original_image=None, mask=None, **mode_values):
+                       stitch_mode: str = "blend", original_image=None, mask=None,
+                       registration: str = "off", registration_max_shift: int = 16, seam_qc: bool = False,
+                       seam_repair_threshold: float = 0.0, **mode_values):
         unknown = set(mode_values) - set(_PASTE_KEYS) - set(_SMART_STITCH_KEYS) - set(_CONTEXT_KEYS)
         if unknown:
             raise TypeError(f"inpaint_stitch() got unexpected keyword arguments: {sorted(unknown)}")
@@ -2449,6 +2631,12 @@ class InpaintStitchProMEC:
         mv = {k: mode_values.get(k, defaults[k]) for k in _PASTE_KEYS + _SMART_STITCH_KEYS + _CONTEXT_KEYS}
         if stitch_mode not in STITCH_MODES:
             raise ValueError(f"Inpaint Stitch Pro: unknown stitch_mode {stitch_mode!r} (use one of {STITCH_MODES}).")
+        if registration not in _px.REGISTRATION_MODES:
+            raise ValueError(f"Inpaint Stitch Pro: unknown registration {registration!r} "
+                             f"(use one of {_px.REGISTRATION_MODES}).")
+        if isinstance(stitcher, dict) and stitcher.get("region_count") and stitch_mode != "blend":
+            raise ValueError("Inpaint Stitch Pro: this stitcher holds several regions (Inpaint Crop Pro region_mode "
+                             "'per region') - use stitch_mode 'blend'.")
         if stitch_mode == "context blend":
             with torch.no_grad():
                 return self._context_blend(stitcher, inpainted_image, original_image, mask, mv)
@@ -2500,6 +2688,8 @@ class InpaintStitchProMEC:
                 blend_mode_override, color_match,
                 stitch_temporal_sigma, stitch_dilate_px,
                 roto_quality_override,
+                registration=registration, registration_max_shift=int(registration_max_shift),
+                seam_qc=bool(seam_qc), seam_repair_threshold=float(seam_repair_threshold),
             )
 
     def _context_blend(self, stitcher, inpainted_image, original_image, mask, mv):
@@ -2528,7 +2718,9 @@ class InpaintStitchProMEC:
                        blend_mode_override="from_crop", color_match=False,
                        stitch_temporal_sigma: float = 0.0,
                        stitch_dilate_px: int = 0,
-                       roto_quality_override: str = "from_crop"):
+                       roto_quality_override: str = "from_crop",
+                       registration: str = "off", registration_max_shift: int = 16, seam_qc: bool = False,
+                       seam_repair_threshold: float = 0.0):
         if not isinstance(stitcher, dict):
             raise ValueError(
                 "InpaintStitchProMEC: 'stitcher' input is missing or invalid "
@@ -2582,6 +2774,16 @@ class InpaintStitchProMEC:
         B = inpainted_image.shape[0]
         n = len(stitcher["cropped_to_canvas_x"])
         override_idx = (n == 1 and B != 1)
+        # L9.172: a per-region stitcher (region-major crops); every region of a frame lands on the same output frame
+        region_frame = stitcher.get("region_frame") if stitcher.get("region_count") else None
+        if region_frame is not None and B != n:
+            raise ValueError(f"Inpaint Stitch Pro: the stitcher holds {n} region crops "
+                             f"({stitcher['region_count']} regions x {stitcher['region_frames']} frames) but "
+                             f"{B} images came back - the inpaint must return every crop, in order.")
+        running: Dict[int, torch.Tensor] = {}
+        frame_masks: Dict[int, torch.Tensor] = {}
+        reg_records: List[dict] = []
+        originals: Dict[int, torch.Tensor] = {}
 
         # ── Pre-loop temporal stabilization of per-frame blend masks ───────
         # Stack all stored blend masks into a (N,H,W) tensor (only when sizes
@@ -2595,7 +2797,25 @@ class InpaintStitchProMEC:
         if (stitch_temporal_sigma > 0.0 or stitch_dilate_px > 0) and n > 1:
             stored_masks = stitcher["cropped_mask_for_blend"]
             shapes = {tuple(m.shape) for m in stored_masks}
-            if len(shapes) == 1:
+            if region_frame is not None:                         # L9.172: smooth each region over its own frames
+                F_ = int(stitcher["region_frames"])
+                groups = [list(range(r * F_, (r + 1) * F_)) for r in range(int(stitcher["region_count"]))]
+                stabilized_masks = list(stored_masks)
+                for g in groups:
+                    gm = [stored_masks[k] for k in g]
+                    if len({tuple(m.shape) for m in gm}) != 1 or len(g) < 2:
+                        continue
+                    batch = torch.stack([m.to(device) for m in gm], dim=0).clamp(0.0, 1.0)
+                    if stitch_dilate_px > 0:
+                        k_ = int(stitch_dilate_px) * 2 + 1
+                        batch = _max_pool_square((batch > 0.5).float().unsqueeze(1), k_,
+                                                 int(stitch_dilate_px)).squeeze(1).clamp(0.0, 1.0)
+                    if stitch_temporal_sigma > 0.0:
+                        batch = _temporal_gaussian_smooth(batch, sigma=float(stitch_temporal_sigma))
+                        temporal_applied = True
+                    for k_, idx in enumerate(g):
+                        stabilized_masks[idx] = batch[k_]
+            elif len(shapes) == 1:
                 batch = torch.stack(
                     [m.to(device) for m in stored_masks], dim=0
                 ).clamp(0.0, 1.0)
@@ -2627,6 +2847,11 @@ class InpaintStitchProMEC:
             ctc_w = stitcher["cropped_to_canvas_w"][j]
             ctc_h = stitcher["cropped_to_canvas_h"][j]
             canvas = stitcher["canvas_image"][j].to(device).unsqueeze(0).clone()
+            f_out = region_frame[i] if region_frame is not None else i
+            if f_out not in originals and (seam_qc or region_frame is not None):
+                originals[f_out] = canvas[0, cto_y:cto_y + cto_h, cto_x:cto_x + cto_w, :].clone()
+            if region_frame is not None and f_out in running:   # earlier regions of this frame are already in
+                canvas[:, cto_y:cto_y + cto_h, cto_x:cto_x + cto_w, :] = running[f_out].unsqueeze(0)
             if stabilized_masks is not None:
                 blend_mask = stabilized_masks[j].to(device).unsqueeze(0).clone()
             else:
@@ -2662,6 +2887,13 @@ class InpaintStitchProMEC:
                 else:
                     raise ValueError(f"Inpaint stitch: the inpainted image has {c_inp} channels, the original "
                                      f"{c_can} - give both as RGB (3) or RGBA (4).")
+
+            # L9.172: registration-assisted reconstruction (measured on the context ring, before colour match)
+            if registration != "off":
+                resized_inp, rec = _px.register_crop(resized_inp, canvas_crop, resized_msk, registration,
+                                                     float(registration_max_shift))
+                rec["crop"] = i
+                reg_records.append(rec)
 
             # Optional color match (mean+std on masked region)
             if color_match:
@@ -2699,7 +2931,10 @@ class InpaintStitchProMEC:
             canvas[:, ctc_y:ctc_y + ctc_h, ctc_x:ctc_x + ctc_w, :] = blended
 
             output = canvas[:, cto_y:cto_y + cto_h, cto_x:cto_x + cto_w, :]
-            results.append(output.squeeze(0))
+            if region_frame is not None:
+                running[f_out] = output.squeeze(0).clone()
+            else:
+                results.append(output.squeeze(0))
 
             # Build a full-res blend mask in original-image coords for output
             full_mask = torch.zeros((1, cto_h, cto_w), device=device, dtype=resized_msk.dtype)
@@ -2717,10 +2952,22 @@ class InpaintStitchProMEC:
                 src_x1 = src_x0 + (x1 - x0)
                 src_y1 = src_y0 + (y1 - y0)
                 full_mask[:, y0:y1, x0:x1] = resized_msk[:, src_y0:src_y1, src_x0:src_x1]
-            blend_masks_out.append(full_mask.squeeze(0))
+            if region_frame is not None:
+                prev = frame_masks.get(f_out)
+                frame_masks[f_out] = full_mask.squeeze(0) if prev is None else torch.maximum(prev, full_mask[0])
+            else:
+                blend_masks_out.append(full_mask.squeeze(0))
 
+        if region_frame is not None:
+            n_frames = int(stitcher["region_frames"])
+            results = [running[f] for f in range(n_frames)]
+            blend_masks_out = [frame_masks[f] for f in range(n_frames)]
         out = torch.stack(results, dim=0).cpu()
         out_blend = torch.stack(blend_masks_out, dim=0).cpu()
+        qc_report = None
+        if seam_qc:                                              # L9.172: temporal seam QC (+ optional repair)
+            orig = torch.stack([originals[f].cpu() for f in range(out.shape[0])], dim=0)
+            out, qc_report = _px.seam_qc(out, orig, out_blend, float(seam_repair_threshold))
 
         # Wan polarity: present user-visible blend mask in their convention
         if wan_polarity == "preserve_subject":
@@ -2734,6 +2981,13 @@ class InpaintStitchProMEC:
             f"  temporal: sigma={stitch_temporal_sigma:.2f} dilate={stitch_dilate_px}px applied={temporal_applied}\n"
             f"  out: {out.shape[0]}x{out.shape[1]}x{out.shape[2]}x{out.shape[3]}"
         )
+        if region_frame is not None:
+            info += (f"\n  regions: {stitcher['region_count']} x {stitcher['region_frames']} frame(s), composited "
+                     "in region order")
+        if registration != "off":
+            info += f"\n  registration ({registration}): {_px.report_text(reg_records)}"
+        if qc_report is not None:
+            info += f"\n  seam_qc: {_px.report_text(qc_report)}"
         return (out, out_blend, info)
 
 
@@ -3087,6 +3341,9 @@ if declare_layout is not None:
         out["smart_max_resolution"] = {"c2c_show_if_any": [
             {**smart, "smart_resolution_mode": {"not": ["Manual"]}},
             {**smart, "smart_no_mask_mode": ["Resize Full Image"]}]}
+        for n in ("region_min_area", "max_regions"):                      # L9.172
+            out[n] = {"c2c_show_if": {**pro, "region_mode": ["per region"]}}
+        out["context_detail_max_grow"] = {"c2c_show_if": {**pro, "context_detail_aware": [True]}}
         prep = {"crop_mode": ["mask prepare"]}
         out["prepare_min_region_area"] = {"c2c_show_if": {**prep, "prepare_remove_small_regions": [True]}}
         out["prepare_temporal_sigma"] = {"c2c_show_if": {**prep, "prepare_temporal_smooth": [True]}}
@@ -3114,3 +3371,13 @@ if declare_layout is not None:
 
     declare_layout(InpaintCropProMEC, _icp_layout)
     declare_layout(InpaintStitchProMEC, _isp_layout)
+
+
+# L9.172 (A25) part B: inputs appended after the A28 pin, per node, in order (tests/test_a28_cnp_a_layout.py excludes
+# them from the pinned signature and checks they are the LAST inputs).
+L9172_APPENDED_INPUTS = {
+    "InpaintCropProMEC": ("region_mode", "region_min_area", "max_regions", "context_detail_aware",
+                          "context_detail_max_grow", "max_crop_megapixels"),
+    "InpaintStitchProMEC": ("registration", "registration_max_shift", "seam_qc", "seam_repair_threshold"),
+}
+APPENDED_AFTER_A28 = tuple(n for names in L9172_APPENDED_INPUTS.values() for n in names)

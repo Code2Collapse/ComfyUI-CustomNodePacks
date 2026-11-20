@@ -281,3 +281,186 @@ def describe(original: torch.Tensor, result: torch.Tensor, *,
             "it regardless of the global strength, so the face holds while the "
             "background is free to take more of the refinement.")
     return "\n".join(lines)
+
+
+# ── L9.172 (A25 spec 57): multi-band preservation, temporal identity protection ─────────────────────────────────
+
+def parse_bands(band_radii: str, band_strengths: str):
+    """(radii, strengths) from the two comma-separated lists, or None when both are empty (the single split).
+
+    radii r1 < ... < rn, each in (0, 128]; n + 1 strengths in [0, 1] (band 0 = finest detail, band n = the residual).
+    """
+    rs = str(band_radii or "").strip()
+    ss = str(band_strengths or "").strip()
+    if not rs and not ss:
+        return None
+    if not rs or not ss:
+        raise IdentityLockError(
+            "Multi-band lock needs BOTH band_radii and band_strengths (or neither, for the plain split). "
+            "Example: band_radii '2, 8, 32' with band_strengths '0, 0.5, 1, 1'.")
+    try:
+        radii = [float(v) for v in rs.replace(";", ",").split(",") if v.strip()]
+        strengths = [float(v) for v in ss.replace(";", ",").split(",") if v.strip()]
+    except ValueError:
+        raise IdentityLockError(
+            f"band_radii {rs!r} / band_strengths {ss!r}: write plain numbers separated by commas.") from None
+    if not radii:
+        raise IdentityLockError("band_radii has no numbers in it.")
+    if any(not (0.0 < r <= 128.0) for r in radii):
+        raise IdentityLockError(f"Every band radius must be above 0 and at most 128 px, got {radii}.")
+    if any(b <= a for a, b in zip(radii, radii[1:])):
+        raise IdentityLockError(f"band_radii must increase from fine to coarse, got {radii}.")
+    if len(strengths) != len(radii) + 1:
+        raise IdentityLockError(
+            f"{len(radii)} radii make {len(radii) + 1} bands (finest detail, {len(radii) - 1} middle band(s), "
+            f"the coarse residual), so band_strengths needs {len(radii) + 1} numbers - got {len(strengths)}.")
+    if any(not (0.0 <= s <= 1.0) for s in strengths):
+        raise IdentityLockError(f"Every band strength must be between 0 and 1, got {strengths}.")
+    return radii, strengths
+
+
+def decompose(x: torch.Tensor, radii) -> list:
+    """Bands of x, fine to coarse: [x - L(r1), L(r1) - L(r2), ..., L(rn)]. They sum back to x (float error only)."""
+    t = x.float()
+    lows = [low_pass(t, float(r)) for r in radii]
+    bands = [t - lows[0]]
+    bands += [lows[k] - lows[k + 1] for k in range(len(lows) - 1)]
+    bands.append(lows[-1])
+    return bands
+
+
+def _mask_like(protect: torch.Tensor, out: torch.Tensor) -> torch.Tensor:
+    """A [B,H,W] / [H,W] mask broadcast against `out` (BHWC or BCHW), 0..1, out's dtype."""
+    m = protect
+    if m.ndim == 2:
+        m = m.unsqueeze(0)
+    m = m.to(device=out.device, dtype=out.dtype).clamp(0.0, 1.0)
+    bhwc = out.shape[-1] <= 4
+    m = m.unsqueeze(-1) if bhwc else m.unsqueeze(1)
+    if m.shape[0] == 1 and out.shape[0] > 1:
+        m = m.expand(out.shape[0], *m.shape[1:])
+    return m
+
+
+def multiband_lock(original: torch.Tensor, refined: torch.Tensor, *, radii, strengths, strength: float = 1.0,
+                   protect: torch.Tensor | None = None) -> torch.Tensor:
+    """Per band k: take s_k of the ORIGINAL's band and 1 - s_k of the refinement's.
+
+    The effective per-band strength is s_k * (strength * (1 - m) + m), m = protect (0 without one), so `strength`
+    keeps fading the whole lock and the protect mask still means "full lock here".
+    """
+    if original.shape != refined.shape:
+        raise IdentityLockError(
+            f"The original is {tuple(original.shape)} and the refined image is {tuple(refined.shape)}. They must "
+            "match.")
+    if not 0.0 <= strength <= 1.0:
+        raise IdentityLockError(f"strength must be between 0 and 1, got {strength}.")
+    bo = decompose(original, radii)
+    br = decompose(refined, radii)
+    g = torch.tensor(float(strength), dtype=torch.float32, device=refined.device)
+    if protect is not None:
+        m = _mask_like(protect, refined.float())
+        g = g * (1.0 - m) + m
+    out = torch.zeros(refined.shape, dtype=torch.float32, device=refined.device)
+    for b_o, b_r, s in zip(bo, br, strengths):
+        out = out + b_r + (b_o - b_r) * (float(s) * g)
+    return out.to(original.dtype)
+
+
+def describe_bands(radii, strengths) -> str:
+    names = [f"detail < {radii[0]:g}px"]
+    names += [f"{radii[k]:g}-{radii[k + 1]:g}px" for k in range(len(radii) - 1)]
+    names.append(f"structure > {radii[-1]:g}px")
+    parts = ", ".join(f"{n}: {s:.2f} from the plate" for n, s in zip(names, strengths))
+    return ("Multi-band lock: " + parts + ". The correction passes are not used in multi-band mode (each band is "
+            "mixed once; radius only sets where drift is measured).")
+
+
+def _is_bhwc(x: torch.Tensor) -> bool:
+    return x.shape[-1] <= 4 and x.shape[1] > 4
+
+
+def track_protect_mask(original: torch.Tensor, protect: torch.Tensor):
+    """Carry a one-frame protect mask through the clip: the protected region of `original` (its box, padded 25 %) is
+    followed from frame to frame by FFT phase correlation and the mask moved with it (integer shift, zero fill).
+
+    Returns ([B,H,W] float mask, [(dy, dx)] cumulative integer offsets per frame). Frame 0 keeps the mask as given.
+    """
+    from ._motion import bbox, luma, pad_box, phase_correlate, shift_mask
+    lum = luma(original if _is_bhwc(original) else original.movedim(1, -1))          # [B, H, W]
+    B, H, W = int(lum.shape[0]), int(lum.shape[1]), int(lum.shape[2])
+    m0 = protect.float()
+    if m0.ndim == 3:
+        m0 = m0[0]
+    if tuple(m0.shape) != (H, W):
+        m0 = F.interpolate(m0[None, None], size=(H, W), mode="bilinear", align_corners=False)[0, 0]
+    m0 = m0.to(lum.device).clamp(0.0, 1.0)
+    box = bbox(m0)
+    if box is None:
+        return m0.unsqueeze(0).expand(B, H, W).clone(), [(0, 0)] * B
+    y0, y1, x0, x1 = pad_box(box, H, W)
+    cum_y = cum_x = 0.0
+    offs = [(0, 0)]
+    masks = [m0]
+    for t in range(1, B):
+        oy, ox = int(round(cum_y)), int(round(cum_x))
+        ry0, ry1 = max(0, y0 + oy), min(H, y1 + oy)
+        rx0, rx1 = max(0, x0 + ox), min(W, x1 + ox)
+        if ry1 - ry0 >= 4 and rx1 - rx0 >= 4:
+            dy, dx = phase_correlate(lum[t - 1, ry0:ry1, rx0:rx1], lum[t, ry0:ry1, rx0:rx1])
+            cum_y += dy
+            cum_x += dx
+        oy, ox = int(round(cum_y)), int(round(cum_x))
+        offs.append((oy, ox))
+        masks.append(shift_mask(m0, oy, ox))
+    return torch.stack(masks, dim=0), offs
+
+
+def drift_report(original: torch.Tensor, result: torch.Tensor, *, radius: float,
+                 protect: torch.Tensor | None = None, tracked_offsets=None) -> list:
+    """Per frame: low-band drift inside the protected region (whole frame without one), normalised by that frame's
+    range like drift(), and the region's geometric shift original -> result in pixels (phase correlation inside the
+    region's padded box)."""
+    from ._motion import bbox, luma, pad_box, phase_correlate
+    if original.shape != result.shape:
+        raise IdentityLockError(
+            f"Cannot measure drift between {tuple(original.shape)} and {tuple(result.shape)}.")
+    bhwc = _is_bhwc(original)
+    lo_a = low_pass(original.float(), radius)
+    lo_b = low_pass(result.float(), radius)
+    d = (lo_a - lo_b).abs()
+    d = d.mean(dim=-1) if bhwc else d.mean(dim=1)                            # [B, H, W]
+    la = luma(original if bhwc else original.movedim(1, -1))
+    lb = luma(result if bhwc else result.movedim(1, -1))
+    B, H, W = int(d.shape[0]), int(d.shape[1]), int(d.shape[2])
+    m = None
+    if protect is not None:
+        m = protect.float()
+        if m.ndim == 2:
+            m = m.unsqueeze(0)
+        if tuple(m.shape[-2:]) != (H, W):
+            m = F.interpolate(m.unsqueeze(1), size=(H, W), mode="bilinear", align_corners=False).squeeze(1)
+        m = m.to(d.device).clamp(0.0, 1.0)
+    rows = []
+    for t in range(B):
+        mt = None if m is None else m[min(t, int(m.shape[0]) - 1)]
+        frame = original[t].float()
+        spread = float(frame.max() - frame.min())
+        if mt is not None and float(mt.sum()) > 0:
+            dr = float((d[t] * mt).sum() / mt.sum())
+            box = bbox(mt)
+        else:
+            dr = float(d[t].mean())
+            box = None
+        dr = dr / spread if spread > 1e-8 else 0.0
+        y0, y1, x0, x1 = pad_box(box, H, W) if box is not None else (0, H, 0, W)
+        if y1 - y0 >= 4 and x1 - x0 >= 4:
+            sy, sx = phase_correlate(la[t, y0:y1, x0:x1], lb[t, y0:y1, x0:x1])
+        else:
+            sy, sx = 0.0, 0.0
+        row = {"frame": t, "drift": round(dr, 6), "region": "protect" if box is not None else "frame",
+               "region_shift_px": [round(sy, 3), round(sx, 3)]}
+        if tracked_offsets is not None:
+            row["tracked_offset_px"] = list(tracked_offsets[t])
+        rows.append(row)
+    return rows

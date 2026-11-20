@@ -59,6 +59,8 @@ function imeVisible(v, names) {
             continue;
         }
         if (n === "canvas_layer") { if (mode === "paint") keep.push(n); continue; }
+        // L9.172: which layer of the paint editor's stack is output (alpha layers only - the colour canvas has none)
+        if (n === "layer_output") { if (mode === "paint" && v.canvas_layer !== "colour") keep.push(n); continue; }
         if (imeModeOf(n) !== mode) continue;
         if (mode === "paint") {
             if (v.canvas_layer === "colour" && !IME_CANVAS_PANEL.has(n)) keep.push(n);

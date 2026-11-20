@@ -10,8 +10,11 @@ import torch
 from .._is_changed_util import hash_args_and_kwargs
 from ..smart_crop import gaussian_blur, grow_or_shrink
 from . import dispatch as D
-from . import frames, store
+from . import frames, store, temporal
 from .modes import MODES
+
+# L9.172 (A25 spec 5.8 item 43): appended after every mode input (saved widget values are restored by position)
+APPENDED_AFTER_A28 = ("layer_output", "spline_keyframes", "spline_keyframe_easing")
 
 try:
     from PIL import Image
@@ -74,6 +77,52 @@ def _load_painted_batch(
             notes.append(f"resized stored frame {src_frame} from {old} to [{H},{W}]")
         out[i] = arr
     return out, notes
+
+
+def _load_layer_batch(editor_id: str, batch: int, target_hw: Tuple[int, int], frame_mode: str,
+                      layer_output: str) -> tuple[np.ndarray, list[str]]:
+    """uint8 [B,H,W] from the editor's layer stack: "visible" = the visible layers re-composited (store.
+    composite_layers, the editor's own merge), else the one layer whose id or name is ``layer_output``. Plus one info
+    note listing the stack."""
+    H, W = target_hw
+    eid = (editor_id or "").strip()
+    manifest = store.get_layers_manifest(eid) if eid else None
+    if not manifest:
+        raise ValueError("Image Mask Editor: layer_output is set but this editor has no layer stack (it has one plain "
+                         "layer) - add layers in the editor, or clear layer_output.")
+    layers = manifest["layers"]
+    if layer_output.lower() == "visible":
+        pick = None
+    else:
+        hits = [l for l in layers if l["id"] == layer_output] or [l for l in layers if l["name"] == layer_output]
+        if not hits:
+            names = ", ".join(f"{l['name']!r} ({l['id']})" for l in layers)
+            raise ValueError(f"Image Mask Editor: no layer named {layer_output!r} - the layers are {names}, or "
+                             "'visible' for the visible ones together.")
+        pick = hits[0]
+    out = np.zeros((batch, H, W), dtype=np.uint8)
+    cover = {l["id"]: 0.0 for l in layers}
+    for i in range(batch):
+        f = 0 if frame_mode == "shared" else i
+        bufs = {}
+        for l in layers:
+            arr = store.get_layer_frame(eid, l["id"], f)
+            if arr is None:
+                continue
+            if arr.shape != (H, W):
+                arr = _resize_mask_u8(arr, (H, W))
+            bufs[l["id"]] = arr
+            cover[l["id"]] += float((arr > 127).mean()) / batch
+        if pick is None:
+            out[i] = store.composite_layers(layers, bufs, (H, W))
+        elif pick["id"] in bufs:
+            out[i] = bufs[pick["id"]]
+    desc = "; ".join(
+        f"{l['name'] or l['id']} [{l['id']}] {l['mode']}{'' if l['visible'] else ' hidden'}"
+        f"{' locked' if l['locked'] else ''}{(' meta=' + json.dumps(l['meta'])) if l.get('meta') else ''}"
+        f" cover={cover[l['id']] * 100:.1f}%" for l in layers)
+    what = "visible layers re-composited" if pick is None else f"layer {pick['name'] or pick['id']!r} only"
+    return out, [f"layer_output: {what}; stack (bottom to top): {desc}"]
 
 
 def _combine_masks(
@@ -227,6 +276,24 @@ class ImageMaskEditorC2C:
                                 "Without input_mask only replace applies."},
                 ),
                 **mode_inputs(),
+                "layer_output": ("STRING", {
+                    "default": "",
+                    "tooltip": ("[paint] Which mask the layer stack gives. Empty: the flattened mask the editor "
+                                "saved (as before). visible: the visible layers re-composited here with their blend "
+                                "modes (add / subtract / intersect), exactly as the editor merges them. A layer name "
+                                "or id: that layer's own pixels only. info lists every layer (mode, visible, locked, "
+                                "metadata, coverage).")}),
+                "spline_keyframes": ("STRING", {
+                    "default": "", "multiline": True,
+                    "tooltip": ("[spline] Animate the drawn spline over frames. JSON list of keys "
+                                "[{\"frame\": 0, \"x\": 0, \"y\": 0, \"scale\": 1, \"rotation\": 0}, ...] (x / y "
+                                "in pixels, rotation in degrees) or {\"keys\": [...], \"frames\": N, \"pivot\": "
+                                "[x, y]}. Interpolated between keys, held before the first and after the last; the "
+                                "frame count is the image batch, else frames, else the last key + 1. Fill 'mask' "
+                                "only. Empty = off (as before).")}),
+                "spline_keyframe_easing": (temporal.EASINGS, {
+                    "default": "linear",
+                    "tooltip": "[spline] spline_keyframes: linear, or smooth (ease in and out between keys)."}),
             },
             "hidden": {"node_id": "UNIQUE_ID"},
         }
@@ -268,9 +335,11 @@ class ImageMaskEditorC2C:
         **kwargs,
     ):
         extra = ()
+        if str(kwargs.get("layer_output") or "").strip():     # L9.172: the layer files are read, so watch them
+            extra = (store.layers_digest((editor_id or "").strip()),)
         if mode == "video":                      # keyframe edits live in the session store, not in the prompt
             from ..video_mask_editor import session_digest
-            extra = (session_digest(str(kwargs.get("video_session_id") or "").strip()),)
+            extra = extra + (session_digest(str(kwargs.get("video_session_id") or "").strip()),)
         return hash_args_and_kwargs(
             image, editor_id, frame_mode, grow, feather, threshold, invert,
             input_mask, combine, mode,
@@ -292,6 +361,9 @@ class ImageMaskEditorC2C:
         combine: str = "replace",
         mode: str = "paint",
         node_id=None,
+        layer_output: str = "",
+        spline_keyframes: str = "",
+        spline_keyframe_easing: str = "linear",
         **mode_kw,
     ):
         if image is not None and (not isinstance(image, torch.Tensor) or image.ndim != 4):
@@ -300,10 +372,16 @@ class ImageMaskEditorC2C:
         if mode not in MODES:
             raise ValueError(f"Image Mask Editor: unknown mode {mode!r}; one of {', '.join(MODES)}.")
         a = {**_MODE_DEFAULTS(), **{k: v for k, v in mode_kw.items() if v is not None}}
+        layer_output = str(layer_output or "").strip()
+        keys = str(spline_keyframes or "").strip()
+        if layer_output and mode != "paint":
+            raise ValueError("Image Mask Editor: layer_output reads the paint layer stack - set mode to paint, or "
+                             "clear layer_output.")
+        a["_keyframes"] = (keys, spline_keyframe_easing) if keys else None
         with torch.no_grad():
             if mode == "paint":
                 return self._paint(image, editor_id, frame_mode, grow, feather, threshold, invert, input_mask,
-                                   combine, a)
+                                   combine, a, layer_output=layer_output)
             return self._other_mode(mode, image, grow, feather, threshold, invert, input_mask, combine, a,
                                     node_id)
 
@@ -318,7 +396,8 @@ class ImageMaskEditorC2C:
             out = 1.0 - out
         return out
 
-    def _paint(self, image, editor_id, frame_mode, grow, feather, threshold, invert, input_mask, combine, a):
+    def _paint(self, image, editor_id, frame_mode, grow, feather, threshold, invert, input_mask, combine, a,
+               layer_output=""):
         """paint: the mask layer (the modal editor and its store) and, when it has strokes, the colour layer (the
         former Paint Canvas). A node with no colour strokes runs exactly as before."""
         colour = str(a.get("canvas_data") or "").strip()
@@ -334,7 +413,7 @@ class ImageMaskEditorC2C:
             return {"ui": {"c2c_ime_frames": []},
                     "result": (mask, _preview_overlay(painted[..., :3], mask), info, *self._empty_outputs(painted))}
         r = self._execute_impl(image, editor_id, frame_mode, grow, feather, threshold, invert, input_mask, combine,
-                               extra_mask=colour_mask if colour else None)
+                               extra_mask=colour_mask if colour else None, layer_output=layer_output)
         mask, preview, info = r["result"]
         if colour:
             info = f"{info}; colour layer"
@@ -353,6 +432,13 @@ class ImageMaskEditorC2C:
             mask, used, outs, ui, info = D.run_shape(a, image, input_mask)
         elif mode == "spline":
             mask, used, outs, ui, info = D.run_spline(a, image, node_id)
+            if a.get("_keyframes"):                             # L9.172: keyed transforms over frames
+                if a["spline_fill"] != "mask":
+                    raise ValueError("Image Mask Editor: spline_keyframes animates spline_fill 'mask' (the flow "
+                                     "pattern animates itself) - clear spline_keyframes or set spline_fill to mask.")
+                text, easing = a["_keyframes"]
+                mask, note = temporal.animate(mask, text, easing, int(image.shape[0]) if image is not None else None)
+                info = f"{info}; {note}"
         elif mode == "roto":
             mask, used, outs, ui, info = D.run_roto(a)
         else:
@@ -383,12 +469,16 @@ class ImageMaskEditorC2C:
         input_mask: Optional[torch.Tensor],
         combine: str,
         extra_mask: Optional[torch.Tensor] = None,
+        layer_output: str = "",
     ):
         B, H, W, _C = image.shape
         frame_payload, frame_notes = frames.record_input_frames(image, editor_id)
-        painted_u8, notes = _load_painted_batch(
-            editor_id, B, (H, W), frame_mode,
-        )
+        if layer_output:                                      # L9.172: the layer stack, read here
+            painted_u8, notes = _load_layer_batch(editor_id, B, (H, W), frame_mode, layer_output)
+        else:
+            painted_u8, notes = _load_painted_batch(
+                editor_id, B, (H, W), frame_mode,
+            )
         if frame_notes:
             notes = list(notes) + list(frame_notes)
         painted_t = torch.from_numpy(painted_u8)

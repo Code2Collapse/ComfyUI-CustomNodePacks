@@ -96,6 +96,9 @@ class TilePlan:
     cols: int
     overlap: int
     blend: str
+    # L9.172 (A25): context pixels Tile Split cut around every tile (Tile Merge strips them). 0 = none, the plan as
+    # it always was; a field with a default so every older plan compares equal.
+    halo: int = 0
 
     def __len__(self) -> int:
         return len(self.tiles)
@@ -223,6 +226,29 @@ def build_plan(height: int, width: int, *, rows: int = 2, cols: int = 2,
 
     row_starts, tile_h = _starts(height, rows, overlap)
     col_starts, tile_w = _starts(width, cols, overlap)
+    return build_plan_from_starts(height, width, row_starts, col_starts, tile_h, tile_w,
+                                  overlap=overlap, blend=blend)
+
+
+def build_plan_from_starts(height: int, width: int, row_starts, col_starts, tile_h: int, tile_w: int, *,
+                           overlap: int = 64, blend: str = "cosine") -> TilePlan:
+    """A plan from explicit tile starts (L9.172: content-aware planning moves the seams; build_plan passes the evenly
+    spaced starts). Every tile has ONE size; the fades match the real overlap with each neighbour."""
+    if height < 1 or width < 1:
+        raise TilingError(f"Frame size must be positive, got {width}x{height}.")
+    if blend not in BLEND_MODES:
+        raise TilingError(
+            f"Unknown blend mode {blend!r}. Use one of: {', '.join(BLEND_MODES)}.")
+    row_starts = [int(v) for v in row_starts]
+    col_starts = [int(v) for v in col_starts]
+    rows, cols = len(row_starts), len(col_starts)
+    if rows < 1 or cols < 1:
+        raise TilingError("A plan needs at least one tile on each axis.")
+    for name, starts in (("row", row_starts), ("column", col_starts)):
+        # non-decreasing, not strictly increasing: build_plan's own rounding can repeat a start on a tiny frame with
+        # many tiles, and such a plan has always been accepted
+        if any(b < a for a, b in zip(starts, starts[1:])):
+            raise TilingError(f"The {name} starts {starts} must increase.")
 
     tiles: list[Tile] = []
     for r, top in enumerate(row_starts):
@@ -463,3 +489,33 @@ def merge(tiles: list[torch.Tensor], plan: TilePlan, *,
     # A zero weight would be a hole; validate_plan() makes that impossible, so
     # the clamp is belt and braces rather than a silent repair.
     return (acc / wacc.clamp(min=1e-8)).to(first.dtype)
+
+
+def placements(tiles: list[torch.Tensor], plan: TilePlan, *, scale: float = 1.0):
+    """Where merge() puts each tile: [(top, left, height, width, window [h, w] float32)], with merge()'s own rounding
+    and checks (L9.172: the adaptive merge and the seam inspection read the same geometry)."""
+    if len(tiles) != len(plan.tiles):
+        raise TilingError(
+            f"The plan has {len(plan.tiles)} tiles but {len(tiles)} came back. "
+            "Every tile has to be returned, in plan order.")
+    if scale <= 0:
+        raise TilingError(f"Scale must be positive, got {scale}.")
+    out_h = int(round(plan.height * scale))
+    out_w = int(round(plan.width * scale))
+    out = []
+    for tile, piece in zip(plan.tiles, tiles):
+        top = int(round(tile.top * scale))
+        left = int(round(tile.left * scale))
+        ph, pw = _spatial_dims(piece)
+        scaled = Tile(row=tile.row, col=tile.col, top=top, left=left, height=ph, width=pw,
+                      fade_top=int(round(tile.fade_top * scale)),
+                      fade_bottom=int(round(tile.fade_bottom * scale)),
+                      fade_left=int(round(tile.fade_left * scale)),
+                      fade_right=int(round(tile.fade_right * scale)))
+        if top + ph > out_h or left + pw > out_w:
+            raise TilingError(
+                f"Tile r{tile.row}c{tile.col} came back {pw}x{ph} and does not "
+                f"fit at ({left},{top}) in {out_w}x{out_h}.")
+        w2 = window_2d(scaled, blend=plan.blend, dtype=torch.float32, device=piece.device)
+        out.append((top, left, ph, pw, w2))
+    return out

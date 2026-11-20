@@ -29,6 +29,10 @@ _MAX_LAYERS = 8
 _MAX_LAYER_NAME = 40
 _LAYER_ID_RE = re.compile(r"^[a-z0-9-]{1,16}$")
 _LAYER_MODES = frozenset({"add", "subtract", "intersect"})
+# L9.172 (A25): per-layer metadata (free text the editor keeps with a layer: note, colour tag, shot ...)
+_MAX_META_KEYS = 16
+_MAX_META_KEY = 40
+_MAX_META_VALUE = 200
 
 _LOCKS_GUARD = threading.Lock()
 _LOCKS: Dict[str, threading.Lock] = {}
@@ -113,17 +117,86 @@ def validate_layers_manifest(manifest: dict) -> dict:
         mode = str(item.get("mode", ""))
         if mode not in _LAYER_MODES:
             raise ValueError(f"invalid layer mode: {mode!r}")
-        layers.append({
+        layer = {
             "id": lid,
             "name": name,
             "mode": mode,
             "visible": bool(item.get("visible", True)),
             "locked": bool(item.get("locked", False)),
-        })
+        }
+        if "meta" in item:                       # L9.172: kept only when given, so older manifests round-trip as-is
+            layer["meta"] = _validate_layer_meta(item["meta"])
+        layers.append(layer)
     active = validate_layer_id(str(manifest.get("active", "")))
     if active not in seen:
         raise ValueError(f"active layer not in layers: {active!r}")
     return {"version": 1, "layers": layers, "active": active}
+
+
+def _validate_layer_meta(meta) -> dict:
+    """Per-layer metadata: a flat object of short strings (at most 16 keys, keys <= 40, values <= 200 characters)."""
+    if not isinstance(meta, dict):
+        raise ValueError("layer meta must be an object")
+    if len(meta) > _MAX_META_KEYS:
+        raise ValueError(f"layer meta has more than {_MAX_META_KEYS} keys")
+    out = {}
+    for k, v in meta.items():
+        if not isinstance(k, str) or not k or len(k) > _MAX_META_KEY:
+            raise ValueError(f"layer meta keys must be 1..{_MAX_META_KEY} characters")
+        if not isinstance(v, str) or len(v) > _MAX_META_VALUE:
+            raise ValueError(f"layer meta values must be strings of at most {_MAX_META_VALUE} characters")
+        out[k] = v
+    return out
+
+
+def get_layer_frame(editor_id: str, layer_id: str, frame: int) -> Optional[np.ndarray]:
+    """One layer's own pixels for a frame (uint8 [H,W]), or None when that layer has nothing stored there."""
+    body = get_layer_frame_png(editor_id, layer_id, frame)
+    return _png_to_mask(body) if body else None
+
+
+def composite_layers(layers: List[dict], buffers: Dict[str, np.ndarray], shape_hw: tuple) -> np.ndarray:
+    """The editor's mergeLayers (js/image_mask_editor/layers.js), bottom to top over the VISIBLE layers: add = max,
+    subtract = min(m, 255 - L), intersect = min(m, L); a layer with no pixels stored counts as all zero."""
+    m = np.zeros(shape_hw, dtype=np.uint8)
+    zero = np.zeros(shape_hw, dtype=np.uint8)
+    for layer in layers:
+        if layer.get("visible", True) is False:
+            continue
+        buf = buffers.get(layer["id"])
+        L = zero if buf is None else buf
+        mode = layer.get("mode") or "add"
+        if mode == "add":
+            m = np.maximum(m, L)
+        elif mode == "subtract":
+            m = np.minimum(m, 255 - L)
+        elif mode == "intersect":
+            m = np.minimum(m, L)
+    return m
+
+
+def layers_digest(editor_id: str) -> str:
+    """Changes when the layer manifest or any layer frame file changes (name, size, mtime); "" without a stack."""
+    eid = (editor_id or "").strip()
+    try:
+        validate_editor_id(eid)
+    except ValueError:
+        return ""
+    ed = _editor_dir(eid)
+    parts = []
+    lj = ed / "layers.json"
+    if not lj.is_file():
+        return ""
+    try:
+        parts.append(lj.read_bytes().decode("utf-8", "replace"))
+        root = ed / "layers"
+        if root.is_dir():
+            for p in sorted(root.rglob("*.png")):
+                st = p.stat()
+                parts.append(f"{p.relative_to(root).as_posix()}:{st.st_size}:{st.st_mtime_ns}")
+    except OSError:
+        return ""
+    return hashlib.sha1("|".join(parts).encode("utf-8")).hexdigest()
 
 
 def _layers_json_path(editor_id: str) -> Path:
