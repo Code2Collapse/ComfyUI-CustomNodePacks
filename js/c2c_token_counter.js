@@ -91,6 +91,10 @@ function _attachToNode(node) {
         type: "c2c_token_badge",
         name: "tokens",
         value: "0 / 77",
+        // L9.299: display only - never saved (widgets_values) nor sent in the API prompt's inputs. It updated itself,
+        // so every prompt with a text encoder changed on its own and identical re-queues missed the cache.
+        serialize: false,
+        options: { serialize: false },
         _state: { count: 0, klass: "ok", exact: false, t: null },
         draw(ctx, _node, widget_width, y, _h) {
             // Canvas 2D context does NOT resolve CSS variables — we must
