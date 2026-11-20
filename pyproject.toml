@@ -1,11 +1,18 @@
 [project]
+# Comfy Registry node id. PUBLISHED as "comfyui-customnodepacks" (registry ids are immutable and unique
+# case-insensitively), so registry / ComfyUI-Manager installs land in custom_nodes/comfyui-customnodepacks while a
+# git clone lands in custom_nodes/ComfyUI-CustomNodePacks (README "Folder name"). Do not change it.
 name = "comfyui-customnodepacks"
-description = "Custom node packs for ComfyUI: FolderIncrementer (auto-versioning) + MaskEditControl (pinpoint mask editing with SAM 2.1 / SAM 3, per-axis erode/expand, point editor, bbox tools, video mask propagation)."
+description = "Code2Collapse's core ComfyUI pack: mask editing and segmentation (MaskEditControl, Image Mask Editor, SAM 1/2/3, matting, mask placement), C2C Vault protected subgraphs, Folder Incrementer versioned output, C2C video load/save, render farm and multi-GPU split, Magnific API nodes, frequency/grain, tiled refinement, layer effects and model analysis."
 version = "2.0.0-dev"
 license = { file = "LICENSE" }
 requires-python = ">=3.10"
 readme = "README.md"
 authors = [{ name = "Code2Collapse" }]
+classifiers = [
+    "Operating System :: Microsoft :: Windows",
+    "Operating System :: POSIX :: Linux",
+]
 # torch / torchvision come with ComfyUI and are NOT listed: an installer resolving them could replace the
 # CUDA build ComfyUI runs on (A24 dependency audit, 2026-11-07).
 dependencies = [
@@ -26,6 +33,7 @@ ai-local = []  # llama.cpp or Ollama is installed system-wide; no Python deps re
 
 [project.urls]
 Repository = "https://github.com/Code2Collapse/ComfyUI-CustomNodePacks"
+Documentation = "https://github.com/Code2Collapse/ComfyUI-CustomNodePacks#readme"
 Issues = "https://github.com/Code2Collapse/ComfyUI-CustomNodePacks/issues"
 
 [tool.pytest.ini_options]
