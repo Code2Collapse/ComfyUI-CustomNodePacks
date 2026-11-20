@@ -12,6 +12,7 @@ from typing import Any
 
 from . import colour_cm as CM
 from . import handles_io as HIO
+from . import media_report as MREP
 from . import media_roots as ROOTS
 from . import source_meta as SMETA
 from .audio import LazyAudio, lazy_audio_for_handle
@@ -31,11 +32,13 @@ from .reader import iter_chunks
 try:                                   # L9.89: the unified media engine (c2c_core, the vendored shared core)
     from ...c2c_core.timeline import ledger as LEDGER
     from ...c2c_core.video import media as MEDIA
+    from ...c2c_core.video.exr import inspect_image
     from ...c2c_core.video.passes import ExrPasses
     from ...c2c_core.video.sequence import EDGE_POLICIES, parse_frame_range, scan_directory
 except (ImportError, ValueError):      # tests: the pack root is on sys.path
     from c2c_core.timeline import ledger as LEDGER
     from c2c_core.video import media as MEDIA
+    from c2c_core.video.exr import inspect_image
     from c2c_core.video.passes import ExrPasses
     from c2c_core.video.sequence import EDGE_POLICIES, parse_frame_range, scan_directory
 
@@ -89,7 +92,13 @@ RESOLUTION_PRESETS: dict[str, int | None] = {
     "1024 wide": 1024,
     "custom": None,
 }
-RESOLUTION_CHOICES: list[str] = list(RESOLUTION_PRESETS.keys())
+# L9.171 (A25 spec 72.2, proxy decoding): a proxy is the source (after the crop) at 1/k of its size, kept on the size
+# grid, read straight at that size (the frames are resampled while they are converted: never a full-size float frame
+# first), so a look-dev pass holds 1/k^2 of the RAM. Appended to the resolution choices; video_info["c2c_proxy"] says
+# what the full size is. Old workflows never hold these values.
+PROXY_PRESETS: dict[str, int] = {"proxy 1/2": 2, "proxy 1/4": 4, "proxy 1/8": 8}
+PROXY_INFO_KEY = "c2c_proxy"
+RESOLUTION_CHOICES: list[str] = list(RESOLUTION_PRESETS.keys()) + list(PROXY_PRESETS)
 DIVISIBLE_CHOICES: list[int] = [1, 2, 8, 16, 32, 64]
 AUDIO_MISSING_CHOICES: list[str] = ["silence", "none"]
 
@@ -328,6 +337,9 @@ def resolution_target_size(
     """The loaded size for a ``resolution`` choice. "custom" (and anything unknown) is compute_target_size, unchanged;
     "source" ignores custom_width / custom_height; the presets set the longest side and keep the aspect."""
     m = max(1, int(dim_multiple))
+    if resolution in PROXY_PRESETS:                       # L9.171: 1/k of the (cropped) source, on the grid
+        k = PROXY_PRESETS[resolution]
+        return _round_to(int(src_w) / k, m), _round_to(int(src_h) / k, m)
     if resolution not in RESOLUTION_PRESETS or resolution == "custom":
         return compute_target_size(src_w, src_h, custom_w, custom_h, m)
     longest = RESOLUTION_PRESETS[resolution]
@@ -480,8 +492,12 @@ def build_images_handle(
     skip_first_images: int,
     select_every_nth: int,
     image_load_cap: int,
+    exr_layer: str | None = None,
 ) -> C2CVideo:
-    h = probe_sequence(strip_path(directory))
+    """``exr_layer`` (L9.171): None / "" = the first channels of the first part, as always; "auto" or a layer name =
+    that layer of a (multi-part) EXR, by name."""
+    layer = str(exr_layer).strip() if exr_layer is not None and str(exr_layer).strip() else None
+    h = probe_sequence(strip_path(directory), layer=layer)
     return h.trimmed(int(skip_first_images)).every(int(select_every_nth)).capped(int(image_load_cap))
 
 
@@ -910,6 +926,9 @@ def execute_video_load(
     colour = None if data_layer else CM.plan(raw, colorspace_in, working_space)   # depth / normals are values
     if colour is not None:
         video_info[CM.INFO_KEY] = colour.record          # Save Video (C2C) reverses exactly this (L9.53)
+    proxy = proxy_record(raw, loaded, resolution)
+    if proxy is not None:
+        video_info[PROXY_INFO_KEY] = proxy              # L9.171: the full size a proxy load stands for
     HIO.remember_load(unique_id, prompt, video_info)      # Save Video finds it without a video_info wire (L9.52)
     count = len(loaded)
     needs_image = is_output_linked(prompt, unique_id, 0)
@@ -924,9 +943,17 @@ def execute_video_load(
               else ExrPasses.empty())
     metadata = json.dumps(media_metadata(raw, facts, video_info), indent=2, default=str)
 
+    try:                                                # L9.171 (spec 72.1): streams, timecode, colour tags
+        streams = MREP.load_streams(raw, selected, video_info)
+    except Exception as exc:  # noqa: BLE001 - a report is a bonus, never a reason not to load
+        streams = {"streams": {"error": f"{type(exc).__name__}: {exc}"}}
+
     def info(used: DecoderPlan | None) -> str:
         summary = load_summary(raw, loaded, format_name=format or "None", plan=used, audio_mode=audio_mode)
         summary["media"] = media_summary(raw, loaded, facts, timeline, data_layer=data_layer)
+        summary.update(streams)
+        if proxy is not None:
+            summary["proxy"] = proxy
         if handles_rec is not None:
             summary["handles"] = {"head": handles_rec["head"], "tail": handles_rec["tail"],
                                   "target": handles_rec.get("target", 0), "grid": handles_rec["grid"],
@@ -996,6 +1023,17 @@ def _movie_metadata(path: str) -> dict[str, Any]:
         return {"error": str(exc)}
 
 
+def proxy_record(raw: C2CVideo, loaded: C2CVideo, resolution: str | None) -> dict[str, int] | None:
+    """video_info["c2c_proxy"] for a proxy load (L9.171): the factor, the full size it stands for (the source, or its
+    crop) and the size loaded. None for every other resolution choice."""
+    k = PROXY_PRESETS.get(str(resolution or ""))
+    if not k:
+        return None
+    full = (loaded.crop[2], loaded.crop[3]) if loaded.crop is not None else (raw.width, raw.height)
+    return {"factor": int(k), "full_width": int(full[0]), "full_height": int(full[1]),
+            "width": int(loaded.width), "height": int(loaded.height)}
+
+
 def audio_output_mode(h: C2CVideo, audio_when_missing: str = "silence") -> str:
     """"file" when the clip has an audio stream, else "silence" (a silent track of the clip's length - what the loader
     always did) or "none" (no AUDIO output)."""
@@ -1059,6 +1097,7 @@ def execute_images_load(
     select_every_nth: int,
     prompt: dict | None = None,
     unique_id: str | None = None,
+    exr_layer: str | None = None,
 ) -> tuple[Any | None, Any | None, int, C2CVideo]:
     raw = probe_sequence(strip_path(directory))
     n_before_skip = len(raw)
@@ -1067,6 +1106,7 @@ def execute_images_load(
         skip_first_images=skip_first_images,
         select_every_nth=select_every_nth,
         image_load_cap=image_load_cap,
+        exr_layer=exr_layer,
     )
     if len(loaded) == 0:
         _raise_if_empty_selection(
@@ -1086,10 +1126,63 @@ def execute_images_load(
     return image, mask, count, loaded
 
 
+def images_passes(loaded: C2CVideo) -> Any:
+    """C2C_EXR_PASSES of a Load Images Path selection (L9.171, spec 71.2): every layer of the first EXR, lazily (the
+    same frames, crop and size); an empty bundle for other images."""
+    files = tuple(getattr(loaded.source, "files", ()) or ())
+    if not files or os.path.splitext(files[0])[1].lower() != ".exr":
+        return ExrPasses.empty()
+    info = inspect_image(files[0])
+    return ExrPasses(loaded, info.layers, layer_used=str(getattr(loaded.source, "layer", "") or ""))
+
+
+def _values_meaning(h: C2CVideo, layer_kind: str) -> str:
+    if layer_kind and layer_kind not in ("colour", "alpha"):
+        return f"{layer_kind} data: raw values, never colour-converted"
+    transfer = h.colour.transfer
+    if transfer == "linear":
+        return "scene-linear light (float), as stored: values above 1 are kept, no colour transform applied"
+    if transfer == "data":
+        return "data: raw values, never colour-converted"
+    return "display-encoded (sRGB-style) values, as stored"
+
+
+def images_report(directory: str, loaded: C2CVideo, passes: Any, exr_layer: str | None) -> dict[str, Any]:
+    """The sequence_report output (L9.171, spec 71.1 / 71.2): what the folder holds (patterns, frame ranges, numbering
+    convention, missing frames, files ignored), which files load, and for an EXR its layers with their kind and what
+    the IMAGE's values mean. One listing + one header: no pixel is read."""
+    files = tuple(loaded.source.files)
+    sel = [int(i) for i in loaded.selected_indices() if int(i) >= 0]
+    nums = tuple(getattr(loaded.source, "numbers", ()) or ())
+    numbered = len(nums) == len(files)
+    out = MREP.sequence_discovery(strip_path(directory), files, exts=SEQUENCE_IMAGE_EXTENSIONS)
+    out["selection"] = {
+        "frames": len(sel), "of": len(files),
+        "first_file": os.path.basename(files[sel[0]]) if sel else None,
+        "last_file": os.path.basename(files[sel[-1]]) if sel else None,
+        "first_number": int(nums[sel[0]]) if sel and numbered else None,
+        "last_number": int(nums[sel[-1]]) if sel and numbered else None,
+        "width": int(loaded.width), "height": int(loaded.height), "pix_fmt": loaded.pix_fmt,
+    }
+    layers = passes.to_dict()["layers"] if len(passes.layers()) else []
+    used = str(getattr(loaded.source, "layer", "") or "")
+    kind = next((lay["kind"] for lay in layers if lay["key"] == used), "")
+    if layers:
+        out["exr"] = {"layers": layers, "layer_asked": str(exr_layer or ""),
+                      "layer_used": used or "first channels of part 0 (as before)", "layer_kind": kind or None,
+                      "values": _values_meaning(loaded, kind)}
+    else:
+        out["exr"] = None
+        out["values"] = _values_meaning(loaded, "")
+    return out
+
+
 SECONDS_TIP = ("Load at most this many seconds after skip_first_frames (0 = no limit), at the force_rate rate when "
                "set. Works with frame_load_cap: the smaller one wins, and a format preset then snaps the count.")
 RESOLUTION_TIP = ("Output size by its LONGEST side, keeping the aspect: 2160p is 3840, 1080p is 1920. custom uses "
-                  "custom_width / custom_height (0 = keep the source size or follow the aspect). source ignores them.")
+                  "custom_width / custom_height (0 = keep the source size or follow the aspect). source ignores them. "
+                  "proxy 1/2, 1/4, 1/8: the source (after the crop) at that fraction of its size, read straight at "
+                  "that size for a fast, light look-dev pass; video_info and info record the full size.")
 DIVISIBLE_TIP = "Round both output dimensions to a multiple of this. A format preset or a VAE may raise it."
 AUDIO_MISSING_TIP = ("When the file has no audio: silence outputs a silent track as long as the loaded frames (what the "
                      "loader always did, so downstream nodes keep working); none outputs nothing.")
@@ -1137,6 +1230,14 @@ MISSING_TIP = ("A frame inside the sequence's range with no file. error (default
                "then plays early.")
 EDGE_TIP = ("frame_range beyond the first / last frame: hold repeats the edge frame, black adds black frames, loop "
             "wraps, bounce plays back and forth, error stops.")
+IMAGES_EXR_LAYER_TIP = ("EXR only. Empty: the first channels of the first part (what this node always loaded). auto: the "
+                        "main picture (rgba). Or a layer name - diffuse, depth, N, crypto00 ... (sequence_report lists "
+                        "them): that layer goes to IMAGE, data layers (depth, normals, position, motion) as raw "
+                        "values. exr_passes carries every layer.")
+VIDEO_INFO_VIDEO_TIP = ("Optional: the loader's video output. With it, timeline adds the time base, measured frame "
+                        "rate, variable frame rate and audio streams, and integrity checks every frame of the "
+                        "source (packet timestamps of a movie - demux only, nothing decoded; numbers and headers of "
+                        "a sequence).")
 EXR_LAYER_TIP = ("The EXR layer the IMAGE shows: auto (the beauty / rgba), or a layer name from info - diffuse, depth, "
                  "N, P, crypto00 ... Data layers (depth, normals, position, motion) load as raw values, never "
                  "colour-converted. exr_passes carries every layer.")
@@ -1365,17 +1466,26 @@ class LoadImagesPathC2C:
                 "image_load_cap": ("INT", _widget("Max images; 0 = no cap.", default=0, min=0, max=BIGMAX)),
                 "skip_first_images": ("INT", _widget("Skip this many images first.", default=0, min=0, max=BIGMAX)),
                 "select_every_nth": ("INT", _widget("Keep every Nth image.", default=1, min=1, max=100_000)),
+                # L9.171 (A25 spec 71.2) - appended; empty = the first channels of the first part, as before
+                "exr_layer": ("STRING", _widget(IMAGES_EXR_LAYER_TIP, default="")),
             },
             "hidden": {"prompt": "PROMPT", "unique_id": "UNIQUE_ID"},
         }
 
-    RETURN_TYPES = ("IMAGE", "MASK", "INT", "C2C_VIDEO")
-    RETURN_NAMES = ("IMAGE", "MASK", "frame_count", "video")
+    # outputs 4-5 appended (L9.171): saved links to 0-3 keep their meaning
+    RETURN_TYPES = ("IMAGE", "MASK", "INT", "C2C_VIDEO", "C2C_EXR_PASSES", "STRING")
+    RETURN_NAMES = ("IMAGE", "MASK", "frame_count", "video", "exr_passes", "sequence_report")
     DESCRIPTION = ("Load a folder of numbered images as frames, in name order, with a cap, a skip and every-Nth "
-                   "selection. The folder must be inside ComfyUI's input / output / media roots.")
+                   "selection; pick an EXR layer by name, and read what the folder holds (patterns, frame ranges, "
+                   "missing frames) in sequence_report. The folder must be inside ComfyUI's input / output / media "
+                   "roots.")
     OUTPUT_TOOLTIPS = ("The frames.", "1 - alpha of each frame when the images have alpha.", "Frames loaded.",
-                       "The lazy media handle for the C2C video nodes.")
-    FUNCTION = "load_images"
+                       "The lazy media handle for the C2C video nodes.",
+                       "Every layer of an EXR source, lazily, for the same frames (empty for other images).",
+                       "JSON: the sequences found in the folder (pattern, frame range, step, zero padding, missing "
+                       "frames), files ignored, which files load, and for an EXR its layers and what the IMAGE's "
+                       "values mean. Linked alone it reads no pixels.")
+    FUNCTION = "load_images_c2c"
     CATEGORY = CATEGORY
 
     def load_images(
@@ -1386,20 +1496,44 @@ class LoadImagesPathC2C:
         select_every_nth=1,
         prompt=None,
         unique_id=None,
+        exr_layer="",
     ):
+        """The first four outputs (IMAGE, MASK, frame_count, video) - kept for existing callers of this method."""
+        return self.load_images_c2c(directory, image_load_cap, skip_first_images, select_every_nth,
+                                    exr_layer=exr_layer, prompt=prompt, unique_id=unique_id)[:4]
+
+    def load_images_c2c(
+        self,
+        directory,
+        image_load_cap=0,
+        skip_first_images=0,
+        select_every_nth=1,
+        exr_layer="",
+        prompt=None,
+        unique_id=None,
+    ):
+        import json
+
         # A22 L9.136 / D0.35: a server reachable from other machines reads only inside the media roots.
         blocked = ROOTS.check_run_path(os.path.abspath(strip_path(directory or "")))
         if blocked:
             raise PermissionError(f"Load Images Path (C2C): {blocked}")
-        return execute_images_load(
-            node_name="Load Images Path (C2C)",
-            directory=directory,
-            image_load_cap=image_load_cap,
-            skip_first_images=skip_first_images,
-            select_every_nth=select_every_nth,
-            prompt=prompt,
-            unique_id=unique_id,
-        )
+        try:
+            image, mask, count, loaded = execute_images_load(
+                node_name="Load Images Path (C2C)",
+                directory=directory,
+                image_load_cap=image_load_cap,
+                skip_first_images=skip_first_images,
+                select_every_nth=select_every_nth,
+                prompt=prompt,
+                unique_id=unique_id,
+                exr_layer=exr_layer,
+            )
+        except ValueError as exc:            # an unknown layer: the message names the layers there are
+            raise ValueError(f"Load Images Path (C2C): {exc}") from exc
+        passes = images_passes(loaded)
+        report = json.dumps(images_report(directory, loaded, passes, exr_layer), indent=2, default=str)
+        return image, mask, count, loaded, passes, report
 
     @classmethod
     def IS_CHANGED(cls, directory, **kwargs):
@@ -1421,6 +1555,10 @@ class VideoInfoC2C:
             "required": {
                 "video_info": ("VHS_VIDEOINFO", _widget("Metadata from a C2C or VHS loader.")),
             },
+            # L9.171 (A25 spec 74) - appended: the loader's video output gives the full timeline and the frame check
+            "optional": {
+                "video": ("C2C_VIDEO", _widget(VIDEO_INFO_VIDEO_TIP)),
+            },
         }
 
     DESCRIPTION = ("Read a loader's video_info as numbers: the source file's frame rate, frame count, duration (s) and "
@@ -1428,8 +1566,19 @@ class VideoInfoC2C:
     OUTPUT_TOOLTIPS = ("Source frame rate.", "Frames in the source.", "Source duration in seconds.",
                        "Source width in pixels.", "Source height in pixels.", "Frame rate of the loaded frames.",
                        "Frames loaded.", "Duration of the loaded frames in seconds.", "Loaded width in pixels.",
-                       "Loaded height in pixels.")
-    RETURN_TYPES = ("FLOAT", "INT", "FLOAT", "INT", "INT", "FLOAT", "INT", "FLOAT", "INT", "INT")
+                       "Loaded height in pixels.",
+                       "Timecode of the first loaded frame (else the source's start timecode; empty when it has "
+                       "none).",
+                       "JSON: time base, start, nominal and measured frame rate, variable frame rate, frame duration "
+                       "range, timecode (start, end, drop frame, first / last loaded frame) and every audio stream. "
+                       "Without video: what video_info holds.",
+                       "JSON: missing, duplicated, irregular or unreadable frames of the source (movie: packet "
+                       "timestamps; sequence: frame numbers and headers), and which fall in the loaded frames. Needs "
+                       "video.",
+                       "True only when video is connected and the integrity check found nothing.")
+    # outputs 10-13 appended (L9.171): saved links to 0-9 keep their meaning
+    RETURN_TYPES = ("FLOAT", "INT", "FLOAT", "INT", "INT", "FLOAT", "INT", "FLOAT", "INT", "INT",
+                    "STRING", "STRING", "STRING", "BOOLEAN")
     RETURN_NAMES = (
         "source_fps",
         "source_frame_count",
@@ -1441,13 +1590,56 @@ class VideoInfoC2C:
         "loaded_duration",
         "loaded_width",
         "loaded_height",
+        "timecode",
+        "timeline",
+        "integrity",
+        "frames_ok",
     )
-    FUNCTION = "get_video_info"
+    FUNCTION = "video_info_c2c"
     CATEGORY = CATEGORY
 
     def get_video_info(self, video_info):
+        """The ten numbers (outputs 0-9) - kept for existing callers of this method."""
         keys = ("fps", "frame_count", "duration", "width", "height")
-        return tuple(video_info[f"source_{k}"] for k in keys) + tuple(video_info[f"loaded_{k}"] for k in keys)
+        names = [f"{side}_{k}" for side in ("source", "loaded") for k in keys]
+        absent = [n for n in names if not isinstance(video_info, dict) or n not in video_info]
+        if absent:
+            raise ValueError(f"Video Info (C2C): video_info has no {', '.join(absent)} - connect the video_info "
+                             "output of a Load Video (C2C) or VHS loader.")
+        return tuple(video_info[n] for n in names)
+
+    def video_info_c2c(self, video_info, video=None):
+        import json
+
+        numbers = self.get_video_info(video_info)
+        if video is None:
+            timeline = timeline_from_info(video_info)
+            integrity = {"checked": False, "ok": False,
+                         "issues": ["not checked: connect the loader's video output to check the frames"]}
+        else:
+            timeline = MREP.timeline_report(video, video_info)
+            integrity = MREP.integrity_report(video)
+        tc = timeline.get("timecode") or {}
+        first = (tc.get("loaded") or {}).get("first") or tc.get("start") or ""
+        ok = bool(integrity.get("checked")) and bool(integrity.get("ok"))
+        return numbers + (str(first), json.dumps(timeline, indent=2, default=str),
+                          json.dumps(integrity, indent=2, default=str), ok)
+
+
+def timeline_from_info(video_info: dict) -> dict[str, Any]:
+    """Video Info's timeline without a video handle: the rates and counts of video_info and the timecode Load Video
+    (C2C) recorded (VHS loaders record none)."""
+    rec = video_info.get(SMETA.INFO_KEY) if isinstance(video_info, dict) else None
+    tc = None
+    if isinstance(rec, dict):
+        start = rec.get("source_timecode") or rec.get("timecode")
+        parsed = SMETA.parse_tc(start)
+        if parsed is not None:
+            tc = {"start": start, "from": "video_info (Load Video)", "drop_frame": bool(parsed[4]),
+                  "loaded": MREP.loaded_timecode(rec)}
+    return {"kind": None, "nominal_fps": video_info.get("source_fps"), "frames": video_info.get("source_frame_count"),
+            "duration_seconds": video_info.get("source_duration"), "timecode": tc,
+            "note": "connect the loader's video output for the time base, variable frame rate and audio streams"}
 
 
 NODE_CLASS_MAPPINGS = {
