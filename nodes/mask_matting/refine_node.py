@@ -433,6 +433,70 @@ def _feather(m: torch.Tensor, sigma: float) -> torch.Tensor:
     return p.squeeze(1).clamp(0.0, 1.0)
 
 
+# ── L9.172 (A25 spec 46.2): temporal matte QC ────────────────────────
+REFINE_REGIONS = ("everywhere", "uncertain band only")
+
+
+def _boundary(binary: np.ndarray) -> np.ndarray:
+    """Boundary pixels of a bool HxW mask: the mask minus its 3x3 erosion (frame edge counts as inside)."""
+    p = np.pad(binary, 1, mode="edge")
+    er = binary.copy()
+    for dy in (0, 1, 2):
+        for dx in (0, 1, 2):
+            er &= p[dy:dy + binary.shape[0], dx:dx + binary.shape[1]]
+    return binary & ~er
+
+
+def _dist_to(boundary: np.ndarray):
+    """Distance of every pixel to the nearest True pixel of `boundary` (cv2, else scipy, else None)."""
+    if _CV2:
+        return cv2.distanceTransform((~boundary).astype(np.uint8), cv2.DIST_L2, 5)
+    if _HAS_SCIPY:
+        return _ndi.distance_transform_edt(~boundary)
+    return None
+
+
+def temporal_matte_qc(alpha: torch.Tensor) -> dict:
+    """Per frame t >= 1: alpha_change (mean |a_t - a_t-1| where either is above 0.01), boundary_shift_px
+    (symmetric mean chamfer distance between the a >= 0.5 boundaries; None when one is empty or no distance
+    transform is available) and unstable_alpha (share of semi-transparent pixels, 0.05..0.95 in either frame, whose
+    value changed by more than 0.1)."""
+    a = alpha.detach().float().cpu().numpy()
+    if a.ndim == 2:
+        a = a[None]
+    B = int(a.shape[0])
+    if B < 2:
+        return {"frames": B, "note": "temporal QC needs a clip (2+ frames)"}
+    rows = []
+    for t in range(1, B):
+        p, c = a[t - 1], a[t]
+        diff = np.abs(c - p)
+        live = np.maximum(c, p) > 0.01
+        change = float(diff[live].mean()) if live.any() else 0.0
+        bp, bc = _boundary(p >= 0.5), _boundary(c >= 0.5)
+        shift = None
+        if bp.any() and bc.any():
+            dp, dc = _dist_to(bp), _dist_to(bc)
+            if dp is not None and dc is not None:
+                shift = round(float((dp[bc].mean() + dc[bp].mean()) * 0.5), 5)
+        semi = ((p > 0.05) & (p < 0.95)) | ((c > 0.05) & (c < 0.95))
+        unstable = float((diff[semi] > 0.1).mean()) if semi.any() else 0.0
+        rows.append({"frame": t, "alpha_change": round(change, 5), "boundary_shift_px": shift,
+                     "unstable_alpha": round(unstable, 5)})
+    shifts = [r["boundary_shift_px"] for r in rows if r["boundary_shift_px"] is not None]
+    changes = [r["alpha_change"] for r in rows]
+    worst = sorted(rows, key=lambda r: -r["alpha_change"])[:3]
+    return {
+        "frames": B,
+        "per_frame": rows,
+        "alpha_change_mean": round(float(np.mean(changes)), 5),
+        "alpha_change_max": round(float(np.max(changes)), 5),
+        "boundary_shift_px_mean": round(float(np.mean(shifts)), 5) if shifts else None,
+        "unstable_alpha_mean": round(float(np.mean([r["unstable_alpha"] for r in rows])), 5),
+        "worst_frames": [r["frame"] for r in worst],
+    }
+
+
 # ── The node ─────────────────────────────────────────────────────────
 def _apply_overrides(text, cfg: dict, quiet: bool = False) -> list:
     """Layer advanced_overrides_json onto cfg; return the keys it does not know (they are ignored and listed in the
@@ -591,6 +655,24 @@ class MaskRefineMEC:
                 "integrity_jump_threshold": ("FLOAT", {
                     "default": 0.15, "min": 0.0, "max": 1.0, "step": 0.01,
                     "tooltip": "Relative frame-to-frame coverage jump that flags a frame."}),
+                # L9.172 (A25 spec 46): appended LAST so saved widget values keep their slots
+                "refine_region": (list(REFINE_REGIONS), {
+                    "default": REFINE_REGIONS[0],
+                    "tooltip": "everywhere: every stage works on the whole frame (as before). uncertain band only: "
+                               "the per-frame stages (hole fill ... anti-alias) run on a crop around the band where "
+                               "the INPUT mask is neither surely subject nor surely background, and only that band "
+                               "may change; frames with no uncertain pixel are skipped (faster on clean mattes). "
+                               "The finish stages (temporal smooth, feather, gamma, threshold) still apply to the "
+                               "whole matte. info reports the band's share and the skipped frames."}),
+                "uncertainty_band_px": ("INT", {
+                    "default": 6, "min": 1, "max": 128, "step": 1,
+                    "tooltip": "uncertain band only: half-width of the band around the mask edge, in pixels (the "
+                               "edge is shrunk / grown by this much); a soft (feathered) edge widens it."}),
+                "temporal_qc": ("BOOLEAN", {
+                    "default": False,
+                    "tooltip": "Add a temporal matte QC to info (clips): per frame the alpha change, how far the "
+                               "boundary moved (px) and the share of semi-transparent pixels that changed by more "
+                               "than 0.1, plus the 3 worst frames. Measured on the final soft alpha."}),
             },
         }
 
@@ -725,6 +807,7 @@ class MaskRefineMEC:
                    enable_speck_removal=False, enable_temporal_smooth=False,
                    advanced_overrides_json="", enable_integrity_check=False,
                    integrity_drop_threshold=0.40, integrity_jump_threshold=0.15,
+                   refine_region="everywhere", uncertainty_band_px=6, temporal_qc=False,
                    **kwargs):
         return hash_args_and_kwargs(
             image, mask, preset, auto_edge_lock, subject_class,
@@ -736,6 +819,9 @@ class MaskRefineMEC:
             enable_speck_removal, enable_temporal_smooth,
             advanced_overrides_json, enable_integrity_check,
             integrity_drop_threshold, integrity_jump_threshold, **kwargs,
+            # L9.172: hashed only when not at their defaults, so an old save keeps its fingerprint
+            **({"refine_region": refine_region, "uncertainty_band_px": uncertainty_band_px, "temporal_qc": temporal_qc}
+               if (refine_region, int(uncertainty_band_px), bool(temporal_qc)) != ("everywhere", 6, False) else {}),
         )
 
     def execute(
@@ -764,6 +850,9 @@ class MaskRefineMEC:
         enable_integrity_check: bool = False,
         integrity_drop_threshold: float = 0.40,
         integrity_jump_threshold: float = 0.15,
+        refine_region: str = "everywhere",
+        uncertainty_band_px: int = 6,
+        temporal_qc: bool = False,
     ):
         if not isinstance(image, torch.Tensor) or image.ndim != 4:
             raise ValueError("MaskRefineMEC expects IMAGE tensor [B,H,W,C]")
@@ -780,6 +869,7 @@ class MaskRefineMEC:
                 enable_speck_removal, enable_temporal_smooth,
                 advanced_overrides_json, enable_integrity_check,
                 integrity_drop_threshold, integrity_jump_threshold,
+                refine_region, uncertainty_band_px, temporal_qc,
             )
         # L7.124: the Matte viewer in QC mode (plate + refined alpha + QC chips) - ui payload only, outputs unchanged
         try:
@@ -814,6 +904,9 @@ class MaskRefineMEC:
         enable_integrity_check: bool = False,
         integrity_drop_threshold: float = 0.40,
         integrity_jump_threshold: float = 0.15,
+        refine_region: str = "everywhere",
+        uncertainty_band_px: int = 6,
+        temporal_qc: bool = False,
     ):
         # Resolve preset → numerics, then layer JSON overrides on top.
         cfg = dict(self._PRESETS.get(preset, self._PRESETS["balanced"]))
@@ -887,26 +980,25 @@ class MaskRefineMEC:
         B = img_t.shape[0]
         out_np = np.zeros_like(m_t.cpu().numpy())
 
-        for b in range(B):
-            rgb = img_t[b].cpu().numpy()
-            m = m_t[b].cpu().numpy()
-
+        def _stages(rgb, m, img_slice, rec):
+            # the per-frame stage chain 1..8f, unchanged (L9.172: a closure so the uncertain-band mode runs the SAME
+            # code on a crop); `rec` = record ran / skipped from this frame (frame 0 as before)
             # 1. hole fill
             if enable_hole_fill:
                 if _HAS_SCIPY:
                     m = _hole_fill(m, float(hole_fill_threshold))
-                    if b == 0:
+                    if rec:
                         ran.append("hole_fill")
-                elif b == 0:
+                elif rec:
                     skipped.append("hole_fill(missing:scipy)")
 
             # 2. morphology
             if morph_op != "none":
                 if _CV2:
                     m = _morphology(m, morph_op, int(morph_radius))
-                    if b == 0:
+                    if rec:
                         ran.append(f"morph_{morph_op}_r{int(morph_radius)}")
-                elif b == 0:
+                elif rec:
                     skipped.append("morphology(missing:cv2)")
 
             # 3. thin recover
@@ -915,9 +1007,9 @@ class MaskRefineMEC:
                     m = _thin_structure_recover(m, float(thin_threshold),
                                                 int(thin_min_branch_len),
                                                 int(thin_branch_dilate))
-                    if b == 0:
+                    if rec:
                         ran.append("thin_recover")
-                elif b == 0:
+                elif rec:
                     skipped.append("thin_recover(missing:skimage/scipy)")
 
             # 4. joint bilateral
@@ -925,18 +1017,18 @@ class MaskRefineMEC:
                 if _CV2:
                     m = _joint_bilateral(m, rgb, int(jb_diameter),
                                          float(jb_sigma_color), float(jb_sigma_space))
-                    if b == 0:
+                    if rec:
                         ran.append("joint_bilateral" + ("(ximg)" if _HAS_XIMG else "(fallback)"))
-                elif b == 0:
+                elif rec:
                     skipped.append("joint_bilateral(missing:cv2)")
 
             # 5. guided filter (torch — always available)
             if enable_guided_filter:
-                It = img_t[b:b + 1].permute(0, 3, 1, 2).contiguous()
+                It = img_slice.permute(0, 3, 1, 2).contiguous()
                 mt = torch.from_numpy(m).unsqueeze(0).unsqueeze(0).to(It.device, dtype=It.dtype)
                 gf = _guided_filter_torch(It, mt, int(gf_radius), float(gf_epsilon))
                 m = gf.squeeze().cpu().numpy().clip(0.0, 1.0)
-                if b == 0:
+                if rec:
                     ran.append("guided_filter")
 
             # 6. dense CRF
@@ -946,15 +1038,15 @@ class MaskRefineMEC:
                                    float(crf_gauss_sxy),
                                    float(crf_bilateral_sxy),
                                    float(crf_bilateral_srgb))
-                    if b == 0:
+                    if rec:
                         ran.append("dense_crf")
-                elif b == 0:
+                elif rec:
                     skipped.append("dense_crf(missing:pydensecrf)")
 
             # 7. edge snap
             if enable_edge_snap:
                 m = _edge_snap(m, rgb, float(edge_snap_strength), int(edge_snap_band))
-                if b == 0:
+                if rec:
                     ran.append("edge_snap")
 
             # 8. cascade passes (shrinking radii)
@@ -967,7 +1059,7 @@ class MaskRefineMEC:
                                          max(3, int(jb_diameter * shrink) | 1),
                                          float(jb_sigma_color),
                                          float(jb_sigma_space) * shrink)
-                It = img_t[b:b + 1].permute(0, 3, 1, 2).contiguous()
+                It = img_slice.permute(0, 3, 1, 2).contiguous()
                 mt = torch.from_numpy(m).unsqueeze(0).unsqueeze(0).to(It.device, dtype=It.dtype)
                 gf = _guided_filter_torch(It, mt, r_g, float(gf_epsilon))
                 m = gf.squeeze().cpu().numpy().clip(0.0, 1.0)
@@ -975,7 +1067,7 @@ class MaskRefineMEC:
                     m = _edge_snap(m, rgb,
                                    float(edge_snap_strength) * shrink,
                                    max(2, int(edge_snap_band * shrink)))
-                if b == 0 and cp == 0:
+                if rec and cp == 0:
                     ran.append(f"cascade_x{int(cascade_passes)}")
 
             # 8a. NEW: Domain Transform (sharper than guided on hair)
@@ -984,9 +1076,9 @@ class MaskRefineMEC:
                     m = _domain_transform(m, rgb,
                                            float(cfg["dt_sigma_s"]),
                                            float(cfg["dt_sigma_r"]))
-                    if b == 0:
+                    if rec:
                         ran.append("domain_transform")
-                elif b == 0:
+                elif rec:
                     skipped.append("domain_transform(missing:cv2.ximgproc)")
 
             # 8b. NEW: colour decontamination at boundary
@@ -995,9 +1087,9 @@ class MaskRefineMEC:
                     m = _color_decontaminate(m, rgb,
                                               int(cfg["decontam_band"]),
                                               float(cfg["decontam_strength"]))
-                    if b == 0:
+                    if rec:
                         ran.append("color_decontaminate")
-                elif b == 0:
+                elif rec:
                     skipped.append("color_decontaminate(missing:cv2/scipy)")
 
             # 8c. NEW: speck / hole cleanup
@@ -1006,9 +1098,9 @@ class MaskRefineMEC:
                     m = _speck_removal(m,
                                         int(cfg["speck_min_area"]),
                                         int(cfg["speck_fill_holes_below"]))
-                    if b == 0:
+                    if rec:
                         ran.append("speck_removal")
-                elif b == 0:
+                elif rec:
                     skipped.append("speck_removal(missing:scipy)")
 
             # 8d. NEW: chroma-gradient edge lock
@@ -1017,9 +1109,9 @@ class MaskRefineMEC:
                     m = _chroma_lock(m, rgb,
                                       float(cfg["chroma_lock_strength"]),
                                       int(cfg["chroma_lock_band"]))
-                    if b == 0:
+                    if rec:
                         ran.append("chroma_lock")
-                elif b == 0:
+                elif rec:
                     skipped.append("chroma_lock(missing:cv2)")
 
             # 8e. NEW: alpha unsharp
@@ -1028,21 +1120,59 @@ class MaskRefineMEC:
                     m = _unsharp_alpha(m,
                                         float(cfg["unsharp_sigma"]),
                                         float(cfg["unsharp_amount"]))
-                    if b == 0:
+                    if rec:
                         ran.append("unsharp_alpha")
-                elif b == 0:
+                elif rec:
                     skipped.append("unsharp_alpha(missing:cv2)")
 
             # 8f. NEW: subpixel anti-alias
             if enable_anti_alias:
                 if _CV2:
                     m = _anti_alias(m, float(cfg["anti_alias_strength"]))
-                    if b == 0:
+                    if rec:
                         ran.append("anti_alias")
-                elif b == 0:
+                elif rec:
                     skipped.append("anti_alias(missing:cv2)")
+            return m
 
-            out_np[b] = m
+        # L9.172 (A25 spec 46.1): "uncertain band only" refines a crop around the band where the INPUT matte is
+        # neither definite subject nor definite background (ported AusBoss trimap rule, _uncertainty.py) and changes
+        # only the band; frames with no uncertain pixel are skipped
+        if str(refine_region) not in REFINE_REGIONS:
+            raise ValueError(f"MaskRefineMEC: refine_region must be one of {', '.join(REFINE_REGIONS)}, "
+                             f"not {refine_region!r}.")
+        band_mode = str(refine_region) == REFINE_REGIONS[1]
+        unc_np, unc_frac, crop_fracs, frames_certain = None, 0.0, [], 0
+        if band_mode:
+            from ._uncertainty import uncertain_band
+            unc_t = uncertain_band(m_t, int(uncertainty_band_px))
+            unc_frac = float(unc_t.float().mean().item())
+            unc_np = unc_t.cpu().numpy()
+            margin = 3 * max(int(gf_radius), int(jb_diameter), int(edge_snap_band), int(cfg["decontam_band"]),
+                             int(cfg["chroma_lock_band"]), int(uncertainty_band_px), 8)
+        recorded = False
+        for b in range(B):
+            rgb = img_t[b].cpu().numpy()
+            m = m_t[b].cpu().numpy()
+            if not band_mode:
+                out_np[b] = _stages(rgb, m, img_t[b:b + 1], b == 0)
+                continue
+            u = unc_np[b]
+            if not u.any():
+                out_np[b] = m
+                frames_certain += 1
+                continue
+            Hf, Wf = u.shape
+            ys, xs = np.nonzero(u)
+            y0, y1 = max(0, int(ys.min()) - margin), min(Hf, int(ys.max()) + 1 + margin)
+            x0, x1 = max(0, int(xs.min()) - margin), min(Wf, int(xs.max()) + 1 + margin)
+            crop_fracs.append(((y1 - y0) * (x1 - x0)) / float(Hf * Wf))
+            sub = _stages(np.ascontiguousarray(rgb[y0:y1, x0:x1]), np.ascontiguousarray(m[y0:y1, x0:x1]),
+                          img_t[b:b + 1, y0:y1, x0:x1], not recorded)
+            recorded = True
+            res = m.copy()
+            res[y0:y1, x0:x1] = np.where(u[y0:y1, x0:x1], sub, m[y0:y1, x0:x1])
+            out_np[b] = res
 
         out_t = torch.from_numpy(out_np).to(m_t.device, dtype=torch.float32)
 
@@ -1115,6 +1245,17 @@ class MaskRefineMEC:
             except Exception as _e:  # pragma: no cover - defensive
                 info_payload["integrity_error"] = str(_e)
 
+        if band_mode:                                    # L9.172: only when the band mode ran
+            info_payload["uncertainty"] = {
+                "band_px": int(uncertainty_band_px),
+                "uncertain_fraction": round(unc_frac, 5),
+                "frames_skipped": int(frames_certain),
+                "crop_fraction": round(float(np.mean(crop_fracs)), 5) if crop_fracs else 0.0,
+                "note": "finish stages (temporal smooth, feather, gamma, threshold) apply to the whole matte",
+            }
+        if temporal_qc:                                  # L9.172 (A25 spec 46.2)
+            info_payload["temporal_qc"] = temporal_matte_qc(alpha)
+
         if overrides_ignored:
             info_payload["overrides_ignored"] = overrides_ignored
         info = _json.dumps(info_payload, indent=2)
@@ -1123,6 +1264,8 @@ class MaskRefineMEC:
 
 
 NODE_CLASS_MAPPINGS = {"MaskRefineMEC": MaskRefineMEC}
+# L9.172 (A25): inputs appended after the A28 pin (read by tests/test_a28_cnp_a_layout.py)
+APPENDED_AFTER_A28 = ("refine_region", "uncertainty_band_px", "temporal_qc")
 NODE_DISPLAY_NAME_MAPPINGS = {"MaskRefineMEC": "Mask Refiner"}
 
 
@@ -1140,8 +1283,10 @@ if declare_layout is not None:
                  Power_stages=["enable_domain_transform", "enable_color_decontaminate", "enable_unsharp_alpha",
                                "enable_anti_alias", "enable_chroma_lock", "enable_speck_removal",
                                "enable_temporal_smooth", "advanced_overrides_json"],
-                 Integrity=["enable_integrity_check", "integrity_drop_threshold", "integrity_jump_threshold"]),
+                 Integrity=["enable_integrity_check", "integrity_drop_threshold", "integrity_jump_threshold"],
+                 Uncertainty_QC=list(APPENDED_AFTER_A28)),
         {"subject_class": {"c2c_show_if": {"auto_edge_lock": [True]}},          # read only with the lock (:822-823)
          "integrity_drop_threshold": {"c2c_show_if": {"enable_integrity_check": [True]}},
-         "integrity_jump_threshold": {"c2c_show_if": {"enable_integrity_check": [True]}}},
+         "integrity_jump_threshold": {"c2c_show_if": {"enable_integrity_check": [True]}},
+         "uncertainty_band_px": {"c2c_show_if": {"refine_region": ["uncertain band only"]}}},
     ))

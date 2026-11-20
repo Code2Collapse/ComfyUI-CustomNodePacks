@@ -77,6 +77,9 @@ says it was inspired by lquesada's ComfyUI-Inpaint-CropAndStitch (GPL-3.0); noth
 Save Video (C2C)'s `pingpong` loop: `pingpong_frames` in `nodes/c2c_video/save_delivery.py` is ported from
 `nodes/_video_save_helpers.py` (A25 / L9.171). The rest of that module is ours.
 
+Mask Refiner's "uncertain band only" region: `nodes/mask_matting/_uncertainty.py` ports `grow_shrink_mask` and the
+trimap rule of `matting_refine` from `nodes/_mask_helpers.py` (A25 / L9.172).
+
 ---
 
 ### comfyui-mcp — artokun

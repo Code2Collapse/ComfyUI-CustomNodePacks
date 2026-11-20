@@ -117,6 +117,29 @@ class SemanticSegmentMEC:
                                "installed copy is used wherever it is; without one only 'skin' can be made "
                                "model-free (by colour, approximate) and the node names the model to install.",
                 }),
+                # L9.172 (A25 spec item 52): appended after A28; the defaults run exactly the old code
+                "groups_json": ("STRING", {
+                    "default": "",
+                    "multiline": True,
+                    "tooltip": "Your own class groups, used as '@name' in classes_csv: {\"my_face\": [\"@eyes\", "
+                               "\"nose\", \"@lips\"]}. Built-in groups - face: @eyes @brows @lips @mouth_area @ears "
+                               "@face_features @head @accessories; clothes: @shoes @legs @arms @body_skin @garments "
+                               "@accessories. A leading '-' in classes_csv removes a class or group ('@head, -hair'). "
+                               "Your groups win over built-ins of the same name. Empty = built-ins only.",
+                }),
+                "temporal_smooth": ("FLOAT", {
+                    "default": 0.0, "min": 0.0, "max": 0.95, "step": 0.05,
+                    "tooltip": "Video: smooth each frame's class probability over time before thresholding - a "
+                               "forward and a backward running average across frames (weight of the previous frame "
+                               "= this value), averaged. Fills one-frame dropouts and calms flicker; higher = "
+                               "smoother but slower to follow real changes. 0 = off (each frame on its own).",
+                }),
+                "class_report": ("BOOLEAN", {
+                    "default": False,
+                    "tooltip": "Add a per-frame report to info: the share of the picture each selected class covers "
+                               "(pixels where it is the most likely class) and the frames where a class appears, "
+                               "disappears or changes size by more than 1.5x.",
+                }),
             },
         }
 
@@ -152,14 +175,25 @@ class SemanticSegmentMEC:
         invert: bool,
         keep_model_loaded: bool = True,
         allow_download: bool = False,
+        groups_json: str = "",
+        temporal_smooth: float = 0.0,
+        class_report: bool = False,
     ):
         if not isinstance(image, torch.Tensor) or image.ndim != 4:
             raise ValueError("SemanticSegmentMEC expects IMAGE tensor [B,H,W,C]")
+        try:
+            temporal_smooth = float(temporal_smooth or 0.0)
+        except (TypeError, ValueError) as exc:
+            raise ValueError(f"Semantic Segment (MEC): temporal_smooth must be a number from 0 to 0.95, got "
+                             f"{temporal_smooth!r}.") from exc
+        if not 0.0 <= temporal_smooth <= 0.95:
+            raise ValueError(f"Semantic Segment (MEC): temporal_smooth must be from 0 to 0.95 (0 = off), got "
+                             f"{temporal_smooth:g}.")
         from ._download_policy import allow_downloads
         with torch.no_grad(), allow_downloads(allow_download):
             return self._parse_impl(
                 image, model_name, classes_csv, threshold, invert,
-                keep_model_loaded,
+                keep_model_loaded, groups_json, temporal_smooth, bool(class_report),
             )
 
     def _parse_impl(
@@ -170,8 +204,19 @@ class SemanticSegmentMEC:
         threshold: float,
         invert: bool,
         keep_model_loaded: bool = True,
+        groups_json: str = "",
+        temporal_smooth: float = 0.0,
+        class_report: bool = False,
     ):
         B, H, W, C = image.shape
+        # L9.172: groups / exclusions are expanded (and checked) before the model loads, so a typo costs nothing
+        from ._semantic_groups import expand_classes, uses_groups
+        _family0 = MODEL_REGISTRY.get(model_name, {}).get("family", "")
+        _classes0 = FACE_CLASSES if "face" in _family0 else CLOTHES_CLASSES
+        grouped = uses_groups(classes_csv)
+        included, excluded, used_groups = expand_classes(classes_csv, _classes0, "face" if "face" in _family0
+                                                         else "clothes", groups_json)
+        groups_info = {"used": used_groups, "excluded": excluded} if grouped else None
         # MANUAL bug-fix (Apr 2026): full device autodetect (cuda > mps > cpu).
         try:                                       # L9.262 (CNP-NODES-1 audit): ComfyUI's device first (--cpu, the chosen GPU); torch's own guess only outside ComfyUI
             import comfy.model_management as _mm
@@ -193,7 +238,8 @@ class SemanticSegmentMEC:
             from .mask_matting import _classic
             if not (_classic.fallback_allowed() and _classic.is_missing_model_error(exc)):
                 raise
-            return self._model_free(image, model_name, classes_csv, invert, exc)
+            return self._model_free(image, model_name, classes_csv, invert, exc,
+                                    included if grouped else None, groups_info, temporal_smooth, class_report)
         model = loaded["model"]
         processor = loaded["processor"]
         dev = next(model.parameters()).device
@@ -206,8 +252,8 @@ class SemanticSegmentMEC:
         else:
             all_classes = CLOTHES_CLASSES
 
-        # Parse target classes
-        target = {c.strip().lower() for c in classes_csv.split(",") if c.strip()}
+        # Parse target classes (L9.172: "@group" / "-x" expanded above; a plain list gives the same set as before)
+        target = set(included)
         target_indices = set()
         for idx, label in enumerate(all_classes):
             if label.lower() in target:
@@ -215,10 +261,37 @@ class SemanticSegmentMEC:
 
         if not target_indices:
             # A22 L9.136: a typo returned an all-zero mask (and ignored invert); say which classes exist instead
-            raise ValueError(f"Semantic Segment (MEC): no class matches {classes_csv!r}. Available: "
+            raise ValueError(f"Semantic Segment (MEC): no class matches {classes_csv!r}"
+                             + (f" (after groups: {included})" if grouped else "") + ". Available: "
                              f"{', '.join(all_classes[1:])}.")
 
         masks = []
+        # L9.172: temporal_smooth keeps each frame's combined probability and thresholds after smoothing over time;
+        # 0 (or a still) runs the per-frame threshold exactly as before. class_report reads the argmax coverage.
+        smooth = temporal_smooth > 0 and B > 1
+        kept_probs = []
+        coverage = []
+        report_indices = sorted(i for i in target_indices if i < len(all_classes))
+
+        def _edge_refine(i, mask):
+            # MANUAL bug-fix (Apr 2026): edge-refine after upsample. Apply a
+            # cheap guided-filter-style refinement using the source image
+            # luminance: align the mask boundary with strong image gradients
+            # so the bilinear-upsampled segmentation snaps back to true edges.
+            try:
+                src_lum = image[i, ..., :3].mean(dim=-1).cpu().numpy().astype(np.float32)
+                m_np = mask.numpy().astype(np.float32)
+                # Joint bilateral via cv2 if available; falls back silently.
+                import cv2 as _cv2  # noqa: F401
+                refined = _cv2.ximgproc.guidedFilter(
+                    guide=src_lum, src=m_np, radius=4, eps=1e-3
+                ) if hasattr(_cv2, "ximgproc") else _cv2.bilateralFilter(
+                    m_np, d=5, sigmaColor=0.1, sigmaSpace=4
+                )
+                mask = torch.from_numpy(np.clip(refined, 0.0, 1.0))
+            except Exception:
+                pass
+            return mask
 
         # Downsample very large images for inference to keep runtime sane.
         # SegFormer is shift-equivariant; logits will be upsampled back to (H, W) below.
@@ -259,25 +332,27 @@ class SemanticSegmentMEC:
                 if ci < probs.shape[0]:
                     combined = torch.maximum(combined, probs[ci])
 
+            if class_report:
+                arg = probs.argmax(dim=0)
+                coverage.append({all_classes[ci]: float((arg == ci).float().mean()) for ci in report_indices})
+            if smooth:
+                kept_probs.append(combined.float().cpu())
+                continue
             mask = (combined > threshold).float().cpu()
-            # MANUAL bug-fix (Apr 2026): edge-refine after upsample. Apply a
-            # cheap guided-filter-style refinement using the source image
-            # luminance: align the mask boundary with strong image gradients
-            # so the bilinear-upsampled segmentation snaps back to true edges.
-            try:
-                src_lum = image[i, ..., :3].mean(dim=-1).cpu().numpy().astype(np.float32)
-                m_np = mask.numpy().astype(np.float32)
-                # Joint bilateral via cv2 if available; falls back silently.
-                import cv2 as _cv2  # noqa: F401
-                refined = _cv2.ximgproc.guidedFilter(
-                    guide=src_lum, src=m_np, radius=4, eps=1e-3
-                ) if hasattr(_cv2, "ximgproc") else _cv2.bilateralFilter(
-                    m_np, d=5, sigmaColor=0.1, sigmaSpace=4
-                )
-                mask = torch.from_numpy(np.clip(refined, 0.0, 1.0))
-            except Exception:
-                pass
-            masks.append(mask)
+            masks.append(_edge_refine(i, mask))
+
+        if smooth:
+            a = float(temporal_smooth)
+            p = torch.stack(kept_probs)                       # (B, H, W) on the CPU
+            fwd = p.clone()
+            bwd = p.clone()
+            for t in range(1, B):
+                fwd[t] = a * fwd[t - 1] + (1.0 - a) * p[t]
+            for t in range(B - 2, -1, -1):
+                bwd[t] = a * bwd[t + 1] + (1.0 - a) * p[t]
+            p = (fwd + bwd) / 2.0
+            for i in range(B):
+                masks.append(_edge_refine(i, (p[i] > threshold).float()))
 
         result = torch.stack(masks).clamp(0.0, 1.0)
 
@@ -292,7 +367,7 @@ class SemanticSegmentMEC:
 
         matched = [all_classes[i] for i in sorted(target_indices) if i < len(all_classes)]
         from ._download_policy import model_status  # owner D7.91: found / loaded / missing / needs permission
-        info = json.dumps({
+        info_d = {
             "model": model_name,
             "model_status": model_status(),
             "family": family,
@@ -300,16 +375,26 @@ class SemanticSegmentMEC:
             "frames": B,
             "threshold": threshold,
             "invert": invert,
-        }, indent=2)
+        }
+        if groups_info is not None:                                   # L9.172: only when a group / "-x" was used
+            info_d["groups"] = groups_info
+        if temporal_smooth > 0 or class_report:
+            info_d["temporal"] = _temporal_info(temporal_smooth, coverage if class_report else None)
+        info = json.dumps(info_d, indent=2)
 
         return (result, info)
 
     @staticmethod
-    def _model_free(image, model_name, classes_csv, invert, exc):
+    def _model_free(image, model_name, classes_csv, invert, exc, included=None, groups_info=None,
+                    temporal_smooth=0.0, class_report=False):
         """L7.97: SegFormer is not installed and may not be downloaded. Only skin can be found without it (by
-        colour); every other class needs the model - said plainly, never faked."""
+        colour); every other class needs the model - said plainly, never faked. L9.172: `included` = the class list
+        after group expansion (None = a plain list, read exactly as before)."""
         from .mask_matting import _classic
-        wanted = [c.strip().lower() for c in classes_csv.split(",") if c.strip()]
+        if included is None:
+            wanted = [c.strip().lower() for c in classes_csv.split(",") if c.strip()]
+        else:
+            wanted = list(included)
         possible = [c for c in wanted if c == "skin"]
         if not possible:
             raise ValueError(f"{exc} Without the model only 'skin' can be found (by colour); "
@@ -318,17 +403,60 @@ class SemanticSegmentMEC:
         masks = [torch.from_numpy(_classic.skin_mask((np.clip(image[i, ..., :3].cpu().numpy(), 0.0, 1.0) * 255).astype(np.uint8)))
                  for i in range(B)]
         result = torch.stack(masks).clamp(0.0, 1.0)
+        coverage = [{"skin": float((result[i] > 0.5).float().mean())} for i in range(B)] if class_report else None
         if invert:
             result = 1.0 - result
         logger.warning("[MEC] SemanticSegment: %s - skin by colour only (model-free).", str(exc)[:200])
         from ._download_policy import model_status
-        info = json.dumps({
+        info_d = {
             "model": model_name, "model_status": model_status(fallback_why=str(exc)), "approximate": True,
             "model_free": {**_classic.describe_fallback(model_name, exc), "used": _classic.LABEL_SKIN},
             "matched_classes": possible, "needs_the_model": [c for c in wanted if c != "skin"], "frames": B,
             "invert": invert,
-        }, indent=2)
+        }
+        if groups_info is not None:
+            info_d["groups"] = groups_info
+        if temporal_smooth > 0 or class_report:
+            info_d["temporal"] = _temporal_info(temporal_smooth, coverage)
+            if temporal_smooth > 0:
+                info_d["temporal"]["note"] = ("temporal_smooth was not applied: the model-free skin stand-in has no "
+                                              "class probabilities to smooth.")
+        info = json.dumps(info_d, indent=2)
         return (result, info)
+
+
+COVERAGE_MIN = 0.001      # a class "is there" from 0.1 % of the picture
+JUMP_RATIO = 1.5          # a size change by more than this factor (either way) is reported as a jump
+
+
+def coverage_changes(per_frame):
+    """L9.172 class_report: [{class: coverage}] per frame -> [{"frame", "class", "event", "from", "to"}], where event
+    is "appeared" / "disappeared" (coverage crosses COVERAGE_MIN) or "jump" (both >= COVERAGE_MIN and the ratio
+    new / old > JUMP_RATIO or < 1 / JUMP_RATIO)."""
+    out = []
+    for t in range(1, len(per_frame)):
+        prev, cur = per_frame[t - 1], per_frame[t]
+        for c in cur:
+            a, b = float(prev.get(c, 0.0)), float(cur[c])
+            ev = None
+            if a < COVERAGE_MIN <= b:
+                ev = "appeared"
+            elif b < COVERAGE_MIN <= a:
+                ev = "disappeared"
+            elif a >= COVERAGE_MIN and b >= COVERAGE_MIN and (b / a > JUMP_RATIO or b / a < 1.0 / JUMP_RATIO):
+                ev = "jump"
+            if ev:
+                out.append({"frame": t, "class": c, "event": ev, "from": round(a, 6), "to": round(b, 6)})
+    return out
+
+
+def _temporal_info(temporal_smooth, coverage):
+    """info["temporal"]: {"smooth": a} and, with class_report, the per-frame coverage and the change events."""
+    d = {"smooth": float(temporal_smooth)}
+    if coverage is not None:
+        d["per_frame"] = [{c: round(v, 6) for c, v in row.items()} for row in coverage]
+        d["changes"] = coverage_changes(coverage)
+    return d
 
 
 # A28 (ORDERS 29, docs/audit/A28/PARAM_CNP_A.md "SemanticSegmentMEC"): which controls show when, read by js/_c2c_node_layout.js.
@@ -338,4 +466,8 @@ try:
 except ImportError:  # pragma: no cover - loaded outside the pack
     declare_layout = None
 if declare_layout is not None:
-    declare_layout(SemanticSegmentMEC, sections(Performance=["keep_model_loaded"], Model_setup=["allow_download"]))
+    declare_layout(SemanticSegmentMEC, sections(Performance=["keep_model_loaded"], Model_setup=["allow_download"],
+                                                Groups=["groups_json"], Video=["temporal_smooth", "class_report"]))
+
+# L9.172 (A25 spec item 52): inputs appended after the A28 audit, in order (read by tests/test_a28_cnp_a_layout.py)
+APPENDED_AFTER_A28 = ("groups_json", "temporal_smooth", "class_report")

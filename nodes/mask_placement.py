@@ -247,6 +247,161 @@ def object_track_transforms(frames: np.ndarray, anchor: int, quad: np.ndarray) -
     return mats, status
 
 
+MESH_MAX_CELLS = 16           # rows / cols of mesh_keyframes_json, each
+MESH_INTERPS = ("linear", "smooth")
+_MESH_FORMAT = ('{"rows": R, "cols": C, "interp": "linear" | "smooth", "keys": [{"frame": f, "points": [[x, y], '
+                '...]}, ...]} with (R+1)*(C+1) points per key, row-major from the top-left')
+
+
+def _mesh_int(v, name: str, lo: int, hi: int) -> int:
+    if isinstance(v, bool) or not isinstance(v, (int, float)) or not np.isfinite(v) or float(v) != int(v):
+        raise ValueError(f"mesh_keyframes_json: '{name}' must be a whole number from {lo} to {hi}, got {v!r}. "
+                         f"Expected format: {_MESH_FORMAT}.")
+    v = int(v)
+    if not lo <= v <= hi:
+        raise ValueError(f"mesh_keyframes_json: '{name}' must be from {lo} to {hi}, got {v}. "
+                         f"Expected format: {_MESH_FORMAT}.")
+    return v
+
+
+def parse_mesh_keyframes(blob: str) -> Optional[Dict[str, Any]]:
+    """mesh_keyframes_json -> {"rows", "cols", "interp", "keys": [(frame, points (N,2) float64), ...] sorted by
+    frame}, or None for an empty string. Anything malformed raises ValueError naming what is wrong."""
+    if not blob or not str(blob).strip():
+        return None
+    try:
+        data = json.loads(blob)
+    except (json.JSONDecodeError, TypeError) as exc:
+        raise ValueError(f"mesh_keyframes_json is not valid JSON ({exc}). Expected format: {_MESH_FORMAT}. "
+                         "Clear the field to use the placement quad.") from exc
+    if not isinstance(data, dict):
+        raise ValueError(f"mesh_keyframes_json must be a JSON object. Expected format: {_MESH_FORMAT}.")
+    rows = _mesh_int(data.get("rows", 1), "rows", 1, MESH_MAX_CELLS)
+    cols = _mesh_int(data.get("cols", 1), "cols", 1, MESH_MAX_CELLS)
+    interp = data.get("interp", "linear")
+    if interp not in MESH_INTERPS:
+        raise ValueError(f"mesh_keyframes_json: 'interp' must be one of {list(MESH_INTERPS)}, got {interp!r}.")
+    raw_keys = data.get("keys")
+    if not isinstance(raw_keys, list) or not raw_keys:
+        raise ValueError(f"mesh_keyframes_json needs a non-empty 'keys' list. Expected format: {_MESH_FORMAT}.")
+    n_pts = (rows + 1) * (cols + 1)
+    keys: List[Tuple[int, np.ndarray]] = []
+    seen = set()
+    for k_i, key in enumerate(raw_keys):
+        if not isinstance(key, dict) or "frame" not in key or "points" not in key:
+            raise ValueError(f"mesh_keyframes_json: key #{k_i} must be an object with 'frame' and 'points'. "
+                             f"Expected format: {_MESH_FORMAT}.")
+        frame = _mesh_int(key["frame"], f"keys[{k_i}].frame", 0, 10 ** 7)
+        if frame in seen:
+            raise ValueError(f"mesh_keyframes_json: frame {frame} has more than one key; give each frame one key.")
+        seen.add(frame)
+        pts = key["points"]
+        if not isinstance(pts, list) or len(pts) != n_pts:
+            got = len(pts) if isinstance(pts, list) else type(pts).__name__
+            raise ValueError(f"mesh_keyframes_json: key for frame {frame} has {got} points; a {rows}x{cols} mesh "
+                             f"needs exactly {n_pts} ((rows+1)*(cols+1)), row-major from the top-left.")
+        try:
+            arr = np.asarray([[float(p[0]), float(p[1])] for p in pts], dtype=np.float64)
+            if any(len(p) != 2 or isinstance(p[0], bool) or isinstance(p[1], bool) for p in pts):
+                raise TypeError("each point is [x, y]")
+        except (TypeError, ValueError, IndexError, KeyError) as exc:
+            raise ValueError(f"mesh_keyframes_json: key for frame {frame} has a point that is not two numbers "
+                             f"[x, y] ({exc}).") from exc
+        if not np.isfinite(arr).all():
+            raise ValueError(f"mesh_keyframes_json: key for frame {frame} has a non-finite coordinate.")
+        keys.append((frame, arr))
+    keys.sort(key=lambda kv: kv[0])
+    return {"rows": rows, "cols": cols, "interp": interp, "keys": keys}
+
+
+def mesh_points_at(keys: List[Tuple[int, np.ndarray]], i: int, interp: str = "linear") -> np.ndarray:
+    """The mesh points for output frame i: hold the first key before it, the last after it, and between keys a and b
+    interpolate every point with t = (i - fa) / (fb - fa) (smooth: t*t*(3-2t))."""
+    if interp not in MESH_INTERPS:
+        raise ValueError(f"mesh interp must be one of {list(MESH_INTERPS)}, got {interp!r}.")
+    if i <= keys[0][0]:
+        return keys[0][1].copy()
+    if i >= keys[-1][0]:
+        return keys[-1][1].copy()
+    for (fa, pa), (fb, pb) in zip(keys[:-1], keys[1:]):
+        if fa <= i <= fb:
+            t = (i - fa) / float(fb - fa)
+            if interp == "smooth":
+                t = t * t * (3.0 - 2.0 * t)
+            return pa + (pb - pa) * t
+    return keys[-1][1].copy()                        # unreachable for sorted keys
+
+
+def mesh_boundary(points: np.ndarray, rows: int, cols: int) -> np.ndarray:
+    """The outline of a row-major (rows+1)x(cols+1) point grid: top L->R, right T->B, bottom R->L, left B->T."""
+    g = np.asarray(points).reshape(rows + 1, cols + 1, 2)
+    return np.concatenate([g[0, :], g[1:, -1], g[-1, -2::-1], g[-2:0:-1, 0]], axis=0)
+
+
+def mesh_warp(src: np.ndarray, points: np.ndarray, rows: int, cols: int, W: int, H: int) -> np.ndarray:
+    """Warp `src` (sh x sw [x C]) onto a rows x cols grid of destination points (row-major from the top-left,
+    (rows+1)*(cols+1) of them, frame pixels) by inverse mapping: per cell the homography from the destination cell
+    quad to the matching source cell, its pixels rasterised with fillPoly, then one cv2.remap (bilinear, outside = 0).
+    """
+    sh, sw = int(src.shape[0]), int(src.shape[1])
+    g = np.asarray(points, np.float64).reshape(rows + 1, cols + 1, 2)
+    map_x = np.full((H, W), -1.0, np.float32)
+    map_y = np.full((H, W), -1.0, np.float32)
+    for r in range(rows):
+        for c in range(cols):
+            dst = np.asarray([g[r, c], g[r, c + 1], g[r + 1, c + 1], g[r + 1, c]], np.float64)   # TL,TR,BR,BL
+            area = 0.5 * abs(float(np.dot(dst[:, 0], np.roll(dst[:, 1], 1)) - np.dot(dst[:, 1], np.roll(dst[:, 0], 1))))
+            if area < 1e-6:
+                continue                                 # a collapsed cell covers no pixels
+            srcq = np.asarray([[c / cols * sw, r / rows * sh], [(c + 1) / cols * sw, r / rows * sh],
+                               [(c + 1) / cols * sw, (r + 1) / rows * sh], [c / cols * sw, (r + 1) / rows * sh]],
+                              np.float32)
+            Hc = cv2.getPerspectiveTransform(dst.astype(np.float32), srcq).astype(np.float64)
+            verts = np.round(dst).astype(np.int32)
+            x0, y0 = max(0, int(verts[:, 0].min())), max(0, int(verts[:, 1].min()))
+            x1, y1 = min(W, int(verts[:, 0].max()) + 1), min(H, int(verts[:, 1].max()) + 1)
+            if x1 <= x0 or y1 <= y0:
+                continue                                 # the cell lies outside the frame
+            cell = np.zeros((y1 - y0, x1 - x0), np.uint8)
+            cv2.fillPoly(cell, [(verts - np.asarray([x0, y0], np.int32)).reshape(-1, 1, 2)], 1)
+            ys, xs = np.nonzero(cell)
+            if not len(ys):
+                continue
+            ys, xs = ys + y0, xs + x0
+            v = Hc @ np.stack([xs.astype(np.float64), ys.astype(np.float64), np.ones(len(xs))])
+            ok = np.abs(v[2]) > 1e-12
+            w = np.where(ok, v[2], 1.0)
+            map_x[ys, xs] = np.where(ok, v[0] / w, -1.0).astype(np.float32)
+            map_y[ys, xs] = np.where(ok, v[1] / w, -1.0).astype(np.float32)
+    return cv2.remap(src.astype(np.float32), map_x, map_y, interpolation=cv2.INTER_LINEAR,
+                     borderMode=cv2.BORDER_CONSTANT, borderValue=0.0)
+
+
+def _fit_batch_hw(arr: np.ndarray, B: int, H: int, W: int, name: str, notes: List[str]) -> np.ndarray:
+    """(B',H',W') float -> (B,H,W): bilinear resize when the size differs, B'=1 broadcasts, B'<B holds its last
+    frame, B'>B keeps the first B. Size / length fixes are noted."""
+    if arr.shape[1:] != (H, W):
+        notes.append(f"{name} resized from {arr.shape[2]}x{arr.shape[1]} to {W}x{H} (bilinear).")
+        arr = np.stack([cv2.resize(a, (W, H), interpolation=cv2.INTER_LINEAR) for a in arr])
+    if arr.shape[0] == 1 and B > 1:
+        arr = np.repeat(arr, B, axis=0)
+    elif arr.shape[0] < B:
+        notes.append(f"{name} has {arr.shape[0]} frame(s) for {B}; its last frame is held.")
+        arr = np.concatenate([arr, np.repeat(arr[-1:], B - arr.shape[0], axis=0)], axis=0)
+    return np.clip(arr[:B].astype(np.float32), 0.0, 1.0)
+
+
+def _depth_np(d) -> np.ndarray:
+    """IMAGE (B,H,W,C) -> (B,H,W) channel mean, float 0..1."""
+    arr = d.detach().cpu().float().numpy() if hasattr(d, "detach") else np.asarray(d, np.float32)
+    if arr.ndim == 3:
+        arr = arr[None]
+    if arr.ndim != 4 or arr.shape[0] < 1:
+        raise ValueError(f"depth_map must be an IMAGE (B,H,W,C); got shape {tuple(arr.shape)}. Wire a depth image "
+                         "(e.g. from a depth estimator).")
+    return np.clip(arr.astype(np.float32).mean(axis=-1), 0.0, 1.0)
+
+
 def _tight_bbox(alpha: np.ndarray, thresh: float = 0.02) -> Optional[Tuple[int, int, int, int]]:
     ys, xs = np.where(alpha > thresh)
     if len(ys) == 0:
@@ -317,16 +472,45 @@ class MaskPlacementMEC:
                                                            "landmark_lock / auto, e.g. from Face Landmarks "
                                                            "(Facepoints) or a DWPose estimator. One entry per "
                                                            "frame, pixel coordinates."}),
+                # L9.172 (spec item 83): appended last, after A28 (APPENDED_AFTER_A28); every default = as before
+                "mesh_keyframes_json": ("STRING", {"default": "", "multiline": True,
+                    "tooltip": "Animated mesh warp. Empty = the placement quad, exactly as before. JSON "
+                               "{\"rows\":R,\"cols\":C,\"interp\":\"linear\"|\"smooth\",\"keys\":[{\"frame\":f,"
+                               "\"points\":[[x,y],...]}]}: R and C 1-16 (default 1), each key (R+1)*(C+1) points "
+                               "ROW-MAJOR from the top-left in frame pixels - a 1x1 mesh is TL,TR,BL,BR (placement_json "
+                               "is TL,TR,BR,BL). Frames before the first key hold it, after the last hold it, between "
+                               "keys each point is interpolated (smooth = ease in/out). The source cut-out is split "
+                               "into the same grid and each cell is warped onto its mesh cell. Replaces the quad for "
+                               "warping; with landmark_lock / object_track the quad still drives tracking and each "
+                               "frame's mesh is moved by that frame's tracking transform."}),
+                "occlusion_mask": ("MASK", {"tooltip": "Things in FRONT of the placement: the placed alpha is "
+                                                         "multiplied by (1 - this mask). Resized (bilinear) to the "
+                                                         "frames when needed; one frame applies to all, a shorter "
+                                                         "batch holds its last frame."}),
+                "depth_map": ("IMAGE", {"tooltip": "Depth image (channel mean used, 0..1). Pixels nearer than "
+                                                   "placement_depth occlude the placement. Same resize / batch "
+                                                   "rules as occlusion_mask; combined with it by maximum."}),
+                "placement_depth": ("FLOAT", {"default": 0.5, "min": 0.0, "max": 1.0, "step": 0.01,
+                    "tooltip": "Depth of the placed object on the depth_map's 0..1 'nearness' scale: pixels with "
+                               "nearness above this are in front of it and hide it."}),
+                "depth_near_is_white": ("BOOLEAN", {"default": True,
+                    "tooltip": "On: white (1) in depth_map is near (Depth Anything / MiDaS style). Off: white is far "
+                               "(nearness = 1 - depth)."}),
+                "depth_softness": ("FLOAT", {"default": 0.02, "min": 0.0, "max": 0.5, "step": 0.005,
+                    "tooltip": "Width of the depth edge: occluder = clamp((nearness - placement_depth) / softness + "
+                               "0.5, 0, 1). 0 = hard step (nearness > placement_depth)."}),
             },
         }
 
-    RETURN_TYPES = ("MASK", "IMAGE", "IMAGE", "STRING")
-    RETURN_NAMES = ("masks", "placed_rgb", "overlay_preview", "info")
+    RETURN_TYPES = ("MASK", "IMAGE", "IMAGE", "STRING", "MASK")
+    RETURN_NAMES = ("masks", "placed_rgb", "overlay_preview", "info", "occluder")
     OUTPUT_TOOLTIPS = (
         "Per-frame placed alpha (B,H,W float 0..1). Feed to inpaint/composite.",
         "Per-frame RGB of the placed source pixels over black (use with `masks` to composite).",
         "Frames with the placement tinted + quad drawn — visual verification.",
         "JSON: source mode, quad, per-frame status, and which tracking actually ran.",
+        "The occluder applied to `masks` (B,H,W 0..1): max of occlusion_mask and the depth_map test; all zeros "
+        "when neither is wired. `masks` = placed alpha x (1 - occluder); placed_rgb is not changed.",
     )
     FUNCTION = "execute"
     CATEGORY = "MEC/Masking"
@@ -384,15 +568,20 @@ class MaskPlacementMEC:
     def execute(self, images, prompt, grounding_model, track_mode, anchor_frame,
                 placement_json, feather_px,
                 source_mask=None, source_image=None, ref_image=None, sam_model=None, allow_download=False,
-                landmarks=None):
+                landmarks=None, mesh_keyframes_json="", occlusion_mask=None, depth_map=None, placement_depth=0.5,
+                depth_near_is_white=True, depth_softness=0.02):
         from ._download_policy import allow_downloads
         with allow_downloads(allow_download):
             return self._execute_guarded(images, prompt, grounding_model, track_mode, anchor_frame, placement_json,
-                                         feather_px, source_mask, source_image, ref_image, sam_model, landmarks)
+                                         feather_px, source_mask, source_image, ref_image, sam_model, landmarks,
+                                         mesh_keyframes_json, occlusion_mask, depth_map, placement_depth,
+                                         depth_near_is_white, depth_softness)
 
     def _execute_guarded(self, images, prompt, grounding_model, track_mode, anchor_frame,
                          placement_json, feather_px,
-                         source_mask=None, source_image=None, ref_image=None, sam_model=None, landmarks=None):
+                         source_mask=None, source_image=None, ref_image=None, sam_model=None, landmarks=None,
+                         mesh_keyframes_json="", occlusion_mask=None, depth_map=None, placement_depth=0.5,
+                         depth_near_is_white=True, depth_softness=0.02):
         # A22 L9.136: this was a second _execute_impl, so the later definition replaced it and the cv2 check and
         # no_grad never ran (without cv2: an AttributeError on None).
         if not _CV2_OK:
@@ -401,12 +590,16 @@ class MaskPlacementMEC:
             return self._execute_impl(
                 images, prompt, grounding_model, track_mode, anchor_frame,
                 placement_json, feather_px, source_mask, source_image,
-                ref_image, sam_model, landmarks,
+                ref_image, sam_model, landmarks, mesh_keyframes_json, occlusion_mask, depth_map, placement_depth,
+                depth_near_is_white, depth_softness,
             )
 
     def _execute_impl(self, images, prompt, grounding_model, track_mode, anchor_frame,
                       placement_json, feather_px,
-                      source_mask, source_image, ref_image, sam_model, landmarks=None):
+                      source_mask, source_image, ref_image, sam_model, landmarks=None,
+                      mesh_keyframes_json="", occlusion_mask=None, depth_map=None, placement_depth=0.5,
+                      depth_near_is_white=True, depth_softness=0.02):
+        mesh = parse_mesh_keyframes(mesh_keyframes_json)     # L9.172: malformed -> ValueError before any work
         images_np = _to_np_image(images)
         B, H, W = images_np.shape[0], images_np.shape[1], images_np.shape[2]
 
@@ -477,7 +670,25 @@ class MaskPlacementMEC:
         if note:
             log.info("MaskPlacementMEC: %s", note)
 
-        if effective in ("landmark_lock", "object_track"):
+        if mesh is not None:
+            # L9.172: the animated mesh replaces the quad for warping; tracking (computed from the quad above) moves
+            # each frame's interpolated mesh points by that frame's matrix.
+            rows, cols = mesh["rows"], mesh["cols"]
+            masks = np.empty((B, H, W), np.float32)
+            placed = np.empty((B, H, W, 3), np.float32)
+            quads = []
+            for i in range(B):
+                pts = mesh_points_at(mesh["keys"], i, mesh["interp"])
+                if effective in ("landmark_lock", "object_track"):
+                    pts = cv2.perspectiveTransform(pts[None].astype(np.float64), np.asarray(mats[i], np.float64))[0]
+                a = mesh_warp(alpha_crop, pts, rows, cols, W, H)
+                if feather > 0.5:
+                    k = max(1, int(round(feather)) * 2 + 1)
+                    a = cv2.GaussianBlur(a, (k, k), feather * 0.5)
+                masks[i] = np.clip(a, 0.0, 1.0)
+                placed[i] = mesh_warp(rgb_crop, pts, rows, cols, W, H) if rgb_crop is not None else 0.0
+                quads.append(mesh_boundary(pts, rows, cols))
+        elif effective in ("landmark_lock", "object_track"):
             src_rect3 = np.asarray([[0, 0], [sw, 0], [sw, sh], [0, sh]], dtype=np.float32)
             masks = np.empty((B, H, W), np.float32)
             placed = np.empty((B, H, W, 3), np.float32)
@@ -500,6 +711,29 @@ class MaskPlacementMEC:
             placed = np.repeat(warped_rgb[None], B, axis=0)
             quads = [corners] * B
 
+        # L9.172: occlusion - things in front of the placement cut it out of `masks` (placed_rgb unchanged).
+        occ = np.zeros((B, H, W), np.float32)
+        occ_info: Optional[Dict[str, Any]] = None
+        if occlusion_mask is not None or depth_map is not None:
+            occ_notes: List[str] = []
+            if occlusion_mask is not None:
+                occ = np.maximum(occ, _fit_batch_hw(_to_np_mask(occlusion_mask), B, H, W, "occlusion_mask", occ_notes))
+            if depth_map is not None:
+                depth = _fit_batch_hw(_depth_np(depth_map), B, H, W, "depth_map", occ_notes)
+                near = depth if bool(depth_near_is_white) else 1.0 - depth
+                s, pd = float(depth_softness), float(placement_depth)
+                occ_d = (near > pd).astype(np.float32) if s <= 0 else np.clip((near - pd) / s + 0.5, 0.0, 1.0)
+                occ = np.maximum(occ, occ_d.astype(np.float32))
+            before = masks.reshape(B, -1).sum(axis=1)
+            hidden = (masks * occ).reshape(B, -1).sum(axis=1)
+            frac = np.where(before > 0, hidden / np.maximum(before, 1e-12), 0.0)
+            masks = masks * (1.0 - occ)
+            occ_info = {"mask": occlusion_mask is not None, "depth": depth_map is not None,
+                        "placement_depth": float(placement_depth),
+                        "occluded_fraction": round(float(frac.mean()), 4)}
+            if occ_notes:
+                occ_info["notes"] = occ_notes
+
         # Overlay preview: original frames + green tint + quad outline.
         overlay = images_np.copy()
         tint = np.zeros_like(overlay[0])
@@ -515,7 +749,7 @@ class MaskPlacementMEC:
             overlay[i] = frame_u8.astype(np.float32) / 255.0
 
         from ._download_policy import sam_model_status  # owner D7.91 status line
-        info = json.dumps({
+        info_d: Dict[str, Any] = {
             "source_mode": source_mode,
             "model_status": ("not used (source_mask wired)" if source_mode == "byo_mask"
                              else sam_model_status(sam_model)),
@@ -527,7 +761,15 @@ class MaskPlacementMEC:
             "track_mode_effective": effective,
             "frame_status": frame_status,
             "note": note,
-        })
+        }
+        if mesh is not None:                          # L9.172: new keys only when the feature is on
+            info_d["mesh"] = {"rows": mesh["rows"], "cols": mesh["cols"], "keys": len(mesh["keys"]),
+                              "interp": mesh["interp"],
+                              "note": "the mesh replaces the placement_json quad for warping (the quad only seeds "
+                                      "tracking)"}
+        if occ_info is not None:
+            info_d["occlusion"] = occ_info
+        info = json.dumps(info_d)
 
         # Anchor-frame preview for the editor backdrop (b64, downscaled).
         ui_payload: Dict[str, Any] = {}
@@ -557,6 +799,7 @@ class MaskPlacementMEC:
                 torch.from_numpy(placed).float(),
                 torch.from_numpy(overlay).float(),
                 info,
+                torch.from_numpy(occ).float(),
             ),
         }
 
@@ -579,4 +822,13 @@ if declare_layout is not None:
         "grounding_model": {"c2c_hide_if_linked": ["source_mask"]},
         "placement_json": {"c2c_hidden": True},
         "allow_download": {"c2c_section": "Model setup", "c2c_hide_if_linked": ["source_mask"]},
+        # L9.172 (appended after A28)
+        "mesh_keyframes_json": {"c2c_section": "Mesh"},
+        "placement_depth": {"c2c_section": "Occlusion", "c2c_show_if_linked": ["depth_map"]},
+        "depth_near_is_white": {"c2c_section": "Occlusion", "c2c_show_if_linked": ["depth_map"]},
+        "depth_softness": {"c2c_section": "Occlusion", "c2c_show_if_linked": ["depth_map"]},
     })
+
+# L9.172 (spec item 83): the inputs appended after A28, in order (read by tests/test_a28_cnp_a_layout.py)
+APPENDED_AFTER_A28 = ("mesh_keyframes_json", "occlusion_mask", "depth_map", "placement_depth", "depth_near_is_white",
+                      "depth_softness")

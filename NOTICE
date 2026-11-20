@@ -196,3 +196,9 @@ Vendored third-party packages (under third_party/):
       Source:   https://github.com/ausboss/ComfyUI-AusBoss (nodes/_video_save_helpers.py)
       License:  MIT, Copyright (c) 2026 ausboss
       Usage:    Save Video (C2C) pingpong loop, L9.171 (A25 AusBoss parity).
+
+  * ComfyUI-AusBoss (nodes/mask_matting/_uncertainty.py grow_shrink_mask, uncertain_band)
+      Author:   ausboss
+      Source:   https://github.com/ausboss/ComfyUI-AusBoss (nodes/_mask_helpers.py grow_shrink_mask, matting_refine)
+      License:  MIT, Copyright (c) 2026 ausboss
+      Usage:    Mask Refiner (MaskRefineMEC) uncertain-band refinement, L9.172 (A25 AusBoss parity).

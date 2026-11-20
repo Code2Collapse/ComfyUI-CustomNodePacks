@@ -440,10 +440,16 @@ MASK_TOOL_MODES = (
     # L7.65 P01 (owner 2026-10-27, D7.65c): the former Mask Edit "transform" mode (Mask Transform XY's code)
     ("transform", "transform", ("expand_x", "expand_y", "blur_x", "blur_y", "offset_x", "offset_y", "feather",
                                 "threshold", "invert")),
+    # L9.172 (A25 spec item 82): chroma key + despill, temporal matte cleanup - appended LAST (old saves keep values)
+    ("key: chroma", "chroma_key", None),
+    ("temporal cleanup", "temporal_cleanup", None),
 )
 # modes added after the node shipped: their controls are OPTIONAL inputs after the sockets, so a saved node keeps
 # every widget value in place (values are restored by position) and an older API prompt without them stays valid
 _APPENDED_MODES = {"transform"}
+# L9.172 (A25): their controls are optional inputs placed after the L7.48 grade extras (the very end), so every widget
+# that existed before keeps its position
+_A25_MODES = {"chroma_key", "temporal_cleanup"}
 _NEW_MODE_PARAMS = {
     "difference_key": {
         "tolerance": ("FLOAT", {"default": 0.08, "min": 0.0, "max": 1.0, "step": 0.005,
@@ -473,6 +479,53 @@ _NEW_MODE_PARAMS = {
                          "tooltip": "Pixels to grow downward (negative shrinks its bottom edge)."}),
         "feather": ("INT", {"default": 0, "min": 0, "max": 1000, "step": 1,
                             "tooltip": "Soften the result by this blur radius in pixels."}),
+    },
+    # L9.172 (A25 spec 82.1): colour-difference keyer with despill - _a25_ops.chroma_key
+    "chroma_key": {
+        "screen": (["green", "blue", "custom"], {
+            "default": "green",
+            "tooltip": "The backdrop: green (#00B140) or blue (#0047BB) screen, or custom (the colour below; its "
+                       "strongest channel is the screen channel)."}),
+        "color": ("STRING", {"default": "#00B140",
+                             "tooltip": "custom screen: the backdrop colour as #RRGGBB (pick it from the plate)."}),
+        "balance": ("FLOAT", {"default": 0.5, "min": 0.0, "max": 1.0, "step": 0.01,
+                              "tooltip": "How the screen channel is compared with the other two: 1 = against their "
+                                         "max (removes less backdrop), 0 = against their min (removes more), 0.5 "
+                                         "between."}),
+        "gain": ("FLOAT", {"default": 1.0, "min": 0.1, "max": 4.0, "step": 0.01,
+                           "tooltip": "Screen strength: above 1 removes the backdrop harder (cleaner background, "
+                                      "thinner edges), below 1 softer."}),
+        "clip_black": ("FLOAT", {"default": 0.0, "min": 0.0, "max": 1.0, "step": 0.001,
+                                 "tooltip": "Matte values at or below this become 0 (crush backdrop noise)."}),
+        "clip_white": ("FLOAT", {"default": 1.0, "min": 0.0, "max": 1.0, "step": 0.001,
+                                 "tooltip": "Matte values at or above this become 1 (make a see-through core solid). "
+                                            "Must be above clip_black."}),
+        "despill": (["average", "max (gentle)", "min (strong)", "off"], {
+            "default": "average",
+            "tooltip": "Spill suppression on the image output: the screen channel is limited to the average, the "
+                       "max (removes least) or the min (removes most) of the other two channels; off = image "
+                       "unchanged."}),
+        "despill_strength": ("FLOAT", {"default": 1.0, "min": 0.0, "max": 1.0, "step": 0.01,
+                                       "tooltip": "How much of the spill above the limit is removed (1 = all)."}),
+        "invert": ("BOOLEAN", {"default": False,
+                               "tooltip": "Output the backdrop's matte instead of the subject's."}),
+    },
+    # L9.172 (A25 spec 82.2): stabilise a matte over time - _a25_ops.temporal_cleanup
+    "temporal_cleanup": {
+        "window": ("INT", {"default": 2, "min": 1, "max": 8, "step": 1,
+                           "tooltip": "Frames on each side that vote (fewer at the clip's ends)."}),
+        "method": (["median", "mean"], {
+            "default": "median",
+            "tooltip": "median: removes one-frame drop-outs and pops and keeps edges hard (an even count takes the "
+                       "lower middle value); mean: softer, averages flicker away but blurs fast motion."}),
+        "hysteresis": ("FLOAT", {"default": 0.0, "min": 0.0, "max": 0.45, "step": 0.01,
+                                 "tooltip": "Above 0: a pixel switches on only above 0.5 + this and off only below "
+                                            "0.5 - this, so boundary chatter stops; the output becomes binary. "
+                                            "0 = off."}),
+        "protect_motion": ("FLOAT", {"default": 0.0, "min": 0.0, "max": 1.0, "step": 0.01,
+                                     "tooltip": "With `image` wired (same frames and size): where the picture changes "
+                                                "by more than this between frames, the original matte is kept so "
+                                                "fast motion does not lag. 0 = off."}),
     },
 }
 _MODE_KEY = {label: key for label, key, _p in MASK_TOOL_MODES}
@@ -612,8 +665,9 @@ class MaskToolsMEC:
             "default": "key: colour",
             "tooltip": "What the node does. Each mode shows only its own controls."})}
         appended = {}
+        a25 = {}
         for label, key, params in MASK_TOOL_MODES:
-            target = appended if key in _APPENDED_MODES else required
+            target = appended if key in _APPENDED_MODES else (a25 if key in _A25_MODES else required)
             if params is None:
                 spec = _NEW_MODE_PARAMS[key]
                 names = list(spec)
@@ -634,16 +688,19 @@ class MaskToolsMEC:
         return {
             "required": required,
             "optional": {
-                "image": ("IMAGE", {"tooltip": "keys, edge spread and shuffle: the picture to work on."}),
+                "image": ("IMAGE", {"tooltip": "keys, edge spread and shuffle: the picture to work on (chroma key: "
+                                               "the green / blue screen plate). Temporal cleanup: the clip, for "
+                                               "protect_motion."}),
                 "mask": ("MASK", {"tooltip": "grade, grow / shrink, combine (first matte), grain, motion blur, "
-                                             "transform; edge spread's matte; gradient's size when nothing else "
-                                             "gives one."}),
+                                             "transform, temporal cleanup; edge spread's matte; gradient's size when "
+                                             "nothing else gives one."}),
                 "mask_b": ("MASK", {"tooltip": "combine: the second matte."}),
                 "plate": ("IMAGE", {"tooltip": "key: difference - the clean plate (same shot, without the subject)."}),
                 "size_as": ("IMAGE", {"tooltip": "gradient: take the size from this image."}),
                 **appended,
                 **_grow_extra_inputs(),          # L9.281: appended LAST so saved widget positions never shift
                 **_grade_extra_inputs(),         # L7.48: appended after them, same reason
+                **a25,                           # L9.172 (A25): chroma key + temporal cleanup, appended LAST
             },
         }
 
@@ -661,7 +718,8 @@ class MaskToolsMEC:
         "invert, black / white point, lift, offset - as Nuke Grade); grow or shrink each side (left / right / up / "
         "down) with a feather; combine two mattes; gradient; "
         "grain; motion blur; edge spread; channel shuffle; transform (grow, blur and offset per axis, feather, "
-        "threshold, invert)."
+        "threshold, invert); chroma key with despill (green / blue / custom screen); temporal cleanup of a matte "
+        "over a clip (median / mean window, hysteresis, motion protection)."
     )
 
     @classmethod
@@ -681,7 +739,7 @@ class MaskToolsMEC:
         params = dict((k, p) for _l, k, p in MASK_TOOL_MODES)[key]
         names = list(params) if params is not None else list(_NEW_MODE_PARAMS[key])
         args = {p: kw[mask_tool_widget(key, p)] for p in names if mask_tool_widget(key, p) in kw}
-        if key in _APPENDED_MODES and len(args) < len(names):     # an optional control the prompt leaves out
+        if key in (_APPENDED_MODES | _A25_MODES) and len(args) < len(names):   # an optional control left out
             optional = self.INPUT_TYPES()["optional"]
             for p in names:
                 w = mask_tool_widget(key, p)
@@ -757,6 +815,21 @@ class MaskToolsMEC:
                 invert=bool(a["invert"]))
             return m, None, build_report("Mask Tools: transform", m.shape[0] if m.dim() == 3 else 1, [],
                                          coverage=float(m.float().mean()) * 100.0)
+        if key == "chroma_key":                          # L9.172 (A25 spec 82.1)
+            from ._a25_ops import chroma_key
+            img = ensure_bhw4_image(self._need(image, "an image", mode), "Mask Tools")
+            m, rgb, notes = chroma_key(img, str(a["screen"]), str(a["color"]), float(a["balance"]), float(a["gain"]),
+                                       float(a["clip_black"]), float(a["clip_white"]), str(a["despill"]),
+                                       float(a["despill_strength"]), bool(a["invert"]))
+            return (clone_output(m), clone_output(rgb),
+                    build_report("Mask Tools: chroma key", img.shape[0], notes, coverage=float(m.mean()) * 100.0))
+        if key == "temporal_cleanup":                    # L9.172 (A25 spec 82.2)
+            from ._a25_ops import temporal_cleanup
+            src = ensure_bhw_mask(self._need(mask, "a mask", mode), "Mask Tools")
+            g, notes = temporal_cleanup(src, int(a["window"]), str(a["method"]), float(a["hysteresis"]),
+                                        float(a["protect_motion"]), image)
+            return clone_output(g), None, build_report("Mask Tools: temporal cleanup", src.shape[0], notes,
+                                                       coverage=float(g.mean()) * 100.0)
         m = ensure_bhw_mask(self._need(mask, "a mask", mode), "Mask Tools")
         if key == "grade":
             ge = getattr(self, "_grade_extra", None) or {k: v[1].get("default") for k, v in _grade_extra_inputs().items()}
@@ -802,6 +875,11 @@ NODE_CLASS_MAPPINGS = {
     "MaskToolsMEC": MaskToolsMEC,
 }
 
+# L9.172 (A25): the inputs appended after the A28 pin (read by tests/test_a28_cnp_a_layout.py) - the chroma key and
+# temporal cleanup controls, in INPUT_TYPES order
+APPENDED_AFTER_A28 = tuple(mask_tool_widget(k, p) for _l, k, _p in MASK_TOOL_MODES if k in _A25_MODES
+                           for p in _NEW_MODE_PARAMS[k])
+
 NODE_DISPLAY_NAME_MAPPINGS = {
     "MaskToolsMEC": "Mask Tools (C2C)",
 }
@@ -830,6 +908,8 @@ if declare_layout is not None:
                     out[name]["c2c_section"] = s[1]["c2c_section"]
         for n in ("luma_key_low", "luma_key_high"):
             out[n] = {"c2c_show_if": {"mode": ["key: luma"], "luma_key_mode": ["custom"]}}
+        if "chroma_key_color" in out:            # L9.172: the colour is read only for a custom screen
+            out["chroma_key_color"] = {"c2c_show_if": {"mode": ["key: chroma"], "chroma_key_screen": ["custom"]}}
         for n in ("gradient_width", "gradient_height"):
             out.setdefault(n, {})["c2c_hide_if_linked"] = ["size_as"]
         # L9.281 directional grow (grow_angle / grow_units / grow_falloff / grow_follow_face get the grow / shrink

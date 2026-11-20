@@ -62,6 +62,55 @@ def _get_device() -> str:
     return "cpu"
 
 
+FUSION_MODES = ("off (selected_index)", "union", "intersection", "weighted by score")
+
+
+def parse_fusion_candidates(text) -> list[int]:
+    """'0,1,2' -> sorted unique candidate indices. Empty / not a number / outside 0..2 -> ValueError."""
+    valid = "0, 1, 2"
+    parts = [p.strip() for p in str(text if text is not None else "").split(",")]
+    if not any(parts):
+        raise ValueError(f"fusion_candidates is empty; list the candidates to fuse, comma separated, from {valid} "
+                         "(e.g. '0,1,2').")
+    out = set()
+    for p in parts:
+        try:
+            v = int(p)
+        except ValueError:
+            raise ValueError(f"fusion_candidates: {p!r} is not a candidate index; use comma-separated indices from "
+                             f"{valid} (e.g. '0,2').") from None
+        if not 0 <= v <= 2:
+            raise ValueError(f"fusion_candidates: {v} is out of range; the valid candidate indices are {valid}.")
+        out.add(v)
+    return sorted(out)
+
+
+def _iou_bool(a: np.ndarray, b: np.ndarray) -> float:
+    """IoU of two boolean masks; both empty = 1.0, one empty = 0.0."""
+    union = int(np.logical_or(a, b).sum())
+    if union == 0:
+        return 1.0
+    return float(np.logical_and(a, b).sum()) / union
+
+
+def candidate_stability(frame0: np.ndarray, later: list) -> list[float]:
+    """Per candidate of frame0 (K,H,W): mean over the later frames' candidate stacks of its best IoU (> 0.5) with
+    any candidate on that frame."""
+    f0 = np.asarray(frame0, np.float32) > 0.5
+    stab = []
+    for i in range(f0.shape[0]):
+        per_t = []
+        for m_t in later:
+            mt = np.asarray(m_t, np.float32) > 0.5
+            if mt.ndim == 2:
+                mt = mt[None]
+            if mt.shape[0] == 0:
+                mt = np.zeros((1,) + f0.shape[1:], bool)
+            per_t.append(max(_iou_bool(f0[i], mt[j]) for j in range(mt.shape[0])))
+        stab.append(float(np.mean(per_t)) if per_t else 0.0)
+    return stab
+
+
 def _available_sam_models() -> list[str]:
     """Return list of SAM model names from registry (sam1 family only for this node)."""
     names = []
@@ -152,6 +201,31 @@ class SamMultiMaskPickerMEC:
                                "copy is used wherever it is; without one the node gives a model-free GrabCut mask "
                                "(approximate) and names the model to install.",
                 }),
+                # L9.172 (spec item 51): appended last, after A28 (APPENDED_AFTER_A28); every default = as before
+                "fusion": (list(FUSION_MODES), {
+                    "default": FUSION_MODES[0],
+                    "tooltip": "off: selected_mask is the picked candidate, as before. union: per-pixel max of the "
+                               "candidates in fusion_candidates; intersection: per-pixel min; weighted by score: "
+                               "sum(score x mask) / sum(score) (negative scores count as 0; all 0 = plain mean). "
+                               "The fused mask replaces selected_mask; selected_index and all_masks are unchanged.",
+                }),
+                "fusion_candidates": ("STRING", {
+                    "default": "0,1,2",
+                    "tooltip": "Comma-separated candidate indices (0, 1, 2) that fusion combines; duplicates are "
+                               "ignored. Read only when fusion is on.",
+                }),
+                "temporal_frames": ("INT", {
+                    "default": 0, "min": 0, "max": 8, "step": 1,
+                    "tooltip": "0 = off. N > 0 on a clip: the same model and prompts also run on frames 1..N, and "
+                               "each candidate gets a stability score = mean over those frames of its best IoU "
+                               "(masks > 0.5) with any candidate there; listed in info.temporal. A single image "
+                               "only gets a note.",
+                }),
+                "temporal_pick": ("BOOLEAN", {
+                    "default": False,
+                    "tooltip": "On (with temporal_frames > 0 on a clip): output the most stable candidate (ties -> "
+                               "lower index) instead of selected_index - for the outputs, info and the picker.",
+                }),
             },
         }
 
@@ -174,6 +248,10 @@ class SamMultiMaskPickerMEC:
         sam_model: Optional[dict] = None,
         bbox: Optional[list] = None,
         allow_download: bool = False,
+        fusion: str = FUSION_MODES[0],
+        fusion_candidates: str = "0,1,2",
+        temporal_frames: int = 0,
+        temporal_pick: bool = False,
     ):
         if not isinstance(image, torch.Tensor) or image.ndim != 4:
             raise ValueError("SamMultiMaskPickerMEC expects IMAGE tensor [B,H,W,C]")
@@ -182,6 +260,7 @@ class SamMultiMaskPickerMEC:
             return self._pick_mask_impl(
                 image, model_name, points_json, bbox_json, precision,
                 selected_index, sam_model, bbox,
+                fusion, fusion_candidates, temporal_frames, temporal_pick,
             )
 
     def _pick_mask_impl(
@@ -194,8 +273,27 @@ class SamMultiMaskPickerMEC:
         selected_index: int,
         sam_model: Optional[dict] = None,
         bbox: Optional[list] = None,
+        fusion: str = FUSION_MODES[0],
+        fusion_candidates: str = "0,1,2",
+        temporal_frames: int = 0,
+        temporal_pick: bool = False,
     ):
         B, H, W, C = image.shape
+
+        # L9.172: validate the new options before any model work (cheap, plain-English errors)
+        fusion = str(fusion)
+        if fusion not in FUSION_MODES:
+            raise ValueError(f"fusion must be one of {list(FUSION_MODES)}, got {fusion!r}.")
+        fuse_idx = parse_fusion_candidates(fusion_candidates) if fusion != FUSION_MODES[0] else []
+        try:
+            temporal_frames = int(temporal_frames or 0)
+        except (TypeError, ValueError):
+            raise ValueError(f"temporal_frames must be a whole number 0-8, got {temporal_frames!r}.") from None
+        if not 0 <= temporal_frames <= 8:
+            raise ValueError(f"temporal_frames must be from 0 (off) to 8, got {temporal_frames}.")
+        temporal_masks: list = []                     # candidate stacks of frames 1..N (temporal scoring)
+        temporal_note = ""
+        temporal_ran = False
 
         # Convert first image to numpy uint8 for SAM
         img_np = (np.clip(image[0].cpu().numpy(), 0.0, 1.0) * 255).astype(np.uint8)   # A22 L9.136: no HDR wrap
@@ -283,8 +381,33 @@ class SamMultiMaskPickerMEC:
                     raise RuntimeError(f"SAM Multi-Mask Picker (MEC): SAM prediction failed: "
                                        f"{type(e).__name__}: {e}") from e
 
+                # L9.172 temporal scoring: the same model + prompts on frames 1..N, before the model is unloaded
+                if temporal_frames > 0 and B > 1 and masks_np is not None:
+                    for t in range(1, min(temporal_frames, B - 1) + 1):
+                        frame_np = (np.clip(image[t].cpu().numpy(), 0.0, 1.0) * 255).astype(np.uint8)
+                        pred_t = get_sam_predictor(model, model_type, frame_np)
+                        if pred_t is None:
+                            raise RuntimeError(f"SAM Multi-Mask Picker (MEC): temporal scoring found no predictor "
+                                               f"for frame {t} ({model_type!r}); set temporal_frames to 0.")
+                        try:
+                            m_t, _s_t, _ = sam_predict(
+                                pred_t, model_info, point_coords=point_coords, point_labels=point_labels,
+                                box=box_np, multimask_output=True,
+                            )
+                        except torch.cuda.OutOfMemoryError:
+                            raise
+                        except Exception as e:
+                            raise RuntimeError(f"SAM Multi-Mask Picker (MEC): temporal scoring failed on frame {t}: "
+                                               f"{type(e).__name__}: {e}. Set temporal_frames to 0 to skip it.") from e
+                        temporal_masks.append(np.asarray(m_t, np.float32))
+                    temporal_ran = True
+
         except torch.cuda.OutOfMemoryError:
             logger.warning("[MEC] OOM during SAM inference, retrying on CPU")
+            temporal_masks = []
+            temporal_ran = False
+            if temporal_frames > 0 and B > 1:
+                temporal_note = "temporal scoring skipped: out of GPU memory, the CPU retry scores frame 0 only"
             gc.collect()
             if torch.cuda.is_available():
                 torch.cuda.empty_cache()
@@ -360,11 +483,46 @@ class SamMultiMaskPickerMEC:
 
         # Clamp selected_index
         idx = max(0, min(selected_index, 2))
+
+        # L9.172 temporal scoring: stability per candidate; temporal_pick overrides the index
+        temporal_info = None
+        if temporal_frames > 0:
+            stability = None
+            if temporal_ran and temporal_masks:
+                stability = [round(s, 4) for s in candidate_stability(masks_np, temporal_masks)]
+            elif B <= 1:
+                temporal_note = "temporal scoring needs a clip (the image has 1 frame)"
+            picked = bool(temporal_pick) and stability is not None
+            if picked:
+                idx = int(np.argmax(np.asarray(stability)))          # first maximum = lower index on ties
+            temporal_info = {"frames_used": len(temporal_masks), "stability": stability,
+                             "picked_by_stability": picked}
+            if temporal_note:
+                temporal_info["note"] = temporal_note
+
         selected_mask_t = all_masks_t[idx:idx + 1]  # (1, H, W)
 
         # Build scores string
         scores_list = scores_np.tolist() if hasattr(scores_np, "tolist") else list(scores_np)
         scores_str = json.dumps([round(float(s) * 100, 1) for s in scores_list])
+
+        # L9.172 fusion: the listed candidates fused into selected_mask (selected_index / all_masks unchanged)
+        fusion_info = None
+        if fusion != FUSION_MODES[0]:
+            stack = all_masks_t[fuse_idx]                            # (K, H, W)
+            if fusion == "union":
+                fused = stack.max(dim=0, keepdim=True).values
+            elif fusion == "intersection":
+                fused = stack.min(dim=0, keepdim=True).values
+            else:
+                w = torch.tensor([max(0.0, float(scores_list[i])) for i in fuse_idx], dtype=torch.float32)
+                if float(w.sum()) <= 0.0:
+                    fused = stack.mean(dim=0, keepdim=True)
+                else:
+                    fused = (stack * w[:, None, None]).sum(dim=0, keepdim=True) / w.sum()
+            selected_mask_t = fused.clamp(0.0, 1.0).contiguous()
+            fusion_info = {"mode": fusion, "candidates": fuse_idx,
+                           "coverage": round(float(selected_mask_t.mean()), 4)}
 
         # Build detailed info
         from ._download_policy import sam_model_status
@@ -384,6 +542,9 @@ class SamMultiMaskPickerMEC:
             "has_bbox": box_np is not None,
             "precision": precision,
             "device": device,
+            # L9.172: only when the feature is on (a default run keeps the old keys exactly)
+            **({"fusion": fusion_info} if fusion_info is not None else {}),
+            **({"temporal": temporal_info} if temporal_info is not None else {}),
         }, indent=2)
 
         # ── Render mask thumbnails for the JS picker ──────────────
@@ -476,4 +637,11 @@ if declare_layout is not None:
         "precision": {"c2c_hide_if_linked": ["sam_model"]},
         "selected_index": {"c2c_hidden": True},
         "allow_download": {"c2c_section": "Model setup", "c2c_hide_if_linked": ["sam_model"]},
+        # L9.172 (appended after A28)
+        "fusion_candidates": {"c2c_show_if": {"fusion": {"not": [FUSION_MODES[0]]}}},
+        "temporal_frames": {"c2c_section": "Video"},
+        "temporal_pick": {"c2c_section": "Video"},
     })
+
+# L9.172 (spec item 51): the inputs appended after A28, in order (read by tests/test_a28_cnp_a_layout.py)
+APPENDED_AFTER_A28 = ("fusion", "fusion_candidates", "temporal_frames", "temporal_pick")
