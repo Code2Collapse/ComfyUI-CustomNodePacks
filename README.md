@@ -612,6 +612,12 @@ These ids were folded into the nodes above (or moved to another pack). A saved w
 
 In-depth notes on the larger nodes (hand-written; parameters are in NODE_REFERENCE.md).
 
+- **Node Identity** (2026-11-20, front end only, no new node): hide or show every node title (Alt+Shift+T, or per
+  node from the right-click menu) and give nodes short unique names worked out from the graph, such as
+  `SDXL · Initial Generation` or `PROMPT · Positive`, with a preview before anything changes. Names and the original
+  titles are saved in the workflow; what runs is unchanged. The admin (the ComfyUI page on this machine) sets the
+  rules and can lock names. See [docs/node-identity.md](docs/node-identity.md).
+
 #### SAM Model Loader (MEC)
 
 Loads SAM 2.1 / SAM 3 checkpoints with optional VRAM offload.

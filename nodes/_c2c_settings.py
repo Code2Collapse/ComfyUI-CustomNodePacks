@@ -314,3 +314,17 @@ register(
                     "picture per frame (bounded disk and browser memory). 0 = always one picture per frame.",
             consumer="nodes.video_frame_player:_proxy_above"),
 )
+
+# Node Identity (docs/node-identity.md): per-user title preferences. The admin rules are NOT settings (core's settings
+# POST is not local-only): they live in $C2C_HOME/node_identity_policy.json, written only by the admin route.
+register(
+    Setting("c2c.nodeIdentity.hideTitles", "boolean", False, "Hide node titles", ("Canvas", "Node Identity"),
+            tooltip="Hides the title text of every node (both renderers); the title bar, collapse button, badges and "
+                    "status icons stay, and node sizes do not change. A node's own override (right-click -> Node "
+                    "Identity) wins. Shortcut: Alt+Shift+T. The admin can turn the feature off.",
+            consumer="nodes.node_identity.policy:effective_state"),
+    Setting("c2c.nodeIdentity.hoverReveal", "boolean", True, "Show name and node type on hover",
+            ("Canvas", "Node Identity"),
+            tooltip="While titles are hidden, pointing at a node shows its name and its node type.",
+            consumer="nodes.node_identity.policy:effective_state"),
+)

@@ -1016,6 +1016,11 @@ try:
         _c2c_control_routes(_ps)
     except Exception as _ce:  # noqa: BLE001
         print(f"[C2C] Control Center route unavailable: {_ce}")
+    try:  # Node Identity: admin policy + permission answers (docs/node-identity.md)
+        from .nodes.node_identity.routes import register_routes as _c2c_ni_routes
+        _c2c_ni_routes(_ps)
+    except Exception as _nie:  # noqa: BLE001 - titles / renaming keep their local defaults without it
+        print(f"[C2C] Node Identity routes unavailable: {_nie}")
     for _hook, _args in ((_register_integrity_routes, (_ps,)), (_start_integrity_scan, ()),
                          (_install_insight_hook, ())):
         if _hook is not None:                    # L9.196: a module that failed to import is skipped, not fatal
