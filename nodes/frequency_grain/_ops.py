@@ -76,13 +76,22 @@ def resize_mask(mask: torch.Tensor, width: int, height: int) -> torch.Tensor:
 
 
 def work_device(x: torch.Tensor) -> torch.Tensor:
-    """Hop CPU tensors to CUDA for heavy filters; fall back on failure."""
+    """Hop CPU tensors to ComfyUI's compute device for heavy filters; fall back on failure.
+
+    L9.297: this used to test torch.cuda.is_available() only, so the filters ran on the GPU also under ComfyUI
+    --cpu. The device now comes from comfy.model_management (which honours --cpu / --directml / --gpu-only);
+    without ComfyUI the tensor stays where it is."""
     if x.device.type != "cpu":
         return x
-    if not torch.cuda.is_available():
+    try:
+        import comfy.model_management as mm
+        target = mm.get_torch_device()
+    except Exception:  # noqa: BLE001 - no ComfyUI (scripts, tests): keep the input device
+        return x
+    if getattr(target, "type", "cpu") == "cpu":
         return x
     try:
-        return x.to("cuda", non_blocking=True)
+        return x.to(target, non_blocking=True)
     except (RuntimeError, torch.cuda.OutOfMemoryError):
         return x
 
