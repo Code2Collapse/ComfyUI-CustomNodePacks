@@ -1,4 +1,8 @@
 name: CI
+# L10.12 (2026-11-21): this used to run ruff / pytest / pip-audit with `|| true` or continue-on-error - steps that
+# could never fail (a misleading green; standing order 6). The real gate is c2c-ci.yml (fresh ComfyUI boot with this
+# pack, Windows + Ubuntu). Tests stay local (owner rule), so what is left here is the one check that can fail:
+# the Comfy Registry metadata in pyproject.toml.
 on:
   pull_request:
     branches: [main, master]
@@ -14,46 +18,25 @@ permissions:
   contents: read
 
 env:
-  # Opt into Node.js 24 for actions to silence the Node 20 deprecation warning.
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
 
 jobs:
-  lint-and-test:
-    name: Lint & Test (Python ${{ matrix.python-version }})
+  registry-metadata:
+    name: Registry metadata (pyproject.toml)
     runs-on: ubuntu-latest
-    strategy:
-      fail-fast: false
-      matrix:
-        python-version: ["3.10", "3.11", "3.12"]
     steps:
       - name: Checkout
         uses: actions/checkout@v4
-        with:
-          submodules: recursive
 
       - name: Setup Python
         uses: actions/setup-python@v5
         with:
-          python-version: ${{ matrix.python-version }}
-          cache: pip
-
-      - name: Install build tooling
-        run: |
-          python -m pip install --upgrade pip
-          pip install ruff pytest tomli pip-audit
-
-      - name: Install package (best-effort)
-        run: |
-          pip install -e . || pip install -r requirements.txt || true
+          python-version: "3.12"
 
       - name: Validate pyproject.toml
         run: |
           python - <<'PY'
-          try:
-              import tomllib
-          except ModuleNotFoundError:
-              import tomli as tomllib
-          import sys
+          import tomllib
           d = tomllib.load(open("pyproject.toml", "rb"))
           assert "project" in d, "missing [project]"
           p = d["project"]
@@ -65,19 +48,3 @@ jobs:
           assert tc.get("DisplayName"), "missing [tool.comfy].DisplayName"
           print(f"OK: {p['name']} v{p['version']} (publisher={tc['PublisherId']})")
           PY
-
-      - name: Ruff lint
-        continue-on-error: true
-        run: ruff check .
-
-      - name: Ruff format check
-        continue-on-error: true
-        run: ruff format --check .
-
-      - name: Pytest
-        run: |
-          if [ -d tests ]; then pytest -q || true; else echo "No tests/ dir; skipping."; fi
-
-      - name: pip-audit (security)
-        continue-on-error: true
-        run: pip-audit --desc --strict || true
