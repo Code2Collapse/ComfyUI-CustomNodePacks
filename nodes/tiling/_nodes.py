@@ -593,7 +593,7 @@ class TileSplitMEC:
         }
 
     RETURN_TYPES = ("IMAGE", "INT", "STRING", "IMAGE", "STRING", "TILE_PLAN")
-    OUTPUT_TOOLTIPS = ("Every tile of every frame as one batch, frame by frame, tiles in plan order.",
+    OUTPUT_TOOLTIPS = ("Every tile of every frame as one batch, TILE-MAJOR: all frames of tile 1, then all frames of tile 2, in plan order (tile_coords gives each tile's batch_start / batch_end).",
                        "How many tiles came out (frames x tiles per frame).", "What was split, as text.",
                        "Frame 0 with every tile outlined in its own colour, overlaps darkened and the tile id "
                        "written in (ids need OpenCV; outlines always).",

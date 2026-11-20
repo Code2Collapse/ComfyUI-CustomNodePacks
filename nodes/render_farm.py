@@ -376,7 +376,8 @@ class C2C_Submit:
                 "wait_for_completion": ("BOOLEAN", {
                     "default": True,
                     "tooltip": "On: block until the remote render finishes and pull outputs "
-                               "back into input/c2c_farm_results/<job>/. Off: return the job id "
+                               "back into input/c2c_farm_results/<remote id>/ (the backend's prompt id, not "
+                               "this node's job id; result_paths lists the exact files). Off: return the job id "
                                "immediately and track it in the C2C Farm dashboard."}),
                 "timeout_minutes": ("INT", {"default": 120, "min": 1, "max": 1440, "tooltip": "How long to wait before the node fails. The job itself keeps running - follow it in the C2C Farm dashboard."}),
             },

@@ -144,7 +144,7 @@ class SamMultiMaskPickerMEC:
     DESCRIPTION = (
         "Run SAM inference to get 3 candidate masks with confidence scores. "
         "Pick interactively via the JS widget (click thumbnail or press 1/2/3). "
-        "Press R to re-run. Works with SAM1, SAM2, and HQ-SAM models."
+        "Queue the workflow again (Ctrl+Enter) to re-run with new prompts. Works with SAM1, SAM2, and HQ-SAM models."
     )
 
     @classmethod

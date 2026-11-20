@@ -744,13 +744,13 @@ class MaskOpsMEC:
             "optional": {
                 # Slot order shown on the node's left edge: these two come
                 # immediately after `image` and BEFORE the bbox slots so the
-                # standard wiring from PointsBBoxMaskEditor lines up cleanly.
+                # standard wiring from the Image Mask Editor (C2C) lines up cleanly.
                 # forceInput=True makes them appear as connector slots, not
                 # as multiline text widgets at the bottom of the node.
                 "positive_coords": ("STRING", {"forceInput": True, "default": "",
-                    "tooltip": "JSON list of positive points [[x,y],...] from PointsBBoxMaskEditor (positive_coords output)."}),
+                    "tooltip": "JSON list of positive points [[x,y],...], e.g. the Image Mask Editor (C2C) positive_coords output."}),
                 "negative_coords": ("STRING", {"forceInput": True, "default": "",
-                    "tooltip": "JSON list of negative points [[x,y],...] from PointsBBoxMaskEditor (negative_coords output)."}),
+                    "tooltip": "JSON list of negative points [[x,y],...], e.g. the Image Mask Editor (C2C) negative_coords output."}),
                 "pos_bbox":   ("BBOX", {"tooltip": "Single positive bbox [x0,y0,x1,y1]."}),
                 "neg_bbox":   ("BBOX", {"tooltip": "Optional negative bbox (excluded region)."}),
                 "normal_bbox": ("BBOX", {"tooltip": "Generic bbox if you don't care about polarity."}),

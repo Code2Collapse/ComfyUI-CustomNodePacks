@@ -532,7 +532,7 @@ class ModelMetadataExtractorMEC:
     )
     OUTPUT_TOOLTIPS = (
         "Full metadata as JSON (header fields, training tags, format).",
-        "Detected model kind (e.g. checkpoint, lora, vae, controlnet, unknown).",
+        "Detected model kind, one of: stable_diffusion_checkpoint, vae, lora, text_encoder, safetensors_other (any other safetensors file, e.g. a diffusion model or ControlNet), unknown.",
         "Total parameter count summed across all tensors.",
         "SHA256 fingerprint over (size, first 1 MB, last 1 MB) when enabled.",
         "License + lineage information as JSON when present in metadata.",

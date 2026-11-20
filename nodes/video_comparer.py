@@ -542,7 +542,7 @@ class VideoComparerC2C:
         "The comparison picture of the current mode (frame_index).",
         "How different A and B are per pixel (mean over channels, before gain) - threshold it to find changes.",
         "A histogram of A at frame_index (in histogram_scope mode, the same picture as preview).",
-        "What was compared: sources, sizes, frame, metrics (JSON).",
+        "What was compared, as one plain-text line: mode, bit depth, both sources and the metrics (the JSON report is change_report).",
         "A at frame_index (B's partner frame via b_offset) with the A/B difference painted as a heat map and a red "
         "box around every changed region, labelled with the changed share. A alone when B is missing.",
         "Change report as JSON, for a Save Text node or automation: per A-frame changed share and mean difference, "

@@ -253,8 +253,10 @@ class SegmentC2C:
                 # slice 4 (appended): the parsing targets' model download consent
                 "allow_download": ("BOOLEAN", {"default": False,
                                                "tooltip": "face parts / clothes: allow downloading the parsing model "
-                                                          "when it is missing (otherwise a model-free stand-in runs "
-                                                          "and info says so)."}),
+                                                          "when it is missing. Off: with the C2C setting 'Model-free "
+                                                          "fallbacks' on (default) an approximate model-free stand-in "
+                                                          "runs and info says so; with it off the node stops and names "
+                                                          "the model to install."}),
                 # L9.172 (A25): appended after A28; the defaults run exactly the old code
                 "recover_lost": ("BOOLEAN", {"default": False,
                                              "tooltip": "track whole clip: where a tracked object shrinks below 5 % "

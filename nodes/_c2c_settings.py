@@ -295,8 +295,9 @@ register(
             consumer="nodes.seedvr2_preview:enabled"),
     Setting("c2c.distributed.enabled", "boolean", True, "C2C Distributed (multi-GPU)", ("Multi-GPU",),
             env="C2C_DISTRIBUTED", restart=True,
-            tooltip="Split work across several GPUs (C2C Distributed nodes). Off: those nodes run on one GPU and say "
-                    "why.", consumer="c2c_distributed:enabled"),
+            tooltip="Split work across several GPUs (C2C Distributed nodes). Off: the C2C Distributed nodes stop with "
+                    "an error that says it is switched off, and models they patched earlier run as a normal single-GPU "
+                    "call.", consumer="c2c_distributed:enabled"),
     Setting("c2c.distributed.idleUnloadS", "number", 0, "Unload idle GPU workers after (s)", ("Multi-GPU",),
             min=0, max=86400, step=1, env="C2C_DISTRIBUTED_IDLE_UNLOAD_S",
             tooltip="C2C Distributed keeps a model loaded on each extra GPU between runs. After this many idle "
