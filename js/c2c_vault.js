@@ -5,6 +5,8 @@ import { getRuntime } from "./_c2c_runtime.js";
 import { asOneUndoStep } from "./_c2c_undo_scope.js";
 import { setHidden } from "./_widget_visibility.js";
 import { flattenSelection, isSubgraphNode, isVirtualNode, linkById } from "./_vault_flatten.js";
+// V1 (owner 2026-11-20): every Vault dialog is drawn by the shared Vault design system
+import { codeField, copyRow, el as vel, noticeEl, passwordField, vaultDialog } from "./_vault_ui.js";
 
 /**
  * C2C Vault — password-locked subgraph.
@@ -578,86 +580,27 @@ function modalPromoteStep({ selection }) {
 
 function modalAlert(title, note) {
   if (headless()) return Promise.resolve();
-  return new Promise((resolve) => {
-    const back = document.createElement("div");
-    back.setAttribute("role", "dialog");
-    back.setAttribute("aria-modal", "true");
-    css(back, {
-      position: "fixed", inset: "0", zIndex: "10000",
-      background: "rgba(0,0,0,0.55)", display: "flex",
-      alignItems: "center", justifyContent: "center",
-    });
-    const box = document.createElement("div");
-    css(box, {
-      background: "var(--c2c-bg2)", color: "var(--c2c-fg)",
-      border: "1px solid var(--c2c-border)", borderRadius: "6px",
-      padding: "18px 20px", minWidth: "300px", font: "13px sans-serif",
-    });
-    const ok = document.createElement("button");
-    ok.textContent = "OK";
-    css(ok, { marginTop: "12px", padding: "6px 14px", cursor: "pointer" });
-    ok.onclick = () => { back.remove(); resolve(); };
-    box.append(
-      Object.assign(document.createElement("div"), { textContent: title, style: { fontWeight: "600", marginBottom: "8px" } }),
-      Object.assign(document.createElement("div"), { textContent: note, style: { opacity: "0.8", lineHeight: "1.45" } }),
-      ok,
-    );
-    back.append(box);
-    document.body.append(back);
-  });
+  const d = vaultDialog({ title, width: 440 });
+  d.body.append(vel("p", { style: { margin: "0", whiteSpace: "pre-wrap" }, text: note || "" }));
+  d.addAction("OK", { primary: true, onClick: () => d.close() });
+  d.onSubmit(() => d.close());
+  setTimeout(() => d.footer.querySelector("button")?.focus(), 0);
+  return d.result.then(() => undefined);
 }
 
 function modalPassword({ title, note, confirmLabel }) {
   if (headless()) return Promise.resolve(null);
-  return new Promise((resolve) => {
-    const back = document.createElement("div");
-    back.setAttribute("role", "dialog");
-    back.setAttribute("aria-modal", "true");
-    css(back, {
-      position: "fixed", inset: "0", zIndex: "10000",
-      background: "rgba(0,0,0,0.55)", display: "flex",
-      alignItems: "center", justifyContent: "center",
-    });
-    const box = document.createElement("div");
-    css(box, {
-      background: "var(--c2c-bg2)", color: "var(--c2c-fg)",
-      border: "1px solid var(--c2c-border)", borderRadius: "6px",
-      padding: "18px 20px", minWidth: "340px", font: "13px sans-serif",
-    });
-    const pw = document.createElement("input");
-    pw.type = "password";
-    pw.autocomplete = "current-password";
-    css(pw, {
-      width: "100%", boxSizing: "border-box", margin: "10px 0",
-      padding: "7px 9px", borderRadius: "4px",
-      background: "var(--c2c-surface0)", color: "var(--c2c-fg)",
-      border: "1px solid var(--c2c-border)",
-    });
-    const err = document.createElement("div");
-    css(err, { color: "var(--c2c-dangerStrong)", minHeight: "16px" });
-    const row = document.createElement("div");
-    css(row, { display: "flex", gap: "8px", justifyContent: "flex-end" });
-    const cancel = document.createElement("button");
-    cancel.textContent = "Cancel";
-    const ok = document.createElement("button");
-    ok.textContent = confirmLabel || "OK";
-    for (const b of [cancel, ok]) css(b, { padding: "6px 14px", cursor: "pointer" });
-    const done = (v) => { back.remove(); resolve(v); };
-    cancel.onclick = () => done(null);
-    ok.onclick = () => {
-      if (!pw.value) { err.textContent = "Enter a password."; shakeEl(box); return; }
-      const v = pw.value; pw.value = ""; done(v);
-    };
-    box.append(
-      Object.assign(document.createElement("div"), { textContent: title, style: { fontWeight: "600" } }),
-      Object.assign(document.createElement("div"), { textContent: note, style: { opacity: "0.75", fontSize: "12px", marginTop: "6px" } }),
-      pw, err, row,
-    );
-    row.append(cancel, ok);
-    back.append(box);
-    document.body.append(back);
-    pw.focus();
-  });
+  const d = vaultDialog({ title, subtitle: note || "", width: 440 });
+  const pw = passwordField({ label: "Password", autocomplete: "current-password" });
+  d.body.append(pw.el);
+  d.addAction("Cancel", { onClick: () => d.close(null) });
+  const ok = () => {
+    if (!pw.value()) { d.notice("danger", "Enter a password."); pw.input.focus(); return; }
+    d.close(pw.value());
+  };
+  d.addAction(confirmLabel || "OK", { primary: true, onClick: ok });
+  d.onSubmit(ok);
+  return d.result;
 }
 
 /** Classify selection links — mirrors nodes/vault_boundary.py */
@@ -950,84 +893,35 @@ function activeEditSession() {
 
 function modalText({ title, note, placeholder, confirmLabel, mono }) {
   if (headless()) return Promise.resolve(null);
-  return new Promise((resolve) => {
-    const back = document.createElement("div");
-    back.setAttribute("role", "dialog");
-    back.setAttribute("aria-modal", "true");
-    css(back, { position: "fixed", inset: "0", zIndex: "10000", background: "rgba(0,0,0,0.55)", display: "flex",
-      alignItems: "center", justifyContent: "center" });
-    const box = document.createElement("div");
-    css(box, { background: "var(--c2c-bg2)", color: "var(--c2c-fg)", border: "1px solid var(--c2c-border)",
-      borderRadius: "6px", padding: "18px 20px", minWidth: "340px", maxWidth: "560px", font: "13px sans-serif" });
-    const input = document.createElement("input");
-    input.type = "text";
-    input.autocomplete = "one-time-code";
-    input.inputMode = mono ? "numeric" : "text";
-    input.placeholder = placeholder || "";
-    css(input, { width: "100%", boxSizing: "border-box", margin: "10px 0", padding: "7px 9px", borderRadius: "4px",
-      background: "var(--c2c-surface0)", color: "var(--c2c-fg)", border: "1px solid var(--c2c-border)",
-      fontFamily: mono ? "ui-monospace, monospace" : "inherit", letterSpacing: mono ? "0.2em" : "normal" });
-    const row = document.createElement("div");
-    css(row, { display: "flex", gap: "8px", justifyContent: "flex-end" });
-    const cancel = document.createElement("button");
-    cancel.textContent = "Cancel";
-    const ok = document.createElement("button");
-    ok.textContent = confirmLabel || "OK";
-    for (const b of [cancel, ok]) css(b, { padding: "6px 14px", cursor: "pointer" });
-    const done = (v) => { back.remove(); resolve(v); };
-    cancel.onclick = () => done(null);
-    ok.onclick = () => done(input.value.trim());
-    input.addEventListener("keydown", (e) => { e.stopPropagation(); if (e.key === "Enter") ok.onclick(); });
-    box.append(
-      Object.assign(document.createElement("div"), { textContent: title, style: { fontWeight: "600" } }),
-      Object.assign(document.createElement("div"), { textContent: note, style: { opacity: "0.8", fontSize: "12px",
-        marginTop: "6px", lineHeight: "1.45", whiteSpace: "pre-wrap" } }),
-      input, row,
-    );
-    row.append(cancel, ok);
-    back.append(box);
-    document.body.append(back);
-    input.focus();
-  });
+  const d = vaultDialog({ title, subtitle: note || "", width: 460 });
+  let input;
+  if (mono) {
+    const c = codeField({ label: "Code", allowRecovery: true });
+    d.onCleanup(c.destroy);
+    input = c.input;
+    if (placeholder) input.placeholder = placeholder;
+    d.body.append(c.el);
+  } else {
+    input = vel("input", { type: "text", class: "c2c-vault-input", placeholder: placeholder || "", autocomplete: "off",
+      "aria-label": title });
+    d.body.append(input);
+  }
+  d.addAction("Cancel", { onClick: () => d.close(null) });
+  const ok = () => d.close(input.value.trim());
+  d.addAction(confirmLabel || "OK", { primary: true, onClick: ok });
+  d.onSubmit(ok);
+  return d.result;
 }
 
 function modalSecretSheet({ title, lines, confirmLabel }) {
   if (headless()) return Promise.resolve();
-  return new Promise((resolve) => {
-    const back = document.createElement("div");
-    back.setAttribute("role", "dialog");
-    css(back, { position: "fixed", inset: "0", zIndex: "10000", background: "rgba(0,0,0,0.55)", display: "flex",
-      alignItems: "center", justifyContent: "center" });
-    const box = document.createElement("div");
-    css(box, { background: "var(--c2c-bg2)", color: "var(--c2c-fg)", border: "1px solid var(--c2c-border)",
-      borderRadius: "6px", padding: "18px 20px", width: "min(560px, 92vw)", font: "13px sans-serif" });
-    box.append(Object.assign(document.createElement("div"), { textContent: title,
-      style: { fontWeight: "600", marginBottom: "8px" } }));
-    for (const [label, value, copyable] of lines) {
-      const l = document.createElement("div");
-      l.textContent = label;
-      css(l, { opacity: "0.8", fontSize: "12px", marginTop: "8px" });
-      const v = document.createElement("div");
-      v.textContent = value;
-      css(v, { fontFamily: "ui-monospace, monospace", fontSize: "12px", wordBreak: "break-all", whiteSpace: "pre-wrap",
-        background: "var(--c2c-surface0)", padding: "6px 8px", borderRadius: "4px", marginTop: "4px" });
-      box.append(l, v);
-      if (copyable) {
-        const c = document.createElement("button");
-        c.textContent = "Copy";
-        css(c, { marginTop: "4px", padding: "3px 10px", cursor: "pointer" });
-        c.onclick = async () => { try { await navigator.clipboard.writeText(value); c.textContent = "Copied"; } catch (_) {} };
-        box.append(c);
-      }
-    }
-    const ok = document.createElement("button");
-    ok.textContent = confirmLabel || "Done";
-    css(ok, { marginTop: "14px", padding: "6px 14px", cursor: "pointer", float: "right" });
-    ok.onclick = () => { back.remove(); resolve(); };
-    box.append(ok);
-    back.append(box);
-    document.body.append(back);
-  });
+  const d = vaultDialog({ title, width: 560 });
+  for (const [label, value, copyable] of lines) {
+    d.body.append(vel("div", { class: "c2c-vault-field" }, [vel("div", { class: "c2c-vault-label", text: label }),
+      copyable ? copyRow({ label, value }) : vel("div", { class: "c2c-vault-copy__val", text: value })]));
+  }
+  d.addAction(confirmLabel || "Done", { primary: true, onClick: () => d.close() });
+  return d.result.then(() => undefined);
 }
 
 /** First use: set up the authenticator for THIS install (per person, per install - owner D0.25). */
@@ -2502,19 +2396,22 @@ app.registerExtension({
         { content: `C2C Vault → ${verb} what is connected to 'capture'`, callback: () => lockCaptured(node, sealed) },
       ];
     }
-    const nodesFor = () => {
-      const sel = selectedLockableNodes().filter((n) => !NODES.includes(n.type));
-      return sel.some((n) => n === node) ? sel : [node];
-    };
-    return [
-      { content: "C2C Vault → Lock selected nodes (password to run)", callback: () => lockNodes(nodesFor(), false, null) },
-      { content: "C2C Vault → Seal selected nodes (runs without password)", callback: () => lockNodes(nodesFor(), true, null) },
-    ];
+    // V1 (owner 2026-11-20): these entries ran the deprecated A17 wizard (4 dialogs, a deprecated C2C_VaultLocked /
+    // Sealed node). Selected nodes are now locked in one step by js/c2c_secure_subgraph.js ("Lock as C2C Vault" /
+    // "Seal as C2C Vault" in this same node menu); lockNodes stays for empty legacy vault nodes (above).
+    return [];
   },
 
+  // V1: ONE toolbox button for nodes and groups: "Lock selection as C2C Vault" (registered by c2c_secure_subgraph.js;
+  // one dialog chooses Sealed / Locked). The two old commands stay in the palette.
   getSelectionToolboxCommands(item) {
-    if (!item || typeof item.serialize !== "function" || NODES.includes(item.type) || Number(item.id) < 0) return [];
-    return ["c2c.vault.lockSelection", "c2c.vault.sealSelection"];
+    if (!item || typeof item.serialize !== "function") return [];
+    const LG = globalThis.LiteGraph;
+    const isGroup = LG?.LGraphGroup ? item instanceof LG.LGraphGroup : typeof item.recomputeInsideNodes === "function";
+    if (isGroup) return ["c2c.vault.lockSelectionAsVault"];
+    if (item.id == null || Number(item.id) < 0 || typeof item.type !== "string") return [];
+    if (NODES.includes(item.type) || /^C2C_SecureSubgraph/.test(item.type)) return [];
+    return ["c2c.vault.lockSelectionAsVault"];
   },
 
   setup() {

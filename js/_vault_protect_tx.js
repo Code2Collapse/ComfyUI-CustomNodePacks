@@ -582,7 +582,7 @@ export function trackerGuard(app, { settleMs = 300 } = {}) {
   };
 }
 
-export async function runTransaction(app, steps) {
+export async function runTransaction(app, steps, { onStage } = {}) {
   if (IN_FLIGHT) {
     const e = new ProtectError("SELECTION_VALIDATION", BUSY_MESSAGE);
     e.busy = true;
@@ -590,6 +590,8 @@ export async function runTransaction(app, steps) {
   }
   IN_FLIGHT = true;
   const tg = trackerGuard(app);
+  // V1 (2026-11-20): the one-step dialog shows which stage runs; a failing UI hook never affects the transaction
+  const tell = (stage) => { try { onStage?.(stage); } catch (_) { /* display only */ } };
   try {
     const ctx = { stage: "GRAPH_SNAPSHOT" };
     const snap = snapshot(app);
@@ -597,10 +599,12 @@ export async function runTransaction(app, steps) {
     try {
       for (const [stage, fn] of steps) {
         ctx.stage = stage;
+        tell(stage);
         await fn(ctx);
       }
       ctx.stage = "COMMIT";
       tg.commit(app);
+      tell("COMMIT");
       return ctx;
     } catch (e) {
       const stage = e?.stage || ctx.stage;

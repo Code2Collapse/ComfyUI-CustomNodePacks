@@ -23,33 +23,52 @@ its password.
 
 ## 1. Protect some nodes
 
-1. Select the nodes.
-2. Right-click an empty spot of the canvas and choose **🔒 Seal as C2C Vault (authorized installations)…** or
-   **🔒 Lock as C2C Vault (password to run)…**. To protect an existing subgraph, right-click its node and choose
-   **🔒 Protect this subgraph as C2C Vault…**.
-3. The dialog explains each profile. Type the vault password twice and press **Lock**.
+You do not need to make a subgraph first: the vault does that for you, in the same step.
 
-The selection becomes one vault node. Its sockets are the wires that crossed the selection, and its controls are
-the subgraph's promoted widgets. This works on the root graph and inside subgraphs. Nodes with lazy inputs
-(LazySwitchKJ), hidden inputs (NKD Mask Ops) and lists run inside like anywhere else. Protecting is one undo step.
+1. Select the nodes - or select a group to protect everything inside it.
+2. Do one of these (they all open the same dialog):
+   - press **Ctrl+Shift+L**;
+   - click the lock button in the selection toolbox above the selection;
+   - right-click one of the selected nodes (or an empty spot of the canvas) and choose
+     **🔒 Lock as C2C Vault (password to run)…** or **🔒 Seal as C2C Vault (authorized installations)…**.
+   To protect a subgraph you already have, right-click its node and choose **🔒 Protect this subgraph as C2C Vault…**.
+3. The dialog shows what becomes the vault (the node names, and how many inputs and outputs the vault will have).
+   Give the vault a name (a selected group's title is used by default), choose **who can run it** - Sealed
+   (recommended), Locked or Portable - and type the vault password twice (the meter shows its strength;
+   **Generate a strong password** makes one for you). For Sealed you can add other installations here too.
+4. Press **Lock 3 nodes** (the button counts your selection). The dialog shows each stage while it works.
 
-The command palette has the same actions: **C2C Vault: Lock selected nodes (password to run)**, **C2C Vault: Seal
-selected nodes (runs without password)** and **C2C Vault: Seal whole workflow**.
+The selection becomes one vault node, selected and ready. Its sockets are the wires that crossed the selection, and
+its controls are the subgraph's promoted widgets. Its body shows the profile, how many nodes are inside and, for a
+Locked vault, whether this tab has unlocked it; **Open…** there opens it. This works on the root graph and inside
+subgraphs. Nodes with lazy inputs (LazySwitchKJ), hidden inputs (NKD Mask Ops) and lists run inside like anywhere
+else. Locking is one undo step: **Ctrl+Z** gives back exactly the nodes you selected.
+
+If something goes wrong, nothing changes: the dialog stays open and says what failed and why, and your nodes are
+exactly as they were. A selection that contains a vault is refused (lock the nodes around it separately). A selection
+that contains a subgraph is converted with it; if this ComfyUI loses one of that subgraph's wires while grouping, you
+are told and should unpack it first (right-click › **Unpack Subgraph**).
+
+The command palette has the same actions: **Lock selection as C2C Vault…** (the dialog lets you choose),
+**C2C Vault: Lock selected nodes (password to run)**, **C2C Vault: Seal selected nodes (runs without password)** and
+**C2C Vault: Seal whole workflow**.
 
 ## 2. Run it
 
 - **Sealed:** it simply runs, on your install and on the installs you authorized.
-- **Locked:** the first run in a browser tab asks for the password. After that, the tab runs it without asking. A new
-  tab, or a ComfyUI restart, asks again.
+- **Locked:** the first run in a browser tab asks for the password (the **Run "name"** dialog; a wrong password is
+  said there and you can try again). After that, the tab runs it without asking, and the vault's body says
+  "Unlocked in this tab". A new tab, or a ComfyUI restart, asks again.
 
 What the inside makes still shows: previews, progress, and saved files. Errors name the inner node's type and the
 message, never its values.
 
 ## 3. Open and edit it
 
-1. Double-click the vault, or right-click it and choose **🔓 Open / edit vault…**.
-2. Type the password and the 6-digit code your authenticator app shows. A code works once; if you just used it, wait
-   for the next one (the dialog says so).
+1. Double-click the vault, press **Open…** in its body, or right-click it and choose **🔓 Open / edit vault…**.
+2. Type the password and the 6-digit code your authenticator app shows (a recovery code works too). The bar under the
+   code shows when the app's code changes. A code works once; if you just used it, wait for the next one. A wrong
+   password or code is said inside the dialog, which stays open with your password kept.
 3. The real nodes open as a normal subgraph. Edit them, including subgraphs nested inside.
 4. **Leave the subgraph** (breadcrumb, or navigate back) and it is encrypted again at once.
 

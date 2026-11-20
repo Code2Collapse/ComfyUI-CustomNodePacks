@@ -10,6 +10,11 @@ import { app } from "../../scripts/app.js";
 import { api } from "../../scripts/api.js";
 import { BUSY_MESSAGE, ProtectError, absSource, captureBoundary, ensureReroutes, execIdOf, outerWires, relSource,
   rerouteChain, runTransaction, verifyConversion, verifyVaultWiring } from "./_vault_protect_tx.js";
+// V1 (owner 2026-11-20): one-step "Lock selection as C2C Vault" + the Vault UI overhaul (docs/h2vault/V1_cnp_vault_ux_spec.md)
+import { protectFailureText, resolveLockSelection, stageLabel, summarizeSelection } from "./_vault_selection.js";
+import { block, capsule, choiceCards, codeField, copyRow, disclosure, el as vel, factList, noticeEl, passwordField,
+  statusCard, stepSection, switchRow, textArea, textField, vaultDialog, vbutton } from "./_vault_ui.js";
+import { tagDomWidget } from "./_vue_dom_rebind.js";
 
 const VAULT_TYPES = new Set(["C2C_SecureSubgraph", "C2C_SecureSubgraphOutput"]);
 const LEGACY_TYPES = new Set(["C2C_VaultLocked", "C2C_VaultSealed"]);
@@ -69,53 +74,11 @@ function el(tag, props = {}, kids = []) {
   return e;
 }
 
-const T = {
-  bg: "var(--c2c-bg2, #1d1f24)", fg: "var(--c2c-fg, #d8dae0)", dim: "var(--c2c-fg-dim, #9aa0aa)",
-  border: "var(--c2c-border, #3a3e47)", field: "var(--c2c-surface0, #15171b)",
-  accent: "var(--c2c-accent, #6aa7ff)", warn: "var(--c2c-warning, #f5c26b)", err: "var(--c2c-error, #ff7b7b)",
-};
-
-function inputStyle(extra = {}) {
-  return { width: "100%", boxSizing: "border-box", padding: "6px 8px", borderRadius: "4px", background: T.field,
-    color: T.fg, border: `1px solid ${T.border}`, font: "12px/1.4 inherit", ...extra };
-}
-
-function button(text, primary, onClick) {
-  return el("button", { textContent: text, on: { click: onClick }, style: {
-    padding: "5px 12px", borderRadius: "4px", cursor: "pointer", font: "12px inherit",
-    border: `1px solid ${primary ? T.accent : T.border}`, background: primary ? T.accent : "transparent",
-    color: primary ? "#0b0d10" : T.fg } });
-}
-
-/** A modal shell; `build(body, close)` fills it. Resolves with whatever close() is given. */
-function modal(title, build, { width = 420 } = {}) {
-  return new Promise((resolve) => {
-    const back = el("div", { role: "dialog", "aria-modal": "true", style: { position: "fixed", inset: "0",
-      zIndex: "10000", background: "rgba(0,0,0,.55)", display: "flex", alignItems: "center",
-      justifyContent: "center" } });
-    const box = el("div", { style: { background: T.bg, color: T.fg, border: `1px solid ${T.border}`,
-      borderRadius: "6px", padding: "14px 16px", width: `${width}px`, maxWidth: "94vw", maxHeight: "90vh",
-      overflow: "auto", font: "12px/1.45 sans-serif", boxShadow: "0 8px 32px rgba(0,0,0,.5)" } });
-    const close = (v) => { back.remove(); resolve(v); };
-    box.append(el("div", { textContent: title, style: { fontWeight: "600", fontSize: "13px", marginBottom: "10px" } }));
-    const body = el("div");
-    box.append(body);
-    back.append(box);
-    back.addEventListener("keydown", (e) => { if (e.key === "Escape") close(null); });
-    document.body.append(back);
-    build(body, close);
-    setTimeout(() => body.querySelector("input,button,select")?.focus(), 0);
-  });
-}
-
-function errorLine() {
-  return el("div", { style: { color: T.err, minHeight: "16px", margin: "6px 0 0", whiteSpace: "pre-wrap" } });
-}
-
-function toast(text, warn) {
+/** `warn`: true -> a warning; or a severity string ("success" | "info" | "warn" | "error"). */
+function toast(text, warn, summary = "C2C Vault") {
+  const severity = typeof warn === "string" ? warn : (warn ? "warn" : "info");
   try {
-    app.extensionManager?.toast?.add({ severity: warn ? "warn" : "info", summary: "C2C Vault", detail: text,
-      life: 5000 });
+    app.extensionManager?.toast?.add({ severity, summary, detail: text, life: severity === "error" ? 8000 : 5000 });
   } catch (_) { LOG(text); }
 }
 
@@ -255,12 +218,92 @@ function applyInterface(node) {
   const prof = PROFILES.find((p) => p.id === info.profile);
   const legacy = info.profile === "sealed_portable";
   node.title = info.title || node.title || "C2C Vault";
-  node.color = legacy ? "#6b5a2a" : "#2d4a6b";
-  node.bgcolor = legacy ? "#3a321c" : "#1c2c40";
+  node.color = legacy ? "#5a4a22" : "#2b2552";
+  node.bgcolor = legacy ? "#2e2716" : "#191632";
   node.__c2cBadge = `🔒 ${legacy ? "legacy - obfuscation only" : (prof?.id === "locked" ? "locked" : "sealed")}` +
     (info.node_count ? ` · ${info.node_count} nodes` : "");
+  ensureStatusCard(node);
+  if (!node.__vaultMinWidth && typeof node.computeSize === "function") {
+    // DOM widget computeSize gives a height only: the status card's minimum width comes from the node (memory:
+    // frontend-node-width-traps)
+    const cs = node.computeSize;
+    node.computeSize = function (...a) { const r = cs.apply(this, a); if (Array.isArray(r)) r[0] = Math.max(r[0], 340); return r; };
+    node.__vaultMinWidth = true;
+  }
   node.setSize?.(node.computeSize?.() ?? node.size);
   node.setDirtyCanvas?.(true, true);
+}
+
+// ── the vault node's body: a status card (V1) ──────────────────────────────────────────────────────────────────
+// A display-only DOM widget, in both renderers (the old badge was canvas text above the title that Nodes 2.0 never
+// drew). It is never saved (widget.serialize = false: frontend 1.53.10 saves any widget whose own .serialize is not
+// false, L9.237) and it is always the LAST widget, so the saved order [vault_id, vault_payload, p_* ...] never moves.
+// It shows only public facts: profile, inner node COUNT, this tab's run state - never an inner name or type.
+const STATUS_WIDGET = "vault_status";
+const STATUS_H = 60;
+
+function ensureStatusCard(node) {
+  if (typeof document === "undefined" || typeof node?.addDOMWidget !== "function") return;
+  let w = node.widgets?.find((x) => x.name === STATUS_WIDGET);
+  if (!w) {
+    const card = statusCard();
+    w = node.addDOMWidget(STATUS_WIDGET, STATUS_WIDGET, card.el, { serialize: false, margin: 4,
+      getMinHeight: () => STATUS_H, getHeight: () => STATUS_H });
+    w.serialize = false;
+    w.computeSize = (width) => [width, STATUS_H + 8];
+    w.__vaultCard = card;
+    try { tagDomWidget(w); } catch (_) { /* the Nodes 2.0 rebind tag is a nicety */ }
+  }
+  const ws = node.widgets || [];
+  const at = ws.indexOf(w);
+  if (at >= 0 && at !== ws.length - 1) { ws.splice(at, 1); ws.push(w); }
+  updateStatusCard(node);
+}
+
+function updateStatusCard(node) {
+  const card = node?.widgets?.find((x) => x.name === STATUS_WIDGET)?.__vaultCard;
+  if (!card) return;
+  const info = vaultInfo(node);
+  const vid = node.widgets?.find((x) => x.name === "vault_id")?.value;
+  const n = Number(info.node_count) || 0;
+  const detail = n ? `${n} node${n === 1 ? "" : "s"} inside` : "Protected subgraph";
+  if (!vid) {
+    card.update({ tone: "warn", title: "Empty vault", detail: "Lock a selection to fill it",
+      meta: "Right-click nodes › Lock as C2C Vault" });
+    return;
+  }
+  if (info.profile === "sealed_portable") {
+    card.update({ tone: "warn", title: "Portable · obfuscation only", detail, meta: "Runs anywhere without a password",
+      action: { label: "Open…", ariaLabel: `Open ${node.title || "vault"}`, onClick: () => openVault(node) } });
+    return;
+  }
+  const locked = info.profile === "locked";
+  const unlocked = locked && RUN_UNLOCKED.has(vid);
+  card.update({ tone: unlocked ? "ok" : "accent",
+    title: locked ? "Locked · password to run" : "Sealed · authorized installations", detail,
+    meta: locked ? (unlocked ? "Unlocked in this tab" : "Asks for the password at run time")
+      : "No password on authorized installs", metaTone: unlocked ? "ok" : "",
+    action: { label: "Open…", ariaLabel: `Open ${node.title || "vault"}`, onClick: () => openVault(node) } });
+}
+
+/** Refresh the cards of every vault with this id (after a run unlock). */
+function refreshCards(vaultId) {
+  const walk = (g, seen = new Set()) => {
+    if (!g || seen.has(g)) return;
+    seen.add(g);
+    for (const n of g.nodes || g._nodes || []) {
+      if (VAULT_TYPES.has(n.type) && (!vaultId || n.widgets?.find((w) => w.name === "vault_id")?.value === vaultId)) {
+        updateStatusCard(n);
+      }
+      if (isSubgraphNode(n)) walk(n.subgraph, seen);
+    }
+  };
+  try { walk(app.rootGraph ?? app.graph); } catch (_) { /* display only */ }
+}
+
+function markRunUnlocked(vaultId) {
+  RUN_UNLOCKED.add(vaultId);
+  refreshCards(vaultId);
 }
 
 // ── API form from the frontend's own graphToPrompt (exact widget / primitive / nested-subgraph conversion) ──
@@ -492,7 +535,8 @@ async function protectTransaction(nodes, opts) {
         graph.add(vault);
         applyInterface(vault);
         // the frontend names every converted subgraph "New Subgraph": a vault made from one is called "C2C Vault"
-        const t = sg.title && sg.title !== "New Subgraph" ? sg.title : "C2C Vault";
+        const named = typeof opts.title === "string" ? opts.title.trim().slice(0, 80) : "";
+        const t = named || (sg.title && sg.title !== "New Subgraph" ? sg.title : "C2C Vault");
         vault.title = t;
         vault.properties.c2c_vault.title = t;
       }],
@@ -510,14 +554,15 @@ async function protectTransaction(nodes, opts) {
         verifyVaultWiring(graph, vault, before, (i) => vaultSlotOf(vault, built.inputMap, i), promotedIdx);
         removeDefinitionIfUnused(sg);
       }],
-    ]);
+    ], { onStage: opts.onStage });
   } catch (e) {
     // L9.249 V6: sealing already stored this tab's run key for the new vault (Locked profile); the vault no longer
     // exists in the graph, so drop that server session too. Best effort: the graph is already restored.
     if (res?.vault_id) await dropProtectSession(res.vault_id);
     throw e;
   }
-  if (opts.profile === "locked") RUN_UNLOCKED.add(res.vault_id);
+  if (opts.profile === "locked") markRunUnlocked(res.vault_id);
+  updateStatusCard(vault);
   graph.setDirtyCanvas?.(true, true);
   return vault;
 }
@@ -539,7 +584,7 @@ async function protectSubgraphNode(sg, opts) {
   if (!r.ok) throw new Error(r.data.error || `Locking failed (${r.status}).`);
   const v = makeVaultNode(sg.graph, r.data, built, sg);
   removeDefinitionIfUnused(sg);
-  if (opts.profile === "locked") RUN_UNLOCKED.add(r.data.vault_id);
+  if (opts.profile === "locked") markRunUnlocked(r.data.vault_id);
   return v;
 }
 
@@ -583,122 +628,204 @@ function removeDefinitionIfUnused(sg) {
   for (const id of ids) if (!used.has(id)) root.subgraphs.delete?.(id);
 }
 
-// ── dialogs ─────────────────────────────────────────────────────────────────────────────────────────────────
-function profileDialog({ title, defaultProfile }) {
-  return modal(title, (body, close) => {
-    let chosen = defaultProfile || "sealed_installs";
-    const row = el("div", { style: { display: "flex", gap: "12px", alignItems: "stretch" } });
-    const list = el("div", { style: { flex: "0 0 52%", display: "flex", flexDirection: "column", gap: "4px" } });
-    const panel = el("div", { style: { flex: "1", border: `1px solid ${T.border}`, borderRadius: "4px",
-      padding: "8px", background: T.field, fontSize: "11.5px" } });
-    const fact = (k, v) => el("div", { style: { margin: "0 0 5px" } }, [el("b", { textContent: k + " " }), v]);
-    const render = () => {
-      const p = PROFILES.find((x) => x.id === chosen);
-      panel.replaceChildren(
-        el("div", { textContent: p.title, style: { fontWeight: "600", marginBottom: "6px",
-          color: p.risk === "warn" ? T.warn : T.fg } }),
-        fact("Runs:", p.run), fact("Opens for editing:", p.edit), fact("Network:", p.net),
-        fact("GPU:", p.where), fact("Key:", p.custody),
-        el("div", { textContent: p.security, style: { marginTop: "6px", color: p.risk === "warn" ? T.warn : T.dim } }));
-      for (const b of list.children) {
-        const on = b.dataset.id === chosen;
-        b.style.borderColor = on ? T.accent : T.border;
-        b.style.background = on ? "rgba(106,167,255,.12)" : "transparent";
-        b.querySelector("input").checked = on;
-      }
-      recip.style.display = chosen === "sealed_installs" ? "" : "none";
-      recipTools.style.display = recip.style.display;
-    };
-    for (const p of PROFILES) {
-      const radio = el("input", { type: "radio", name: "c2c-vault-profile", value: p.id, disabled: !!p.disabled });
-      const item = el("label", { "data-id": p.id, style: { display: "flex", gap: "6px", alignItems: "flex-start",
-        border: `1px solid ${T.border}`, borderRadius: "4px", padding: "5px 6px", cursor: p.disabled ? "default" : "pointer",
-        opacity: p.disabled ? ".5" : "1" } }, [radio, el("span", {}, [p.title, p.tag ? el("span", { textContent:
-        ` ${p.tag}`, style: { color: p.risk === "warn" ? T.warn : T.dim, fontSize: "11px" } }) : null])]);
-      item.dataset.id = p.id;
-      if (!p.disabled) item.addEventListener("click", () => { chosen = p.id; render(); });
-      list.append(item);
-    }
-    row.append(list, panel);
-    const pw = el("input", { type: "password", placeholder: "Vault password (opens it for editing)",
-      autocomplete: "new-password", style: inputStyle({ marginTop: "10px" }) });
-    const pw2 = el("input", { type: "password", placeholder: "Repeat the password", autocomplete: "new-password",
-      style: inputStyle({ marginTop: "6px" }) });
-    const recip = el("textarea", { placeholder: "Other installations that may run it: paste their installation " +
-      "codes (c2cvk1:...), one per line. Yours is included.", rows: 2, style: inputStyle({ marginTop: "6px",
-      resize: "vertical" }) });
-    const err = errorLine();
-    const recipTools = el("div", { style: { display: "flex", justifyContent: "flex-end", marginTop: "4px" } }, [
-      button("Import key file…", false, async () => {                  // L9.48
-        const k = await importKeyFile();
-        if (k?.error) { err.textContent = k.error; return; }
-        if (k && !recip.value.includes(k.code)) recip.value = `${recip.value.trim()}\n${k.code}`.trim();
-      })]);
-    const note = el("div", { textContent: "The password is never stored. Without it (and your authenticator) the " +
-      "vault cannot be opened - keep it safe.", style: { color: T.dim, marginTop: "6px" } });
-    const go = () => {
-      if (pw.value.length < 8) { err.textContent = "Use at least 8 characters."; return; }
-      if (pw.value !== pw2.value) { err.textContent = "The passwords differ."; return; }
-      close({ profile: chosen, password: pw.value,
-        recipients: recip.value.split(/\s+/).map((s) => s.trim()).filter(Boolean) });
-    };
-    pw2.addEventListener("keydown", (e) => { if (e.key === "Enter") go(); });
-    body.append(row, pw, pw2, recip, recipTools, note, err, el("div", { style: { display: "flex", justifyContent: "flex-end",
-      gap: "8px", marginTop: "10px" } }, [button("Cancel", false, () => close(null)), button("Lock", true, go)]));
-    render();
-  }, { width: 620 });
+// ── dialogs (V1: js/_vault_ui.js design system; docs/h2vault/V1_cnp_vault_ux_spec.md) ─────────────────────────
+const SHORT = {
+  sealed_installs: { title: "Sealed", tag: "Recommended", tone: "ok" },
+  locked: { title: "Locked", tag: "Password to run", tone: "" },
+  sealed_portable: { title: "Portable", tag: "Obfuscation only", tone: "warn" },
+};
+const PROTECT_FOOT = "The password is never stored. Keep it safe.";
+
+function profileFacts(p) {
+  return factList([["Opens for editing", p.edit], ["Network", p.net], ["Runs on", p.where],
+    ["Key", p.custody], ["Protection", p.security]]);
 }
 
-function authDialog(title, { needCode = true } = {}) {
-  return modal(title, (body, close) => {
-    const pw = el("input", { type: "password", placeholder: "Vault password", autocomplete: "current-password",
-      style: inputStyle() });
-    const code = el("input", { inputMode: "numeric", placeholder: "6-digit code from your authenticator app",
-      maxLength: 11, autocomplete: "one-time-code", style: inputStyle({ marginTop: "6px", letterSpacing: "2px" }) });
-    const err = errorLine();
-    const go = () => close({ password: pw.value, code: code.value.replace(/\s/g, ""), err });
-    for (const i of [pw, code]) i.addEventListener("keydown", (e) => { if (e.key === "Enter") go(); });
-    body.append(pw, needCode ? code : null, err, el("div", { style: { display: "flex", justifyContent: "flex-end",
-      gap: "8px", marginTop: "10px" } }, [button("Cancel", false, () => close(null)), button("Open", true, go)]));
-  });
+const splitCodes = (text) => String(text || "").split(/\s+/).map((s) => s.trim()).filter(Boolean);
+
+/**
+ * THE protect dialog (spec 4.1): one dialog for "lock a selection" and "protect this subgraph". `run(opts)` performs
+ * the lock (protectTransaction) while the dialog shows its stages; a failure is shown inside the dialog, which stays
+ * open. Resolves with the vault node, or null when cancelled.
+ */
+function protectDialog({ count, kind, summary, title, defaultProfile, run }) {
+  const many = count === 1 ? "" : "s";
+  const d = vaultDialog({
+    title: kind === "subgraph" ? `Lock "${title || "subgraph"}" as a vault` : `Lock ${count} node${many} as a vault`,
+    subtitle: kind === "subgraph" ? "The subgraph becomes one node whose inside is encrypted."
+      : `${count === 1 ? "It becomes" : "They become"} one node whose inside is encrypted. Everything outside stays as it is.`,
+    width: 860 });
+  const left = vel("div", { class: "c2c-vault-col" });
+  const right = vel("div", { class: "c2c-vault-col" });
+  d.body.append(vel("div", { class: "c2c-vault-cols" }, [left, right]));
+  left.append(capsule(summary));
+  if (summary.hasSubgraph && kind !== "subgraph") {
+    left.append(noticeEl("info", "The selection contains a subgraph. If ComfyUI loses one of its wires while " +
+      "grouping, nothing is changed and you are told - then unpack it (right-click › Unpack Subgraph) and lock again."));
+  }
+  const name = textField({ label: "Vault name", value: title || "C2C Vault", maxLength: 80,
+    hint: "Shown on the node. Anyone who receives the workflow can read the name." });
+  const facts = vel("div");
+  const choice = choiceCards({ label: "Who can run it", value: defaultProfile || "sealed_installs",
+    options: PROFILES.map((p) => ({ id: p.id, title: SHORT[p.id]?.title ?? p.title, tag: SHORT[p.id]?.tag,
+      tone: SHORT[p.id]?.tone, summary: p.run, disabled: p.disabled })),
+    onChange: () => render() });
+  const hosted = PROFILES.find((p) => p.id === "owner_hosted");
+  const pw2 = passwordField({ label: "Repeat the password" });
+  const pw = passwordField({ label: "Vault password", strength: true, generate: true,
+    hint: "Opens the vault for editing, together with your authenticator app.", onGenerate: (v) => pw2.setValue(v) });
+  const recip = textArea({ label: "Installation codes, one per line", placeholder: "c2cvk1:...", rows: 3,
+    hint: "Each person finds theirs under right-click on a vault › My installation code. Yours is always included." });
+  const others = disclosure("Other installations that may run it (optional)");
+  others.body.append(recip.el, vel("div", { class: "c2c-vault-row" }, [vbutton("Import key file…", { small: true,
+    onClick: async () => {
+      const k = await importKeyFile();
+      if (k?.error) { d.notice("danger", k.error); return; }
+      if (k && !recip.input.value.includes(k.code)) recip.input.value = `${recip.input.value.trim()}\n${k.code}`.trim();
+    } })]));
+  function render() {
+    const p = PROFILES.find((x) => x.id === choice.value());
+    facts.replaceChildren(profileFacts(p));
+    if (p.risk === "warn") facts.append(vel("div", { style: { marginTop: "8px" } }, [noticeEl("warn", p.security)]));
+    others.el.style.display = p.id === "sealed_installs" ? "" : "none";
+  }
+  left.append(name.el, pw.el, pw2.el, others.el);
+  right.append(choice.el, facts);
+  if (hosted) {
+    right.append(vel("p", { class: "c2c-vault-dim", text: "Owner-hosted vaults, where recipients send inputs to your " +
+      "server and never receive the graph, are coming. For whole workflows, use the C2C App Gateway." }));
+  }
+  render();
+  d.status(PROTECT_FOOT);
+  d.addAction("Cancel", { onClick: () => d.close(null) });
+  const go = async () => {
+    if (d.busy) return;
+    d.notice(null);
+    if (pw.value().length < 8) { d.notice("danger", "Use at least 8 characters for the vault password."); pw.input.focus(); return; }
+    if (pw.value() !== pw2.value()) { d.notice("danger", "The two passwords differ."); pw2.input.focus(); return; }
+    d.setBusy(true, "Locking…");
+    d.status(`${stageLabel("SELECTION_VALIDATION")}…`);
+    try {
+      const vault = await run({ profile: choice.value(), password: pw.value(), recipients: splitCodes(recip.input.value),
+        title: name.input.value, onStage: (s) => d.status(s === "COMMIT" ? "Locked." : `${stageLabel(s)}…`) });
+      d.close(vault);
+    } catch (e) {
+      LOG("protect failed", e?.stage, e?.message);
+      d.setBusy(false);
+      d.status(PROTECT_FOOT);
+      d.notice(e?.busy ? "warn" : "danger", protectFailureText(e));
+    }
+  };
+  d.addAction(kind === "subgraph" ? "Lock subgraph" : `Lock ${count} node${many}`, { primary: true, onClick: go });
+  d.onSubmit(go);
+  return d.result;
+}
+
+/**
+ * Password (+ authenticator code) dialog that STAYS OPEN until `submit` succeeds (spec 4.2 / 4.3 / 4.5).
+ * submit({password, code}) -> {ok: true, ...} | {enrol: true} | {error: string}. Resolves with that result or null.
+ */
+function credentialDialog({ title, subtitle, needCode = true, primary = "Open vault", submit }) {
+  const d = vaultDialog({ title, subtitle, width: 440 });
+  const pw = passwordField({ label: "Vault password", autocomplete: "current-password" });
+  const code = needCode ? codeField({ allowRecovery: true, hint: "Or one of your recovery codes. A code works once: " +
+    "if you just used one, wait for the next." }) : null;
+  if (code) d.onCleanup(code.destroy);
+  d.body.append(pw.el);
+  if (code) d.body.append(code.el);
+  d.addAction("Cancel", { onClick: () => d.close(null) });
+  const go = async () => {
+    if (d.busy) return;
+    d.notice(null);
+    if (!pw.value()) { d.notice("danger", "Type the vault password."); pw.input.focus(); return; }
+    if (code && !code.value()) { d.notice("danger", "Type the code your authenticator app shows now."); code.input.focus(); return; }
+    d.setBusy(true, "Checking…");
+    let out;
+    try { out = await submit({ password: pw.value(), code: code ? code.value() : "" }); }
+    catch (e) { out = { error: String(e?.message || e) }; }
+    if (out?.ok || out?.enrol) { d.close(out); return; }
+    d.setBusy(false);
+    d.notice("danger", out?.error || "That did not work. Check the password and try again.");
+    if (code) { code.clear(); code.input.focus(); } else pw.input.select();
+  };
+  d.addAction(primary, { primary: true, onClick: go });
+  d.onSubmit(go);
+  return d.result;
+}
+
+/** A server answer for a failed open / access check, in words (reused code, clock drift, wrong password ...). */
+function authError(r, fallback) {
+  const d = r?.data || {};
+  if (d.reason === "reused") return `That code was already used. Wait for the next one${d.next_in ? ` (${d.next_in} s)` : ""}, then type it.`;
+  if (d.reason === "clock") return d.error || "The code is for another time: this computer's or the phone's clock is off. Set both to automatic time.";
+  if (r?.status === 429) return d.error || "Too many attempts. Wait a few minutes, then try again.";
+  return d.error || fallback;
 }
 
 async function enrolDialog() {
   const st = await post("/c2c_vault/2fa/enrol/begin", {});
-  if (!st.ok) { toast(st.data.error || "Could not start the setup.", true); return false; }
-  const d = st.data;
-  return modal("Two-factor setup for C2C Vault", (body, close) => {
-    const qr = el("div", { innerHTML: d.qr_svg || "", style: { width: "180px", height: "180px", flex: "0 0 auto",
-      background: "#fff", borderRadius: "4px" } });
-    const facts = el("div", { style: { fontSize: "11.5px" } }, [
-      el("div", { textContent: "1. Scan the QR code with an authenticator app (Google Authenticator, Microsoft " +
-        "Authenticator, 1Password, Aegis...). Or type the setup key:" }),
-      el("code", { textContent: d.secret_grouped, style: { display: "block", margin: "6px 0", userSelect: "all",
-        fontSize: "12.5px" } }),
-      el("div", { textContent: `${d.issuer} · ${d.account} · ${d.algorithm}, ${d.digits} digits, every ${d.period} s`,
-        style: { color: T.dim } }),
-      el("div", { textContent: "2. Save these recovery codes (each works once if you lose the phone):",
-        style: { marginTop: "8px" } }),
-      el("code", { textContent: (d.recovery_codes || []).join("  "), style: { display: "block", margin: "4px 0",
-        userSelect: "all" } }),
-    ]);
-    const saved = el("input", { type: "checkbox" });
-    const code = el("input", { inputMode: "numeric", placeholder: "3. Enter the code the app now shows",
-      maxLength: 6, style: inputStyle({ marginTop: "8px", letterSpacing: "2px" }) });
-    const err = errorLine();
-    const go = async () => {
-      if (!saved.checked) { err.textContent = "Confirm that you saved the recovery codes."; return; }
-      const r = await post("/c2c_vault/2fa/enrol/confirm", { code: code.value.trim() });
-      if (r.ok) { toast("Two-factor is set up. A code works once: the next sign-in needs the next code."); close(true); }
-      else err.textContent = r.data.error || "That code is not right.";
-    };
-    code.addEventListener("keydown", (e) => { if (e.key === "Enter") go(); });
-    body.append(el("div", { style: { display: "flex", gap: "12px" } }, [qr, facts]),
-      el("label", { style: { display: "flex", gap: "6px", marginTop: "8px" } }, [saved,
-        "I saved the recovery codes"]), code, err,
-      el("div", { style: { display: "flex", justifyContent: "flex-end", gap: "8px", marginTop: "10px" } },
-        [button("Cancel", false, () => close(false)), button("Confirm", true, go)]));
-  }, { width: 560 });
+  if (!st.ok) { toast(st.data.error || "Could not start the setup.", "error"); return false; }
+  const data = st.data;
+  const d = vaultDialog({ title: "Set up two-factor for C2C Vault",
+    subtitle: "Opening a vault on this installation needs a code from an authenticator app, as well as the password.",
+    width: 640 });
+  const qr = vel("div", { class: "c2c-vault-qr" }, [vel("img", { alt: "QR code for your authenticator app",
+    src: `data:image/svg+xml;charset=utf-8,${encodeURIComponent(data.qr_svg || "")}` })]);
+  const scan = stepSection(1, "Scan the code with your authenticator app",
+    vel("div", { class: "c2c-vault-row", style: { alignItems: "flex-start", gap: "16px", flexWrap: "wrap" } }, [qr,
+      vel("div", { style: { flex: "1", minWidth: "220px", display: "flex", flexDirection: "column", gap: "8px" } }, [
+        vel("p", { class: "c2c-vault-dim", text: "Google Authenticator, Microsoft Authenticator, 1Password, Aegis and " +
+          "others work. No camera? Type the setup key instead:" }),
+        copyRow({ label: "setup key", value: data.secret_grouped }),
+        vel("p", { class: "c2c-vault-dim", text: `${data.issuer} · ${data.account} · ${data.algorithm}, ${data.digits} ` +
+          `digits, every ${data.period} s` })])]));
+  const codes = data.recovery_codes || [];
+  const saved = vel("input", { type: "checkbox" });
+  const download = () => {
+    const url = URL.createObjectURL(new Blob([`C2C Vault recovery codes (each works once)\n\n${codes.join("\n")}\n`],
+      { type: "text/plain" }));
+    const a = vel("a", { href: url, download: "c2c-vault-recovery-codes.txt" });
+    document.body.append(a);
+    a.click();
+    setTimeout(() => { URL.revokeObjectURL(url); a.remove(); }, 0);
+  };
+  const copyAll = vbutton("Copy all", { small: true, onClick: async () => {
+    try { await navigator.clipboard.writeText(codes.join("\n")); copyAll.querySelector(".c2c-vault-btn__label").textContent = "Copied"; }
+    catch (_) { /* the grid is selectable */ }
+  } });
+  const keep = stepSection(2, "Save your recovery codes",
+    vel("p", { class: "c2c-vault-dim", text: "Each works once instead of a code if you lose the phone. They are not shown again." }),
+    vel("div", { class: "c2c-vault-codes" }, codes.map((c) => vel("span", { text: c }))),
+    vel("div", { class: "c2c-vault-row", style: { justifyContent: "space-between", flexWrap: "wrap" } }, [
+      vel("label", { class: "c2c-vault-check" }, [saved, vel("span", { text: "I saved the recovery codes" })]),
+      vel("div", { class: "c2c-vault-row" }, [copyAll, vbutton("Download .txt", { small: true, onClick: download })])]));
+  const code = codeField({ label: "Code from the app" });
+  d.onCleanup(code.destroy);
+  const confirm = stepSection(3, "Type the code your app shows now", code.el);
+  d.body.append(scan, keep, confirm);
+  d.addAction("Cancel", { onClick: () => d.close(false) });
+  const go = async () => {
+    if (d.busy) return;
+    d.notice(null);
+    if (!saved.checked) { d.notice("danger", "Confirm that you saved the recovery codes first."); saved.focus(); return; }
+    if (!/^\d{6}$/.test(code.value())) { d.notice("danger", "Type the 6-digit code your app shows now."); code.input.focus(); return; }
+    d.setBusy(true, "Confirming…");
+    const r = await post("/c2c_vault/2fa/enrol/confirm", { code: code.value() });
+    if (r.ok) {
+      d.close(true);
+      toast("Two-factor is set up. A code works once: the next sign-in needs the next code.", "success", "Two-factor on");
+      return;
+    }
+    d.setBusy(false);
+    d.notice("danger", authError(r, "That code is not right. Check the phone's time and type the current code."));
+    code.clear();
+    code.input.focus();
+  };
+  d.addAction("Confirm", { primary: true, onClick: go });
+  d.onSubmit(go);
+  // the dialog takes focus on the first text field, which is the code at the bottom: start at the top instead
+  setTimeout(() => d.panel.focus(), 0);
+  return d.result;
 }
 
 /** Two-factor setup from the vault menu: a second setup first needs a current code or a recovery code (owner: the
@@ -706,20 +833,29 @@ async function enrolDialog() {
 async function twoFactorSetup() {
   const st = await (await api.fetchApi("/c2c_vault/2fa/status")).json().catch(() => ({}));
   if (st.enrolled) {
-    const code = await modal("Set up the authenticator again", (body, close) => {
-      const inp = el("input", { inputMode: "numeric", placeholder: "Current 6-digit code, or a recovery code",
-        autocomplete: "one-time-code", style: inputStyle({ letterSpacing: "1px" }) });
-      const go = () => close(inp.value.replace(/\s/g, ""));
-      inp.addEventListener("keydown", (e) => { if (e.key === "Enter") go(); });
-      body.append(el("div", { textContent: `An authenticator is set up on this install (${st.recovery_codes_left ?? 0} ` +
-        "recovery codes left). To replace it - for example because its setup key was shared - confirm with a code " +
-        "from it or a recovery code.", style: { color: T.dim, marginBottom: "8px" } }), inp,
-        el("div", { style: { display: "flex", justifyContent: "flex-end", gap: "8px", marginTop: "10px" } },
-          [button("Cancel", false, () => close(null)), button("Replace", true, go)]));
-    });
-    if (!code) return false;
-    const r = await post("/c2c_vault/2fa/reset", { code });
-    if (!r.ok) { toast(r.data.error || "That code is not right.", true); return false; }
+    const d = vaultDialog({ title: "Set up the authenticator again",
+      subtitle: "Use this when the setup key was shared or the phone changed. The old key stops working.", width: 460 });
+    d.body.append(noticeEl("info", `An authenticator is set up on this installation (${st.recovery_codes_left ?? 0} ` +
+      "recovery codes left). Confirm with a code from it, or with a recovery code."));
+    const code = codeField({ label: "Current code or a recovery code", allowRecovery: true });
+    d.onCleanup(code.destroy);
+    d.body.append(code.el);
+    d.addAction("Cancel", { onClick: () => d.close(false) });
+    const go = async () => {
+      if (d.busy) return;
+      d.notice(null);
+      if (!code.value()) { d.notice("danger", "Type a current code or a recovery code."); return; }
+      d.setBusy(true, "Checking…");
+      const r = await post("/c2c_vault/2fa/reset", { code: code.value() });
+      if (r.ok) { d.close(true); return; }
+      d.setBusy(false);
+      d.notice("danger", authError(r, "That code is not right."));
+      code.clear();
+      code.input.focus();
+    };
+    d.addAction("Replace", { primary: true, onClick: go });
+    d.onSubmit(go);
+    if (!(await d.result)) return false;
   }
   return enrolDialog();
 }
@@ -733,15 +869,25 @@ async function openVault(v) {
   }
   const payload = v.widgets.find((w) => w.name === "vault_payload")?.value;
   const vaultId = v.widgets.find((w) => w.name === "vault_id")?.value;
-  for (;;) {
-    const a = await authDialog(`Open ${v.title || "vault"}`);
-    if (!a) return;
-    const r = await post("/c2c_vault/sg/open", { payload, vault_id: vaultId, password: a.password, code: a.code,
-      client_id: api.clientId });
-    if (r.ok) { await enterOpened(v, r.data, payload); return; }
-    if (r.data.needs_enrolment) { if (!(await enrolDialog())) return; continue; }
-    toast(r.data.error || "Could not open the vault.", true);
-    if (r.data.reason !== "reused" && r.data.reason !== "clock" && r.status !== 403) return;
+  const title = v.title || "vault";
+  let opened = null;
+  const out = await credentialDialog({ title: `Open "${title}"`, primary: "Open vault",
+    subtitle: "Type the vault password and the code your authenticator app shows.",
+    submit: async ({ password, code }) => {
+      const r = await post("/c2c_vault/sg/open", { payload, vault_id: vaultId, password, code, client_id: api.clientId });
+      if (r.ok) { opened = r.data; return { ok: true }; }
+      if (r.data.needs_enrolment) return { enrol: true };
+      return { error: authError(r, "Could not open the vault.") };
+    } });
+  if (!out) return;
+  if (out.enrol) {
+    if (await enrolDialog()) await openVault(v);
+    return;
+  }
+  try {
+    await enterOpened(v, opened, payload);
+  } catch (e) {
+    toast(`The vault opened but could not be shown: ${e?.message || e}`, "error");
   }
 }
 
@@ -859,8 +1005,8 @@ async function lockOpened(sg, sess) {
     OPEN.delete(sg);
     makeVaultNode(sg.graph, { ...r.data, node_count: r.data.node_count }, built, sg);
     removeDefinitionIfUnused(sg);
-    if (sess.profile === "locked") RUN_UNLOCKED.add(sess.vaultId);
-    toast("Vault locked.");
+    if (sess.profile === "locked") markRunUnlocked(sess.vaultId);
+    toast("Vault locked again: what you changed is encrypted.", "success", "Vault locked");
   } catch (e) {
     toast(`${e.message} The vault stays open; fix it and leave the subgraph again.`, true);
   } finally { LOCKING = false; }
@@ -1049,14 +1195,15 @@ async function ensureRunKeys(output) {
     const info = graphNode ? vaultInfo(graphNode) : {};
     const vid = n.inputs?.vault_id;
     if (info.profile !== "locked" || RUN_UNLOCKED.has(vid)) continue;
-    for (;;) {
-      const a = await authDialog(`Password to run ${graphNode?.title || "this vault"}`, { needCode: false });
-      if (!a) throw new Error("Run cancelled: a Locked vault needs its password.");
-      const r = await post("/c2c_vault/sg/unlock_run", { payload: n.inputs.vault_payload, vault_id: vid,
-        password: a.password, client_id: api.clientId });
-      if (r.ok) { RUN_UNLOCKED.add(vid); break; }
-      toast(r.data.error || "Wrong password.", true);
-    }
+    const ok = await credentialDialog({ title: `Run "${graphNode?.title || "this vault"}"`, needCode: false,
+      primary: "Run", subtitle: "This vault is Locked: it needs its password once per browser tab.",
+      submit: async ({ password }) => {
+        const r = await post("/c2c_vault/sg/unlock_run", { payload: n.inputs.vault_payload, vault_id: vid, password,
+          client_id: api.clientId });
+        return r.ok ? { ok: true } : { error: authError(r, "Wrong password.") };
+      } });
+    if (!ok) throw new Error("Run cancelled: a Locked vault needs its password.");
+    markRunUnlocked(vid);
   }
 }
 
@@ -1096,10 +1243,10 @@ function upgradeLegacy(old) {
 }
 
 // ── menus ───────────────────────────────────────────────────────────────────────────────────────────────────
-function selectedNodes(canvas) {
+/** The canvas selection as canvas items (nodes, groups, reroutes); _vault_selection.js decides what is locked. */
+function selectedItemsOf(canvas) {
   const s = canvas?.selectedItems ?? canvas?.selected_nodes;
-  const list = s instanceof Set ? [...s] : Object.values(s || {});
-  return list.filter((n) => n && typeof n.id !== "undefined" && n.constructor?.name !== "LGraphGroup");
+  return s instanceof Set ? [...s] : Object.values(s || {});
 }
 
 /**
@@ -1145,44 +1292,70 @@ function reconnectParentInputs(graph, sg, wires) {
   }
 }
 
-async function lockSelection(canvas, profileHint) {
-  const nodes = selectedNodes(canvas);
-  if (!nodes.length) return;
-  const opts = await profileDialog({ title: "Protect as C2C Vault", defaultProfile: profileHint });
-  if (!opts) return;
-  await protectWithFeedback(nodes, opts);
+/**
+ * V1 one-step lock: whatever is selected (nodes, a group, or one subgraph node) -> ONE dialog -> the A26 transaction
+ * (convert to a native subgraph + protect, one undo step, exact rollback). `items` overrides the canvas selection
+ * (the node menu on an unselected node). Resolves with the vault node or null.
+ */
+async function lockSelection(canvas, profileHint, items = null) {
+  const r = resolveLockSelection(items ?? selectedItemsOf(canvas), { LiteGraph: globalThis.LiteGraph });
+  if (r.problems.length) { toast(r.problems[0], true); return null; }
+  let boundary = null;
+  if (r.kind === "nodes") {
+    try { boundary = captureBoundary(r.nodes[0].graph, r.nodes); } catch (_) { boundary = { entering: [], leaving: [] }; }
+  }
+  const summary = summarizeSelection(r.nodes, boundary);
+  // A failed attempt restores the graph by reloading it (new node objects, same ids) and the dialog stays open for a
+  // retry: each attempt therefore takes the nodes by id from the graph on screen, never the stale objects.
+  const ids = r.nodes.map((n) => n.id);
+  const live = () => {
+    if (r.nodes.every((n) => n.graph && n.graph.getNodeById?.(n.id) === n)) return r.nodes;
+    const g = app.canvas?.graph;
+    const again = ids.map((id) => g?.getNodeById?.(id)).filter(Boolean);
+    if (again.length !== ids.length) {
+      throw new ProtectError("SELECTION_VALIDATION", "The selected nodes are no longer in the graph on screen. " +
+        "Close this dialog and select them again.");
+    }
+    return again;
+  };
+  const vault = await protectDialog({ count: r.nodes.length, kind: r.kind, summary, title: r.title,
+    defaultProfile: profileHint || "sealed_installs", run: async (opts) => protectTransaction(live(), opts) });
+  if (!vault) return null;
+  try { canvas?.deselectAll?.(); canvas?.select?.(vault); } catch (_) { /* selection is a nicety */ }
+  const what = r.kind === "subgraph" ? "the subgraph" : `${r.nodes.length} node${r.nodes.length === 1 ? "" : "s"}`;
+  toast(`Locked ${what} into "${vault.title}". Double-click it to open (password + authenticator).`, "success",
+    "Vault locked");
+  return vault;
 }
 
+/** Protect without a dialog (browser tests, A26 L9.203). True / false; the outcome is told in a toast. */
 async function protectWithFeedback(nodes, opts) {
   try {
     await protectTransaction(nodes, opts);
-    toast("Locked. Double-click the vault to open it (password + authenticator).");
+    toast("Locked. Double-click the vault to open it (password + authenticator).", "success", "Vault locked");
     return true;
   } catch (e) {
     // never a success message for a half-done protect: the original graph is back
     LOG("protect failed", e?.stage, e?.message);
     if (e?.busy) { toast(BUSY_MESSAGE, true); return false; }       // L9.249 V2: the running one is untouched
-    const why = String(e?.message || e).trim();
-    toast(`Not protected - failed at ${String(e?.stage || "an unknown stage").replace(/_/g, " ").toLowerCase()}: ` +
-      `${why}${/[.!?]$/.test(why) ? "" : "."} Your nodes are back exactly as they were.`, true);
+    toast(protectFailureText(e), "error", "Not locked");
     return false;
   }
 }
 
 async function showInstallCode() {
   const r = await (await api.fetchApi("/c2c_vault/sg/install_code")).json().catch(() => ({}));
-  await modal("My installation code", (body, close) => {
-    const name = el("input", { placeholder: "A name the author will see, e.g. Studio B (optional)",
-      style: inputStyle({ marginBottom: "8px" }) });
-    body.append(el("div", { textContent: "Send this to a vault author so their Sealed vaults run here - as text, or " +
-      "as a key file. It is a public key - safe to share.", style: { color: T.dim } }),
-    el("code", { textContent: r.code || "unavailable", style: { display: "block", margin: "8px 0", userSelect: "all",
-      wordBreak: "break-all" } }), name,
-    el("div", { style: { display: "flex", justifyContent: "flex-end", gap: "8px" } }, [
-      button("Copy", false, () => navigator.clipboard?.writeText(r.code || "")),
-      button("Save key file", false, () => r.code && saveKeyFile(r.code, name.value.trim())),
-      button("Close", true, () => close())]));
-  });
+  const d = vaultDialog({ title: "My installation code",
+    subtitle: "Send this to a vault author so their Sealed vaults run here. It is a public key: safe to share.",
+    width: 520 });
+  const name = textField({ label: "Name the author will see (optional)", placeholder: "e.g. Studio B", maxLength: 60 });
+  if (r.code) d.body.append(copyRow({ label: "installation code", value: r.code }));
+  else d.body.append(noticeEl("danger", "This installation's code is not available. Check that the C2C Vault server part loaded."));
+  d.body.append(name.el);
+  if (r.code) d.addAction("Save key file", { onClick: () => saveKeyFile(r.code, name.input.value.trim()) });
+  d.addAction("Done", { primary: true, onClick: () => d.close(true) });
+  d.onSubmit(() => d.close(true));
+  await d.result;
 }
 
 // ── access management (L9.48): installations, editors, password ─────────────────────────────────────────────
@@ -1227,99 +1400,94 @@ function shortCode(code) {
   return code.length > 30 ? `${code.slice(0, 18)}…${code.slice(-8)}` : code;
 }
 
-/** The access dialog. `apply(choice)` -> {ok} or {error}; on an error the dialog stays open with the message. */
+/** The access dialog (spec 4.5). `apply(choice)` -> {ok} or {error}; on an error the dialog stays open with the
+ *  message. Resolves with apply's result, or null when cancelled. */
 function accessDialog(v, res, focus, apply) {
-  return modal(`Access - ${v.title || "vault"}`, (body, close) => {
-    const sealed = res.profile === "sealed_installs";
-    const lists = { editors: res.editors.map((r) => ({ ...r })), recipients: res.recipients.map((r) => ({ ...r })) };
-    const err = errorLine();
-    const setLabel = (code, label) => {
-      for (const r of [...lists.editors, ...lists.recipients]) if (r.code === code) r.label = label;
-    };
-    const section = (key, title, hint) => {
-      const rows = el("div", { style: { display: "flex", flexDirection: "column", gap: "4px", margin: "6px 0" } });
-      const draw = () => rows.replaceChildren(...lists[key].map((r, i) => el("div", {
-        style: { display: "flex", gap: "6px", alignItems: "center" } }, [
-        el("input", { value: r.label, placeholder: r.me ? "This installation" : "Name (optional)",
-          style: inputStyle({ flex: "0 0 150px", width: "150px" }),
-          on: { input: (e) => setLabel(r.code, e.target.value) } }),
-        el("code", { textContent: shortCode(r.code), title: r.code, style: { flex: "1", minWidth: "0", overflow: "hidden",
-          textOverflow: "ellipsis", whiteSpace: "nowrap", color: T.dim } }),
-        r.me ? el("span", { textContent: "this installation", style: { color: T.accent, fontSize: "11px",
-          flex: "0 0 auto" } })
-          : button("Remove", false, () => { lists[key].splice(i, 1); draw(); }),
-      ])));
-      const code = el("input", { placeholder: "Paste an installation code (c2cvk1:...)", style: inputStyle({ flex: "1" }) });
-      const add = (c, label) => {
-        c = String(c || "").trim();
-        if (!c) return;
-        if (!c.startsWith(CODE_PREFIX)) { err.textContent = `An installation code starts with ${CODE_PREFIX}`; return; }
-        if (lists[key].some((r) => r.code === c)) { err.textContent = "That installation is already in the list."; return; }
-        const known = [...lists.editors, ...lists.recipients].find((r) => r.code === c);
-        lists[key].push({ code: c, label: label || known?.label || "", me: false });
-        code.value = "";
-        err.textContent = "";
-        draw();
-      };
-      code.addEventListener("keydown", (e) => { if (e.key === "Enter") add(code.value); });
+  const sealed = res.profile === "sealed_installs";
+  const d = vaultDialog({ title: `${focus === "password" ? "Change the password of" : "Access to"} "${v.title || "vault"}"`,
+    subtitle: sealed ? "Who may run this vault, who may open it for editing, and its password."
+      : "Who may open this vault for editing, and its password.", width: 640 });
+  const lists = { editors: res.editors.map((r) => ({ ...r })), recipients: res.recipients.map((r) => ({ ...r })) };
+  const setLabel = (code, label) => {
+    for (const r of [...lists.editors, ...lists.recipients]) if (r.code === code) r.label = label;
+  };
+  const section = (key, title, hint) => {
+    const rows = vel("div", { class: "c2c-vault-list" });
+    const draw = () => rows.replaceChildren(...lists[key].map((r, i) => {
+      const name = vel("input", { type: "text", class: "c2c-vault-input", value: r.label || "", maxLength: 60,
+        placeholder: r.me ? "This installation" : "Name (optional)", "aria-label": `Name for installation ${shortCode(r.code)}`,
+        on: { input: (e) => setLabel(r.code, e.target.value) } });
+      return vel("div", { class: "c2c-vault-keyrow" }, [name,
+        vel("span", { class: "c2c-vault-keycode", text: shortCode(r.code), title: r.code }),
+        r.me ? vel("span", { class: "c2c-vault-badge", text: "This installation" })
+          : vbutton("Remove", { small: true, ariaLabel: `Remove installation ${shortCode(r.code)}`,
+            onClick: () => { lists[key].splice(i, 1); draw(); } })]);
+    }));
+    const code = vel("input", { type: "text", class: "c2c-vault-input", placeholder: "Paste an installation code (c2cvk1:...)",
+      "aria-label": `Add to ${title.toLowerCase()}`, spellcheck: false });
+    const add = (c, label) => {
+      c = String(c || "").trim();
+      if (!c) return;
+      if (!c.startsWith(CODE_PREFIX)) { d.notice("danger", `An installation code starts with ${CODE_PREFIX}`); return; }
+      if (lists[key].some((r) => r.code === c)) { d.notice("warn", "That installation is already in the list."); return; }
+      const known = [...lists.editors, ...lists.recipients].find((r) => r.code === c);
+      lists[key].push({ code: c, label: label || known?.label || "", me: false });
+      code.value = "";
+      d.notice(null);
       draw();
-      return el("div", { style: { marginBottom: "12px" } }, [
-        el("div", { textContent: title, style: { fontWeight: "600" } }),
-        el("div", { textContent: hint, style: { color: T.dim, fontSize: "11px" } }),
-        rows,
-        el("div", { style: { display: "flex", gap: "6px" } }, [code, button("Add", false, () => add(code.value)),
-          button("Import key file…", false, async () => {
-            const k = await importKeyFile();
-            if (k?.error) err.textContent = k.error;
-            else if (k) add(k.code, k.label);
-          })]),
-      ]);
     };
-    const parts = [];
-    if (sealed) {
-      parts.push(section("recipients", "Installations that may run it",
-        "Without a password, only on these ComfyUI installations. This one is always included."));
-    } else {
-      parts.push(el("div", { textContent: res.profile === "locked" ? "Locked vault: whoever has the password can run " +
-        "it, so there are no installations to manage." : "Portable vault: it runs anywhere (obfuscation only).",
-        style: { color: T.dim, marginBottom: "10px" } }));
+    code.addEventListener("keydown", (e) => { if (e.key === "Enter") { e.preventDefault(); e.stopPropagation(); add(code.value); } });
+    draw();
+    return block(title, hint, rows, vel("div", { class: "c2c-vault-row" }, [
+      vel("div", { style: { flex: "1", minWidth: "0" } }, [code]),
+      vbutton("Add", { onClick: () => add(code.value) }),
+      vbutton("Import key file…", { onClick: async () => {
+        const k = await importKeyFile();
+        if (k?.error) d.notice("danger", k.error);
+        else if (k) add(k.code, k.label);
+      } })]));
+  };
+  if (sealed) {
+    d.body.append(section("recipients", "Installations that may run it",
+      "Without a password, only on these ComfyUI installations. This one is always included."));
+  } else {
+    d.body.append(noticeEl("info", res.profile === "locked" ? "Locked vault: whoever has the password can run it, so " +
+      "there are no installations to manage here." : "Portable vault: it runs anywhere (obfuscation only)."));
+  }
+  d.body.append(section("editors", "Editors", "Installations that may open it for editing - each with the password " +
+    "and its own authenticator. This one stays an editor."));
+  const pw = passwordField({ label: "New vault password", strength: true });
+  const pw2 = passwordField({ label: "Repeat the new password" });
+  const pwBox = vel("div", { class: "c2c-vault-grid2" }, [pw.el, pw2.el]);
+  const change = switchRow("Change the password", { checked: focus === "password",
+    onChange: (on) => { pwBox.style.display = on ? "" : "none"; if (on) pw.input.focus(); } });
+  pwBox.style.display = change.checked() ? "" : "none";
+  d.body.append(vel("div", { class: "c2c-vault-block" }, [change.el, pwBox]));
+  d.body.append(noticeEl("info", (sealed ? "Removing an installation protects new copies only: a copy it already has " +
+    "still runs there. " : "") + "Applying re-encrypts the vault with fresh keys; save the workflow afterwards so the " +
+    "new access goes with it."));
+  d.addAction("Cancel", { onClick: () => d.close(null) });
+  const go = async () => {
+    if (d.busy) return;
+    d.notice(null);
+    let newPassword = null;
+    if (change.checked()) {
+      if (pw.value().length < 8) { d.notice("danger", "Use at least 8 characters for the new password."); pw.input.focus(); return; }
+      if (pw.value() !== pw2.value()) { d.notice("danger", "The two new passwords differ."); pw2.input.focus(); return; }
+      newPassword = pw.value();
     }
-    parts.push(section("editors", "Editors", "Installations that may open it for editing - each with the password " +
-      "and its own authenticator. This one stays an editor."));
-    const change = el("input", { type: "checkbox", checked: focus === "password" });
-    const pw = el("input", { type: "password", placeholder: "New vault password (at least 8 characters)",
-      autocomplete: "new-password", style: inputStyle({ marginTop: "6px" }) });
-    const pw2 = el("input", { type: "password", placeholder: "Repeat the new password", autocomplete: "new-password",
-      style: inputStyle({ marginTop: "6px" }) });
-    const pwBox = el("div", {}, [pw, pw2]);
-    const showPw = () => { pwBox.style.display = change.checked ? "" : "none"; };
-    change.addEventListener("change", showPw);
-    parts.push(el("label", { style: { display: "flex", gap: "6px", alignItems: "center", fontWeight: "600" } },
-      [change, "Change the password"]), pwBox);
-    parts.push(el("div", { textContent: (sealed ? "Removing an installation protects new copies only: a copy it already " +
-      "has still runs there. " : "") + "Applying re-encrypts the vault with fresh keys; save the workflow afterwards " +
-      "so the new access goes with it.", style: { color: T.dim, marginTop: "10px", fontSize: "11px" } }));
-    const applyBtn = button("Apply", true, async () => {
-      let newPassword = null;
-      if (change.checked) {
-        if (pw.value.length < 8) { err.textContent = "Use at least 8 characters for the new password."; return; }
-        if (pw.value !== pw2.value) { err.textContent = "The new passwords differ."; return; }
-        newPassword = pw.value;
-      }
-      const labels = {};
-      for (const r of [...lists.editors, ...lists.recipients]) if (r.label.trim()) labels[r.code] = r.label.trim();
-      applyBtn.disabled = true;
-      err.textContent = "";
-      const out = await apply({ editors: lists.editors.map((r) => r.code), recipients: lists.recipients.map((r) => r.code),
-        labels, new_password: newPassword });
-      applyBtn.disabled = false;
-      if (out?.error) { err.textContent = out.error; return; }
-      close(out);
-    });
-    body.append(...parts, err, el("div", { style: { display: "flex", justifyContent: "flex-end", gap: "8px",
-      marginTop: "10px" } }, [button("Cancel", false, () => close(null)), applyBtn]));
-    showPw();
-  }, { width: 620 });
+    const labels = {};
+    for (const r of [...lists.editors, ...lists.recipients]) if (String(r.label || "").trim()) labels[r.code] = r.label.trim();
+    d.setBusy(true, "Applying…");
+    d.status("Re-encrypting the vault…");
+    const out = await apply({ editors: lists.editors.map((r) => r.code), recipients: lists.recipients.map((r) => r.code),
+      labels, new_password: newPassword });
+    if (out?.error) { d.setBusy(false); d.status(""); d.notice("danger", out.error); return; }
+    d.close(out);
+  };
+  d.addAction("Apply", { primary: true, onClick: go });
+  if (focus === "password") setTimeout(() => pw.input.focus(), 0);
+  return d.result;
 }
 
 // ── missing custom nodes (L9.50): one click, names never shown (owner A18) ─────────────────────────────────
@@ -1341,42 +1509,43 @@ async function installMissing(v, { auto = false } = {}) {
       return;
     }
     const n = s.packs, many = n !== 1;
-    const go = await modal("Custom nodes needed", (box, close) => {
-      const say = (t, dim) => el("div", { textContent: t, style: { marginBottom: "8px", color: dim ? T.dim : T.fg } });
-      if (s.installable) {
-        box.append(say(`This workflow needs ${n} custom node pack${many ? "s" : ""} that ${many ? "are" : "is"} not ` +
-          `installed here (from ${s.hosts.join(", ")}). Without ${many ? "them" : "it"} the workflow will not run.`));
-        if (s.installable < n || s.unknown_classes) {
-          box.append(say("Some of them cannot be installed from here - ask the vault's author for those."));
-        }
-        box.append(say(`Installing downloads ${many ? "them" : "it"} and runs ${many ? "their" : "its"} code when ` +
-          "ComfyUI restarts. Install only if you trust where this workflow comes from.", true));
-      } else {
-        box.append(say("This workflow needs custom nodes that are not installed here, and the vault does not say " +
-          "where to get them. Ask the vault's author which ones to install."));
+    const ask = vaultDialog({ title: "Custom nodes needed",
+      subtitle: "This workflow's vault uses custom nodes that this ComfyUI does not have.", width: 500 });
+    if (s.installable) {
+      ask.body.append(vel("p", { style: { margin: "0" }, text: `It needs ${n} custom node pack${many ? "s" : ""} that ` +
+        `${many ? "are" : "is"} not installed here (from ${s.hosts.join(", ")}). Without ${many ? "them" : "it"} the ` +
+        "workflow will not run." }));
+      if (s.installable < n || s.unknown_classes) {
+        ask.body.append(noticeEl("warn", "Some of them cannot be installed from here - ask the vault's author for those."));
       }
-      box.append(el("div", { style: { display: "flex", justifyContent: "flex-end", gap: "8px", marginTop: "6px" } },
-        s.installable ? [button("Cancel", false, () => close(false)), button("Install", true, () => close(true))]
-          : [button("Close", true, () => close(false))]));
-    }, { width: 480 });
+      ask.body.append(noticeEl("warn", `Installing downloads ${many ? "them" : "it"} and runs ${many ? "their" : "its"} ` +
+        "code when ComfyUI restarts. Install only if you trust where this workflow comes from."));
+      ask.addAction("Cancel", { onClick: () => ask.close(false) });
+      ask.addAction("Install", { primary: true, onClick: () => ask.close(true) });
+    } else {
+      ask.body.append(vel("p", { style: { margin: "0" }, text: "The vault does not say where to get them. Ask the " +
+        "vault's author which ones to install." }));
+      ask.addAction("Close", { primary: true, onClick: () => ask.close(false) });
+    }
+    const go = await ask.result;
     if (!go) return;
     toast("Installing the custom nodes this workflow needs…");
     const r = await post("/c2c_vault/sg/install_missing", { ...body, consent: true });
     const d = r.data || {};
-    await modal("Custom nodes", (box, close) => {
-      const lines = [];
-      if (!r.ok) lines.push(d.error || `Installing failed (${r.status}).`);
-      if (d.installed) lines.push(`Installed ${d.installed} pack${d.installed !== 1 ? "s" : ""}. Restart ComfyUI to load ` +
-        `${d.installed !== 1 ? "them" : "it"}, then run the workflow again.`);
-      if (d.skipped) lines.push(`${d.skipped} folder${d.skipped !== 1 ? "s" : ""} already existed and ${d.skipped !== 1 ?
-        "were" : "was"} left as ${d.skipped !== 1 ? "they were" : "it was"}.`);
-      for (const f of d.failed || []) lines.push(`Not installed: ${f}.`);
-      if (d.requirements?.note) lines.push(`Their Python requirements: ${d.requirements.note}.`);
-      if (!lines.length) lines.push("Nothing was installed.");
-      box.append(...lines.map((t) => el("div", { textContent: t, style: { marginBottom: "6px" } })),
-        el("div", { style: { display: "flex", justifyContent: "flex-end", marginTop: "6px" } },
-          [button("OK", true, () => close())]));
-    }, { width: 480 });
+    const lines = [];
+    if (!r.ok) lines.push(["danger", d.error || `Installing failed (${r.status}).`]);
+    if (d.installed) lines.push(["ok", `Installed ${d.installed} pack${d.installed !== 1 ? "s" : ""}. Restart ComfyUI to ` +
+      `load ${d.installed !== 1 ? "them" : "it"}, then run the workflow again.`]);
+    if (d.skipped) lines.push(["info", `${d.skipped} folder${d.skipped !== 1 ? "s" : ""} already existed and ` +
+      `${d.skipped !== 1 ? "were" : "was"} left as ${d.skipped !== 1 ? "they were" : "it was"}.`]);
+    for (const f of d.failed || []) lines.push(["danger", `Not installed: ${f}.`]);
+    if (d.requirements?.note) lines.push(["info", `Their Python requirements: ${d.requirements.note}.`]);
+    if (!lines.length) lines.push(["info", "Nothing was installed."]);
+    const done = vaultDialog({ title: "Custom nodes", tone: r.ok ? "ok" : "danger", width: 500 });
+    done.body.append(...lines.map(([tone, t]) => noticeEl(tone, t)));
+    done.addAction("OK", { primary: true, onClick: () => done.close(true) });
+    done.onSubmit(() => done.close(true));
+    await done.result;
   } finally { INSTALL_OFFER_OPEN = false; }
 }
 
@@ -1408,21 +1577,26 @@ async function manageAccess(v, focus) {
   const payload = W("vault_payload")?.value;
   const vaultId = W("vault_id")?.value;
   let res = null;
-  for (;;) {
-    const a = await authDialog(`${focus === "password" ? "Change the password of" : "Manage access of"} ${v.title || "vault"}`);
-    if (!a) return;
-    const r = await post("/c2c_vault/sg/access/open", { payload, vault_id: vaultId, password: a.password, code: a.code,
-      client_id: api.clientId });
-    if (r.ok) { res = r.data; break; }
-    if (r.data.needs_enrolment) { if (!(await enrolDialog())) return; continue; }
-    toast(r.data.error || "Could not unlock the vault's access.", true);
-    if (r.data.reason !== "reused" && r.data.reason !== "clock" && r.status !== 403) return;
+  const verb = focus === "password" ? "Change the password of" : "Manage access to";
+  const ok = await credentialDialog({ title: `${verb} "${v.title || "vault"}"`, primary: "Continue",
+    subtitle: "Confirm with the vault password and your authenticator code. The inside stays closed.",
+    submit: async ({ password, code }) => {
+      const r = await post("/c2c_vault/sg/access/open", { payload, vault_id: vaultId, password, code,
+        client_id: api.clientId });
+      if (r.ok) { res = r.data; return { ok: true }; }
+      if (r.data.needs_enrolment) return { enrol: true };
+      return { error: authError(r, "Could not unlock the vault's access.") };
+    } });
+  if (!ok) return;
+  if (ok.enrol) {
+    if (await enrolDialog()) await manageAccess(v, focus);
+    return;
   }
   const out = await accessDialog(v, res, focus, async (choice) => {
     const r = await post("/c2c_vault/sg/access/apply", { access_token: res.access_token, payload, ...choice });
     if (!r.ok) return { error: r.data.error || `Could not apply the change (${r.status}).` };
     W("vault_payload").value = r.data.payload;                  // swapped only now: a failure left the old vault
-    if (res.profile === "locked") RUN_UNLOCKED.add(vaultId);
+    if (res.profile === "locked") markRunUnlocked(vaultId);
     v.setDirtyCanvas?.(true, true);
     try { app.extensionManager?.workflow?.activeWorkflow?.changeTracker?.checkState?.(); } catch (_) {}
     return { ok: true, data: r.data };
@@ -1430,11 +1604,34 @@ async function manageAccess(v, focus) {
   if (!out) { post("/c2c_vault/sg/access/cancel", { access_token: res.access_token }); return; }
   toast(out.data.password_changed
     ? "Password changed and the vault re-encrypted. Save the workflow - copies saved before still open with the old password."
-    : "Access updated and the vault re-encrypted. Save the workflow so the new access goes with it.");
+    : "Access updated and the vault re-encrypted. Save the workflow so the new access goes with it.", "success",
+  out.data.password_changed ? "Password changed" : "Access updated");
+}
+
+const LOCK_CMD = "c2c.vault.lockSelectionAsVault";
+const LOCK_LABEL = "🔒 Lock as C2C Vault (password to run)…";
+const SEAL_LABEL = "🔒 Seal as C2C Vault (authorized installations)…";
+
+/** The two lock entries (canvas and node menus) for `items`; [] when nothing lockable is in them. */
+function lockMenuItems(items) {
+  const r = resolveLockSelection(items, { LiteGraph: globalThis.LiteGraph });
+  if (r.kind === "empty") return [];
+  if (r.kind === "subgraph") {
+    return [null, { content: "🔒 Protect this subgraph as C2C Vault…",
+      callback: () => lockSelection(app.canvas, "sealed_installs", items) }];
+  }
+  return [null,
+    { content: LOCK_LABEL, callback: () => lockSelection(app.canvas, "locked", items) },
+    { content: SEAL_LABEL, callback: () => lockSelection(app.canvas, "sealed_installs", items) }];
 }
 
 app.registerExtension({
   name: "C2C.SecureSubgraph",
+  // V1: one command for the palette, the selection toolbox (js/c2c_vault.js returns it) and Ctrl+Shift+L (core has
+  // Ctrl+Shift+E = Convert to Subgraph; Ctrl+Shift+L is free in frontend 1.53.10 and in every C2C pack)
+  commands: [{ id: LOCK_CMD, label: "Lock selection as C2C Vault…", icon: "pi pi-lock",
+    function: () => lockSelection(app.canvas, null) }],
+  keybindings: [{ combo: { key: "l", ctrl: true, shift: true }, commandId: LOCK_CMD }],
   setup() {
     installGuards();
     app.canvas?.canvas?.addEventListener("litegraph:set-graph", onSetGraph);
@@ -1455,19 +1652,8 @@ app.registerExtension({
         return r;
       };
       nodeType.prototype.onDblClick = function () { openVault(this); return true; };
-      const fg = nodeType.prototype.onDrawForeground;
-      nodeType.prototype.onDrawForeground = function (ctx, ...a) {
-        const r = fg?.apply(this, [ctx, ...a]);
-        if (this.__c2cBadge && !this.flags?.collapsed) {
-          ctx.save();
-          ctx.font = "11px sans-serif";
-          ctx.fillStyle = this.properties?.c2c_vault?.profile === "sealed_portable" ? "#f5c26b" : "#9ec3ff";
-          ctx.textAlign = "right";
-          ctx.fillText(this.__c2cBadge, this.size[0] - 8, -8);
-          ctx.restore();
-        }
-        return r;
-      };
+      // V1: the profile / node count / run state moved from canvas text above the title (classic only) into the
+      // status card in the body (both renderers); node.__c2cBadge is still set for anything that reads it.
     }
     if (LEGACY_TYPES.has(nodeData.name)) {
       const configured = nodeType.prototype.onConfigure;
@@ -1479,14 +1665,11 @@ app.registerExtension({
     }
   },
   getCanvasMenuItems(canvas) {
-    const nodes = selectedNodes(canvas);
-    if (!nodes.length) return [];
-    return [null,
-      { content: "🔒 Lock as C2C Vault (password to run)…", callback: () => lockSelection(canvas, "locked") },
-      { content: "🔒 Seal as C2C Vault (authorized installations)…", callback: () => lockSelection(canvas, "sealed_installs") }];
+    return lockMenuItems(selectedItemsOf(canvas));
   },
   getNodeMenuItems(node) {
-    if (VAULT_TYPES.has(node?.comfyClass ?? node?.type)) {
+    const type = node?.comfyClass ?? node?.type;
+    if (VAULT_TYPES.has(type)) {
       return [null,
         { content: "🔓 Open / edit vault…", callback: () => openVault(node) },
         { content: "👥 Manage installations & editors…", callback: () => manageAccess(node, "access") },
@@ -1495,14 +1678,11 @@ app.registerExtension({
         { content: "🔑 My installation code", callback: showInstallCode },
         { content: "📱 Two-factor setup…", callback: () => twoFactorSetup() }];
     }
-    if (isSubgraphNode(node) && !OPEN.has(node)) {
-      return [null,
-        { content: "🔒 Protect this subgraph as C2C Vault…", callback: async () => {
-          const opts = await profileDialog({ title: "Protect as C2C Vault", defaultProfile: "sealed_installs" });
-          if (opts) await protectWithFeedback([node], opts);
-        } }];
-    }
-    return [];
+    if (LEGACY_TYPES.has(type) || OPEN.has(node) || node?.id == null || Number(node.id) < 0) return [];
+    // V1: right-clicking a node is where people look. It acts on the selection when the node is part of it,
+    // otherwise on that node alone; one subgraph node keeps "Protect this subgraph".
+    const sel = selectedItemsOf(app.canvas);
+    return lockMenuItems(sel.includes(node) ? sel : [node]);
   },
 });
 

@@ -115,6 +115,12 @@ git clone https://github.com/Code2Collapse/ComfyUI-CustomNodePacks.git
 
 Or install via **ComfyUI Manager** → search "CustomNodePacks".
 
+> **Folder name.** A git clone creates `custom_nodes/ComfyUI-CustomNodePacks`. ComfyUI Manager and `comfy node
+> install` use the Comfy Registry id instead, which is `comfyui-customnodepacks` (all lowercase, fixed since the first
+> registry release), so those installs create `custom_nodes/comfyui-customnodepacks`. Both folders hold the same pack
+> and both work: nothing in the pack depends on the folder name. Install it **once**. ComfyUI Manager recognises a
+> git clone as this pack, so it will not add a second copy.
+
 ### 2. Install dependencies
 
 > **⚠️ IMPORTANT: Check your existing package versions before installing.**
@@ -254,7 +260,7 @@ Every node's parameters, modes, and outputs are documented in depth in the `docs
 | [Matting & Refinement](docs/matting-refinement.md) | 4 | Matting Node (7 backends), ViTMatte Refiner (7 methods), Trimap Generator, Mask Tools (luma key) |
 | [Video, Temporal & BBox](docs/video-temporal-bbox.md) | 10 | Batch Range (C2C) single-frame modes, Mask Propagate (5 modes), Temporal Anchor (SDF), Motion Mask Tracker (4 methods), 6 BBox nodes |
 | [Utility & Interactive](docs/utility-nodes.md) | 8 | Points Mask Editor, Image Comparer, Mask Failure Explainer, Parameter History, Universal Reroute, 3 Folder Incrementer nodes |
-| [VAE Tools](docs/vae-merge.md) | 4 | VAE Merge (8 algorithms), VAE Inspect (inspect / compare), Probe (C2C) latent |
+| [VAE Tools](docs/vae-merge.md) | 4 | VAE Merge (13 merge modes), VAE Inspect (inspect / compare), Probe (C2C) latent |
 | [Color Science](docs/color-science.md) | 3 | sRGB/linear/Rec.709/ACEScg convert, `.cube` LUT apply, exposure/WB/contrast grade |
 | [EXR I/O](docs/exr-io.md) | 2 | Load and save OpenEXR with imageio + TIFF fallback chain |
 | [Render Passes](docs/render-pass.md) | 2 | Merge beauty + AO/diffuse/spec/emission, depth→CoC mask |
@@ -617,6 +623,13 @@ In-depth notes on the larger nodes (hand-written; parameters are in NODE_REFEREN
   `SDXL · Initial Generation` or `PROMPT · Positive`, with a preview before anything changes. Names and the original
   titles are saved in the workflow; what runs is unchanged. The admin (the ComfyUI page on this machine) sets the
   rules and can lock names. See [docs/node-identity.md](docs/node-identity.md).
+- **C2C Vault: lock a selection in one step** (2026-11-20, front end only, saved vaults unchanged): select nodes or
+  a group and press **Ctrl+Shift+L**, the lock button in the selection toolbox, or right-click a node and choose
+  **Lock as C2C Vault** / **Seal as C2C Vault**. One dialog names the vault, picks who can run it and takes the
+  password; the selection becomes a subgraph and is locked in the same undo step (no "Convert to Subgraph" first).
+  Every Vault dialog and the vault node's body were redesigned: a status card shows Sealed / Locked / Portable, the
+  inner node count and this tab's run state; errors stay in the dialog in plain words. See
+  [docs/vault_howto.md](docs/vault_howto.md).
 
 #### SAM Model Loader (MEC)
 
@@ -1999,7 +2012,7 @@ Install SeC: `cd ComfyUI/custom_nodes && git clone https://github.com/9nate-drak
 
 ## Face Landmarks: look, strength, size, screening, mask and smoothing
 
-**Face Landmarks (Facepoints, 620 + 68/98)** has 46 optional controls, in collapsible sections on the node (open a
+**Face Landmarks (Facepoints, 620 + 68/98)** has 57 optional controls in six groups, in collapsible sections on the node (open a
 section with its chip; both renderers). With every control at its default, the images are exactly what they were
 before (tested bit for bit). The name prefix gives the group:
 
@@ -2079,9 +2092,12 @@ Argon2id). ComfyUI's own scheduler runs the inside, exactly like an ordinary sub
 hidden inputs (NKD's V3 nodes), lists, caching, interrupts and progress all work. The rest of the workflow stays
 ordinary JSON.
 
-**Make one:** select the nodes, right-click the canvas and choose **🔒 Seal as C2C Vault** or **🔒 Lock as C2C Vault**.
-You can also right-click a subgraph node and choose **Protect this subgraph as C2C Vault**. The dialog shows what each
-choice means (who can run it, who can open it, where it runs, where the key lives) and asks for the vault password.
+**Make one:** select the nodes (or a group) and press **Ctrl+Shift+L**, click the lock button in the selection
+toolbox, or right-click one of the selected nodes (or the canvas) and choose **🔒 Seal as C2C Vault** or **🔒 Lock as
+C2C Vault**. The selection is turned into a subgraph and locked in one step. You can also right-click a subgraph node
+and choose **Protect this subgraph as C2C Vault**. One dialog names the vault, shows what each choice means (who can
+run it, who can open it, where it runs, where the key lives) and asks for the vault password; it shows each stage
+while it works, and if something fails it says why inside the dialog and leaves your nodes exactly as they were.
 This works on the root graph and inside subgraphs.
 Protect is one step in the undo history (Ctrl+Z gives back the original nodes); if any stage fails, the graph and
 the undo history are exactly as before. Link reroutes on the vault's wires are kept. A second Protect while one is
