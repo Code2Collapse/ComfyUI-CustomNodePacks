@@ -898,6 +898,8 @@ def run_onyx_pipeline(
     matter_instance=None,
     stage_cache=None,
     plate_fp: Optional[str] = None,
+    refine_radius: int = 8,
+    refine_iterations: int = 5,
 ) -> OnyxResult:
     B, H, W, _ = img_bhwc.shape
     legacy_prompts = legacy
@@ -925,7 +927,8 @@ def run_onyx_pipeline(
         edge_key = _sc.make_key(
             "onyx.edge", track_key, mat_tag, str(matter_model or ""),
             _sc.installed(getattr(matter_cls, "MODELS_KEY", "") or ""), float(band_scale), int(matte_tile),
-            bool(temporal_stabilise), str(post_refine), _sc.fingerprint(external_trimap),
+            bool(temporal_stabilise), str(post_refine), int(refine_radius), int(refine_iterations),
+            _sc.fingerprint(external_trimap),
             f"injected:{id(matter_instance)}" if matter_instance is not None else "")
         cached_edge = stage_cache.get(edge_key)
         if cached_edge is not None:
@@ -943,7 +946,7 @@ def run_onyx_pipeline(
                 matter_cls=matter_cls, device=device, precision=precision, attention=attention, offload=offload,
                 auto_download=auto_download, band_scale=band_scale, matte_tile=matte_tile,
                 temporal_stabilise=temporal_stabilise, post_refine=post_refine, matter_instance=matter_instance,
-                external_trimap=external_trimap)
+                external_trimap=external_trimap, refine_radius=refine_radius, refine_iterations=refine_iterations)
             pipeline_info.update(edge_info)
             stage_cache.put(edge_key, {"coarse": cached_track["coarse"], "obj_scores": cached_track["obj_scores"],
                                        "trimaps": trimaps, "alpha_o": alpha_o,
@@ -1024,7 +1027,7 @@ def run_onyx_pipeline(
         device=device, precision=precision, attention=attention, offload=offload, auto_download=auto_download,
         band_scale=band_scale, matte_tile=matte_tile, temporal_stabilise=temporal_stabilise,
         post_refine=post_refine, matter_instance=matter_instance,
-                external_trimap=external_trimap)
+        external_trimap=external_trimap, refine_radius=refine_radius, refine_iterations=refine_iterations)
     pipeline_info.update(edge_info)
     if stage_cache is not None:
         pipeline_info["stage_cache"] = {"track": "ran", "edge": "ran"}
@@ -1047,7 +1050,7 @@ def _scene_key(scene: SceneSpec) -> List[Any]:
 
 def _onyx_edge(img_bhwc, coarse, *, B, matter_key, matter_model, matter_cls, device, precision, attention, offload,
                auto_download, band_scale, matte_tile, temporal_stabilise, post_refine, matter_instance,
-               external_trimap=None):
+               external_trimap=None, refine_radius=8, refine_iterations=5):
     """The edge stage: per-object trimaps, the matter (tiled), temporal stabilising. Returns (alpha_o, trimaps,
     info); info carries the model-free matter note when the chosen matter is not installed."""
     info: Dict[str, Any] = {}
@@ -1093,16 +1096,30 @@ def _onyx_edge(img_bhwc, coarse, *, B, matter_key, matter_model, matter_cls, dev
         )
     else:
         alpha_o = coarse.clone()
-        if post_refine in ("guided", "crf+guided"):
-            from . import _vfx
-            for o in range(alpha_o.shape[0]):
-                for b in range(B):
-                    a = alpha_o[o, b].unsqueeze(0)
-                    img_b = img_bhwc[b:b + 1]
-                    alpha_o[o, b] = _vfx.guided_refine(img_b, a, radius=8, epsilon=1e-4)[0]
+    alpha_o = _post_refine(img_bhwc, alpha_o, post_refine, refine_radius, refine_iterations)
+    if post_refine in ("guided", "crf", "crf+guided"):
+        info["post_refine"] = {"mode": post_refine, "radius": int(refine_radius), "iterations": int(refine_iterations)}
 
     alpha_o = stabilise_alpha_unknown(alpha_o, trimaps, enabled=bool(temporal_stabilise))
     return alpha_o, trimaps, info
+
+
+def _post_refine(img_bhwc, alpha_o, mode, radius, iterations):
+    """L9.297: the node's post_refine on ONYX, per object over all frames, in the cascade's order (guided, then CRF).
+    'none' returns alpha_o untouched. It used to run only without a matter, guided only, radius fixed at 8."""
+    if mode not in ("guided", "crf", "crf+guided"):
+        return alpha_o
+    from . import _vfx
+    img = img_bhwc.to(alpha_o.device)
+    out = alpha_o.clone()
+    for o in range(out.shape[0]):
+        a = out[o]
+        if mode in ("guided", "crf+guided"):
+            a = _vfx.guided_refine(img, a, radius=int(radius), epsilon=1e-4)
+        if mode in ("crf", "crf+guided"):
+            a = _vfx.crf_refine(img, a, iterations=int(iterations))
+        out[o] = a
+    return out
 
 
 def _apply_external_trimap(trimaps_obhw: torch.Tensor, external, B: int) -> torch.Tensor:

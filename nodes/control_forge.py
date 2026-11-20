@@ -462,8 +462,9 @@ class ControlAOVC2C:
                                 "tooltip": "Normal backend (vendored): sobel_from_depth (no model) or normalcrafter (video). "
                                            "'off' = wire an external normal map."}),
                 "depth_size": (list(_DEPTH_SIZES), {"default": "small",
-                               "tooltip": "DepthAnything backbone: small=ViT-S (fastest, test default) → giant=ViT-G "
-                                          "(best). v1 has no giant (falls back to large). Ignored by metric/zoe. Licences: "
+                               "tooltip": "DepthAnything backbone: small=ViT-S (fastest, test default), medium=ViT-B, "
+                                          "large=ViT-L. giant: only DA3 has one; da_v2 / da_v1 / midas use large and the "
+                                          "run note says so. Ignored by metric/zoe. Licences: "
                                           "Depth-Anything-V2 small = Apache-2.0; V2 base / large and DA3 large / giant "
                                           "(DA3NESTED-GIANT-LARGE) = CC BY-NC 4.0, NON-COMMERCIAL."}),
                 "depth_custom_ckpt": _ckpt_field(_depth_ckpt_options(), "depth"),

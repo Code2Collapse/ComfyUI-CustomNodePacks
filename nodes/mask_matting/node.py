@@ -1391,6 +1391,8 @@ class MaskOpsMEC:
                     matte_tile=int(matte_tile),
                     temporal_stabilise=bool(temporal_stabilise),
                     post_refine=str(post_refine),
+                    refine_radius=int(refine_radius),
+                    refine_iterations=int(refine_iterations),
                     external_mask=external_mask,
                     external_trimap=external_trimap,
                     stage_cache=_cache,

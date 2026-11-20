@@ -159,13 +159,33 @@ _HF_DEPTH_MODELS = {
 }
 
 
+# L9.297: the node's depth_size choices are small / medium / large / giant; the published checkpoints are small / base /
+# large (no public V2 / V1 / DPT giant on the Hub, checked 2026-11-20). "medium" used to miss the map and fall back to
+# SMALL silently; now medium = base and giant = large with a note saying so.
+_HF_SIZE_ALIAS = {"medium": "base", "base": "base", "small": "small", "large": "large"}
+
+
+def hf_depth_model(version, size):
+    """(model_id, note) for a node depth_size; note is "" when the exact size exists."""
+    if size == "giant":
+        model_id = _HF_DEPTH_MODELS.get((version, "large"))
+        return model_id, (f"no giant checkpoint for {version}; used large" if model_id else "")
+    model_id = _HF_DEPTH_MODELS.get((version, _HF_SIZE_ALIAS.get(size, size)))
+    if model_id:
+        return model_id, ""
+    model_id = _HF_DEPTH_MODELS.get((version, "small"))
+    return model_id, (f"no {size} checkpoint for {version}; used small" if model_id else "")
+
+
 def run_hf_depth(image_bhwc, version, size, custom_model=""):
     """DepthAnything v1/v2 or Midas/DPT via transformers. version in {v1,v2,midas}."""
     image_bhwc = _bhwc(image_bhwc)
     if image_bhwc is None:
         return None, "hf_depth: no image"
-    model_id = custom_model.strip() or _HF_DEPTH_MODELS.get((version, size)) \
-        or _HF_DEPTH_MODELS.get((version, "small"))
+    size_note = ""
+    model_id = custom_model.strip()
+    if not model_id:
+        model_id, size_note = hf_depth_model(version, size)
     if not model_id:
         return None, f"hf_depth: no model for {version}/{size}"
     key = "hf_depth::" + model_id
@@ -182,7 +202,7 @@ def run_hf_depth(image_bhwc, version, size, custom_model=""):
         for pil in _to_pil_list(image_bhwc):
             d = pipe(pil)["depth"]  # PIL grayscale
             frames.append(_gray_to_bhwc3(np.array(d)))
-        return torch.cat(frames, 0), f"hf_depth ok [{model_id}]"
+        return torch.cat(frames, 0), f"hf_depth ok [{model_id}]" + (f" ({size_note})" if size_note else "")
     except Exception as e:  # missing weights / transformers issue
         return None, f"hf_depth err [{model_id}]: {type(e).__name__}: {e}"
 
