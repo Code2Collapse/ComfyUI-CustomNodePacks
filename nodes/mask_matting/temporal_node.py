@@ -16,9 +16,8 @@ video / animation batches:
     prompt mismatch, occlusion, low confidence) the produced mask is just
     blank or wildly different from its neighbours. We compute per-frame
     area / centroid / IoU drift versus the previous frame and emit a JSON
-    report + a human-readable warning string. The report is also pushed to
-    ``window.__C2C_MASK_INTEGRITY__`` (when ``workflow_doctor`` is loaded)
-    so the diagnostics sidebar can pick it up.
+    report + a human-readable warning string. The report is also kept by
+    ``integrity_bridge`` (GET /c2c/mask_integrity/recent) for tools.
 
 Modes
 -----
@@ -384,7 +383,7 @@ class MaskTemporalMEC:
         if temporal_mode == "raft_flow":
             _release_raft()
 
-        # Publish to the HUD bridge so the Mask Integrity sidebar can show it.
+        # Keep the report in integrity_bridge (GET /c2c/mask_integrity/recent).
         try:
             from .integrity_bridge import publish as _integrity_publish
             extra: Dict[str, Any] = {}

@@ -1,11 +1,15 @@
 """integrity_bridge — server-side ring buffer for mask integrity reports.
 
-Sits between MaskTemporalMEC / MaskRefineMEC and the front-end Mask Integrity
-HUD sidebar (`js/c2c_mask_integrity_hud.js`). Each time a temporal/refine
-node finishes, it calls :func:`publish` with the integrity dict produced by
-``compute_integrity``. The HUD polls GET /c2c/mask_integrity/recent every
-~1.5 s and renders sparklines of area / centroid drift / IoU plus the list
-of flagged frames.
+Each time MaskTemporalMEC / MaskRefineMEC finishes, it calls :func:`publish`
+with the integrity dict produced by ``compute_integrity``; GET
+/c2c/mask_integrity/recent returns the latest reports (area / centroid drift /
+IoU per frame plus the flagged frames) and POST /c2c/mask_integrity/clear
+empties the buffer. The same report is also each node's JSON output.
+
+L9.297: no front-end ships for this buffer. The Mask Integrity HUD sidebar
+(js/c2c_mask_integrity_hud.js, a 1.5 s poller) was removed in 2a1575b and is
+not restored (no polling loops, RAM budget); an event-driven view in the
+Diagnostics sidebar is a backlog item.
 
 The bridge is intentionally tiny and never raises: if aiohttp is missing or
 publish is called before any consumer is listening, nothing breaks.
