@@ -623,6 +623,7 @@ In-depth notes on the larger nodes (hand-written; parameters are in NODE_REFEREN
   `SDXL · Initial Generation` or `PROMPT · Positive`, with a preview before anything changes. Names and the original
   titles are saved in the workflow; what runs is unchanged. The admin (the ComfyUI page on this machine) sets the
   rules and can lock names. See [docs/node-identity.md](docs/node-identity.md).
+- **C2C Vault hardening** (2026-11-21): opening a vault for editing or managing its access now counts wrong passwords (5 tries, then a 5-minute wait), the same as running a Locked vault; two-factor setup and reset answer only the ComfyUI page on this machine; a renamed vault keeps its name when you open it.
 - **C2C Vault: lock a selection in one step** (2026-11-20, front end only, saved vaults unchanged): select nodes or
   a group and press **Ctrl+Shift+L**, the lock button in the selection toolbox, or right-click a node and choose
   **Lock as C2C Vault** / **Seal as C2C Vault**. One dialog names the vault, picks who can run it and takes the
