@@ -907,7 +907,9 @@ async function enterOpened(v, res, payload) {
     const inputMap = vaultInfo(v).input_map;
     const wires = replaceNode(graph, v, sg);
     if (res.ui.size) sg.size = [...res.ui.size];
-    sg.title = res.ui.title || v.title;
+    // The vault node's CURRENT name wins: res.ui.title is the name at protect time (often 'New Subgraph'), so a vault
+    // renamed later came back under its old name on every open (found by the H2Vault review, 2026-11-21).
+    sg.title = v.title || res.ui.title;
     restoreWires(graph, wires, sg, (slot) => subgraphSlotOf(v, inputMap, slot));
   } else {
     const legacy = buildFromLegacy(v, res);      // an old vault: rebuild its nodes, then convert natively

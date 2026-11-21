@@ -620,6 +620,7 @@ def register_routes(server) -> None:
         return
 
     routes = server.routes
+    from ._local_ui_guard import refuse_remote
 
     @routes.post("/c2c_vault/unlock")
     async def _unlock(request):
@@ -694,6 +695,9 @@ def register_routes(server) -> None:
 
     @routes.post("/c2c_vault/2fa/enrol/begin")
     async def _tfa_begin(request):
+        refused = refuse_remote(request, "Two-factor setup")   # H2Vault review 2026-11-21: this machine's page only
+        if refused is not None:
+            return refused
         try:
             return web.json_response({"ok": True, **vault_2fa.begin_enrolment()})
         except PermissionError as exc:
@@ -701,6 +705,9 @@ def register_routes(server) -> None:
 
     @routes.post("/c2c_vault/2fa/enrol/confirm")
     async def _tfa_confirm(request):
+        refused = refuse_remote(request, "Two-factor setup")   # H2Vault review 2026-11-21: this machine's page only
+        if refused is not None:
+            return refused
         body = await request.json()
         try:
             ok = vault_2fa.confirm_enrolment(str(body.get("code") or ""))
@@ -712,6 +719,9 @@ def register_routes(server) -> None:
 
     @routes.post("/c2c_vault/2fa/reset")
     async def _tfa_reset(request):
+        refused = refuse_remote(request, "Two-factor setup")   # H2Vault review 2026-11-21: this machine's page only
+        if refused is not None:
+            return refused
         body = await request.json()
         try:
             ok = vault_2fa.reset(str(body.get("code") or ""))

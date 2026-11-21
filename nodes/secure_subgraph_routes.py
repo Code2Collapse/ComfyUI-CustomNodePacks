@@ -231,13 +231,25 @@ def _authorize(body: dict) -> tuple:
             "ok": False, "needs_enrolment": True,
             "error": "Opening a vault needs a second factor on this installation. Set up an authenticator app first "
                      "(C2C menu > Vault > Two-factor setup)."}
-    if v2.is_v2(payload):
-        plain, kek, parsed = v2.open_with_password(payload, password, vault_id=vault_id)
-        k = {"kek": kek, "salt": parsed["salt"], "kdf": parsed["kdf"]}
-    else:
-        from .vault_crypto import unlock_subgraph
-        plain = {"exec": unlock_subgraph(payload, password, vault_id=vault_id)}
-        k = v2.new_kek(password)                               # the upgrade re-encrypts in the current envelope
+    # Hardening (H2Vault review 2026-11-21): the password is checked BEFORE the second factor, so without a limit
+    # this was an unlimited password oracle that needs no code. Same per-vault lockout as unlock_run (the vault id is
+    # bound into the AEAD, so changing it cannot dodge the count). PermissionError -> 429 in wrap().
+    from .vault_node import SESSIONS as GUESSES
+    wait = GUESSES.locked_out(vault_id)
+    if wait > 0:
+        raise PermissionError(f"Too many failed attempts. Try again in {int(wait // 60) + 1} minute(s).")
+    try:
+        if v2.is_v2(payload):
+            plain, kek, parsed = v2.open_with_password(payload, password, vault_id=vault_id)
+            k = {"kek": kek, "salt": parsed["salt"], "kdf": parsed["kdf"]}
+        else:
+            from .vault_crypto import unlock_subgraph
+            plain = {"exec": unlock_subgraph(payload, password, vault_id=vault_id)}
+            k = v2.new_kek(password)                           # the upgrade re-encrypts in the current envelope
+    except VaultError:
+        GUESSES.note_failure(vault_id)
+        raise
+    GUESSES.clear_failures(vault_id)
     detail = vault_2fa.verify_detail(str(body.get("code") or ""))
     if not detail["ok"]:
         return None, None, None, {"ok": False, "reason": detail["reason"], "error": detail["message"],
