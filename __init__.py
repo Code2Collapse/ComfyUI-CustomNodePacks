@@ -967,6 +967,11 @@ try:
     if _secure_subgraph is not None:
         import server as _comfy_server_ss
         _secure_subgraph.install_message_filter(_comfy_server_ss.PromptServer.instance)
+        try:   # V6-A: locked parameter values never reach history, PNG metadata or the queue views
+            from .nodes import lock_params as _lock_params
+            _lock_params.install(_comfy_server_ss.PromptServer.instance)
+        except Exception as _exc:  # noqa: BLE001 - the vault routes below must register regardless
+            print(f"[C2C] lock parameters: server redaction not installed: {_exc}")
         from .nodes import secure_subgraph_routes as _ss_routes
         _ss_routes.register_routes(_comfy_server_ss.PromptServer.instance)
 except Exception:

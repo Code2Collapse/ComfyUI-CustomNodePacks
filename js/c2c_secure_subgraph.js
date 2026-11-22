@@ -1299,9 +1299,22 @@ function reconnectParentInputs(graph, sg, wires) {
  * (convert to a native subgraph + protect, one undo step, exact rollback). `items` overrides the canvas selection
  * (the node menu on an unselected node). Resolves with the vault node or null.
  */
+/** V6-A: a node (or a subgraph holding one) whose parameter values are locked (js/c2c_lock_params.js). */
+function hasLockedValues(n, seen = new Set()) {
+  if (!n || seen.has(n)) return false;
+  seen.add(n);
+  if (n.properties?.c2c_locked_params) return true;
+  return isSubgraphNode(n) && (n.subgraph?.nodes || []).some((c) => hasLockedValues(c, seen));
+}
+
 async function lockSelection(canvas, profileHint, items = null) {
   const r = resolveLockSelection(items ?? selectedItemsOf(canvas), { LiteGraph: globalThis.LiteGraph });
   if (r.problems.length) { toast(r.problems[0], true); return null; }
+  if (r.nodes.some((n) => hasLockedValues(n))) {
+    toast("Some selected nodes have locked parameter values. Remove that lock first (right-click › Remove value " +
+      "lock…): a vault encrypts their values anyway.", true);
+    return null;
+  }
   let boundary = null;
   if (r.kind === "nodes") {
     try { boundary = captureBoundary(r.nodes[0].graph, r.nodes); } catch (_) { boundary = { entering: [], leaving: [] }; }
@@ -1404,7 +1417,7 @@ function shortCode(code) {
 
 /** The access dialog (spec 4.5). `apply(choice)` -> {ok} or {error}; on an error the dialog stays open with the
  *  message. Resolves with apply's result, or null when cancelled. */
-function accessDialog(v, res, focus, apply) {
+function accessDialog(v, res, focus, apply, issue) {
   const sealed = res.profile === "sealed_installs";
   const d = vaultDialog({ title: `${focus === "password" ? "Change the password of" : "Access to"} "${v.title || "vault"}"`,
     subtitle: sealed ? "Who may run this vault, who may open it for editing, and its password."
@@ -1458,6 +1471,30 @@ function accessDialog(v, res, focus, apply) {
   }
   d.body.append(section("editors", "Editors", "Installations that may open it for editing - each with the password " +
     "and its own authenticator. This one stays an editor."));
+  // V6-B: offline access keys with an expiry date (Sealed vaults only)
+  const ak = res.access_keys || {};
+  let requireKey = null, revoke = null;
+  if (ak.available) {
+    requireKey = switchRow("Require an access key to run", { checked: !!ak.required });
+    revoke = vel("input", { type: "checkbox" });
+    const kids = [requireKey.el, vel("p", { class: "c2c-vault-block__hint", text: "Installations then run it only with " +
+      "a key you issue, valid until a date you choose. Editors never need one. Keys work offline: a key someone already " +
+      "has keeps opening the copies they have until it expires; revoking stops it opening new copies." })];
+    if (ak.required) {
+      kids.push(vel("label", { class: "c2c-vault-check" }, [revoke,
+        vel("span", { text: `Revoke every key issued so far (key generation ${ak.gen} → ${ak.gen + 1})` })]));
+      if (ak.issuer) {
+        kids.push(vel("div", { class: "c2c-vault-row" }, [vbutton("Issue an access key…", {
+          onClick: () => issueKeyDialog(lists.recipients.filter((r) => !r.me), issue) })]));
+      } else {
+        kids.push(noticeEl("info", "Keys for this vault are issued by the installation that turned them on."));
+      }
+    } else {
+      kids.push(vel("p", { class: "c2c-vault-dim", text: "Turn it on and apply; then open this dialog again to issue keys." }));
+    }
+    d.body.append(vel("section", { class: "c2c-vault-block" }, [
+      vel("h3", { class: "c2c-vault-block__title", text: "Access keys" }), ...kids]));
+  }
   const pw = passwordField({ label: "New vault password", strength: true });
   const pw2 = passwordField({ label: "Repeat the new password" });
   const pwBox = vel("div", { class: "c2c-vault-grid2" }, [pw.el, pw2.el]);
@@ -1483,13 +1520,129 @@ function accessDialog(v, res, focus, apply) {
     d.setBusy(true, "Applying…");
     d.status("Re-encrypting the vault…");
     const out = await apply({ editors: lists.editors.map((r) => r.code), recipients: lists.recipients.map((r) => r.code),
-      labels, new_password: newPassword });
+      labels, new_password: newPassword,
+      ...(requireKey ? { require_access_key: requireKey.checked(), revoke_access_keys: !!revoke?.checked } : {}) });
     if (out?.error) { d.setBusy(false); d.status(""); d.notice("danger", out.error); return; }
     d.close(out);
   };
   d.addAction("Apply", { primary: true, onClick: go });
   if (focus === "password") setTimeout(() => pw.input.focus(), 0);
   return d.result;
+}
+
+// ── V6-B access keys: issue (author) and enter (recipient) ───────────────────────────────────────────────────
+const ACCESS_KEY_RE = /c2cak1\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+/;
+
+function isoDay(date) {
+  return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}-${String(date.getDate()).padStart(2, "0")}`;
+}
+
+function saveAccessKeyFile(key, name) {
+  const url = URL.createObjectURL(new Blob([key + "\n"], { type: "text/plain" }));
+  const a = el("a", { href: url, download: `${(name || "vault-access-key").replace(/[^\w.-]+/g, "_").slice(0, 40)}.c2caccess` });
+  document.body.append(a);
+  a.click();
+  setTimeout(() => { URL.revokeObjectURL(url); a.remove(); }, 0);
+}
+
+/** Author: sign a key for some of the vault's installations, until a date. `issue(choice)` -> {data} or {error}. */
+async function issueKeyDialog(installs, issue) {
+  const d = vaultDialog({ title: "Issue an access key", width: 520,
+    subtitle: "A signed key that lets the installations you choose run this vault until a date." });
+  if (!installs.length) {
+    d.body.append(noticeEl("warn", "This vault has no other installations yet. Add one under \"Installations that may " +
+      "run it\", apply, then issue its key."));
+    d.addAction("Close", { primary: true, onClick: () => d.close(null) });
+    return d.result;
+  }
+  const boxes = installs.map((r) => {
+    const box = vel("input", { type: "checkbox", checked: installs.length === 1 });
+    const row = vel("label", { class: "c2c-vault-check" }, [box,
+      vel("span", { text: r.label ? `${r.label} · ${shortCode(r.code)}` : shortCode(r.code), title: r.code })]);
+    return { code: r.code, box, row };
+  });
+  const soon = new Date(Date.now() + 30 * 86400000);
+  const date = vel("input", { type: "date", class: "c2c-vault-input", value: isoDay(soon), min: isoDay(new Date(Date.now() + 86400000)) });
+  const note = textField({ label: "Note (optional, inside the key)", placeholder: "e.g. Client review, March", maxLength: 60 });
+  d.body.append(block("Installations", "The key works only on these.", vel("div", { class: "c2c-vault-list" }, boxes.map((b) => b.row))),
+    vel("div", { class: "c2c-vault-grid2" }, [vel("div", { class: "c2c-vault-field" }, [
+      vel("label", { class: "c2c-vault-label", text: "Valid until (end of day, UTC)", for: "c2c-ak-date" }), date]), note.el]));
+  date.id = "c2c-ak-date";
+  const result = vel("div");
+  d.body.append(result);
+  d.addAction("Close", { onClick: () => d.close(null) });
+  const go = async () => {
+    if (d.busy) return;
+    d.notice(null);
+    const chosen = boxes.filter((b) => b.box.checked).map((b) => b.code);
+    if (!chosen.length) { d.notice("danger", "Choose at least one installation."); return; }
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(date.value)) { d.notice("danger", "Choose the last day the key works."); date.focus(); return; }
+    d.setBusy(true, "Signing…");
+    const out = await issue({ installs: chosen, expires: date.value, note: note.input.value.trim() });
+    d.setBusy(false);
+    if (out?.error) { d.notice("danger", out.error); return; }
+    const k = out.data;
+    result.replaceChildren(copyRow({ label: "access key", value: k.key }),
+      noticeEl("ok", `Key for ${k.installs} installation${k.installs === 1 ? "" : "s"}, valid until the end of ${k.expires} ` +
+        "(UTC). Send it with the workflow; they enter it once (right-click the vault › Enter access key)."),
+      vel("div", { class: "c2c-vault-row" }, [vbutton("Save key file", { onClick: () => saveAccessKeyFile(k.key,
+        note.input.value.trim() || `vault-key-${k.expires}`) })]));
+  };
+  d.addAction("Issue key", { primary: true, onClick: go });
+  d.onSubmit(go);
+  return d.result;
+}
+
+let ACCESS_OFFER_OPEN = false;
+
+/** Recipient: enter (paste or open a file) the access key its author sent. `reason`: why a run was refused. */
+async function enterAccessKey(v, { reason = "" } = {}) {
+  if (ACCESS_OFFER_OPEN) return;
+  ACCESS_OFFER_OPEN = true;
+  try {
+    const W = (name) => v.widgets.find((w) => w.name === name);
+    const d = vaultDialog({ title: `Access key for "${v.title || "vault"}"`, width: 520,
+      subtitle: "Paste the key the vault's author sent you, or open the key file. It is checked on this installation." });
+    if (reason) d.body.append(noticeEl("warn", reason));
+    const ta = textArea({ label: "Access key", placeholder: "c2cak1.…", rows: 4 });
+    d.body.append(ta.el, vel("div", { class: "c2c-vault-row" }, [vbutton("Open key file…", { onClick: async () => {
+      const text = await pickTextFile(".c2caccess,.txt");
+      if (text == null) return;
+      const m = text.match(ACCESS_KEY_RE);
+      if (m) { ta.input.value = m[0]; d.notice(null); } else d.notice("danger", "That file does not hold a C2C vault access key.");
+    } })]));
+    d.addAction("Cancel", { onClick: () => d.close(null) });
+    const go = async () => {
+      if (d.busy) return;
+      d.notice(null);
+      const m = ta.input.value.match(ACCESS_KEY_RE);
+      if (!m) { d.notice("danger", "Paste the whole key: it starts with c2cak1."); ta.input.focus(); return; }
+      d.setBusy(true, "Checking…");
+      const r = await post("/c2c_vault/sg/access_key/add", { token: m[0], payload: W("vault_payload")?.value,
+        vault_id: W("vault_id")?.value, client_id: api.clientId });
+      d.setBusy(false);
+      if (!r.ok) { d.notice("danger", r.data.error || `The key was not accepted (${r.status}).`); return; }
+      d.close(r.data);
+    };
+    d.addAction("Use this key", { primary: true, onClick: go });
+    const out = await d.result;
+    if (out) toast(`This installation may run "${v.title || "the vault"}" until the end of ${out.expires} (UTC). Run it again.`,
+      "success", "Access key accepted");
+  } finally { ACCESS_OFFER_OPEN = false; }
+}
+
+function pickTextFile(accept) {
+  return new Promise((resolve) => {
+    const inp = el("input", { type: "file", accept, style: { display: "none" } });
+    const done = (v) => { inp.remove(); resolve(v); };
+    inp.addEventListener("cancel", () => done(null));
+    inp.addEventListener("change", async () => {
+      const f = inp.files?.[0];
+      done(f && f.size < 65536 ? await f.text().catch(() => null) : null);
+    });
+    document.body.append(inp);
+    inp.click();
+  });
 }
 
 // ── missing custom nodes (L9.50): one click, names never shown (owner A18) ─────────────────────────────────
@@ -1564,6 +1717,11 @@ function nodeByExecId(id) {
 
 function onExecutionError(e) {
   const d = e?.detail || {};
+  if (VAULT_TYPES.has(d.node_type) && /access key/i.test(String(d.exception_message || ""))) {     // V6-B
+    const v = nodeByExecId(d.node_id);
+    if (v) setTimeout(() => enterAccessKey(v, { reason: String(d.exception_message) }), 0);
+    return;
+  }
   if (!VAULT_TYPES.has(d.node_type) || !String(d.exception_message || "").startsWith(MISSING_PREFIX)) return;
   const v = nodeByExecId(d.node_id);
   if (v) setTimeout(() => installMissing(v, { auto: true }), 0);
@@ -1602,6 +1760,9 @@ async function manageAccess(v, focus) {
     v.setDirtyCanvas?.(true, true);
     try { app.extensionManager?.workflow?.activeWorkflow?.changeTracker?.checkState?.(); } catch (_) {}
     return { ok: true, data: r.data };
+  }, async (choice) => {                                        // V6-B: issue a key inside the same access session
+    const r = await post("/c2c_vault/sg/access/issue_key", { access_token: res.access_token, payload, ...choice });
+    return r.ok ? { data: r.data } : { error: r.data.error || `Could not issue the key (${r.status}).` };
   });
   if (!out) { post("/c2c_vault/sg/access/cancel", { access_token: res.access_token }); return; }
   toast(out.data.password_changed
@@ -1677,6 +1838,7 @@ app.registerExtension({
         { content: "👥 Manage installations & editors…", callback: () => manageAccess(node, "access") },
         { content: "🔐 Change password…", callback: () => manageAccess(node, "password") },
         { content: "📦 Install missing custom nodes…", callback: () => installMissing(node) },
+        { content: "🎫 Enter access key…", callback: () => enterAccessKey(node) },
         { content: "🔑 My installation code", callback: showInstallCode },
         { content: "📱 Two-factor setup…", callback: () => twoFactorSetup() }];
     }
@@ -1691,6 +1853,8 @@ app.registerExtension({
 // the old vault front end (js/c2c_vault.js) routes its command-palette Lock / Seal and "Seal whole workflow" here
 globalThis.__c2cVaultNative = { lockSelection: (profile) => lockSelection(app.canvas, profile),
   // browser tests (A26 L9.203): protect given nodes without the dialog
-  protectNodes: (nodes, opts) => protectWithFeedback(nodes, opts), protectTransaction };
+  protectNodes: (nodes, opts) => protectWithFeedback(nodes, opts), protectTransaction,
+  // V6-A (js/c2c_lock_params.js): parameter values are never locked inside a vault being edited
+  inOpenVault: (graph) => [...OPEN.keys()].some((sg) => contains(sg.subgraph, graph)) };
 
 export { buildApi, exportUi, scrub, OPEN };

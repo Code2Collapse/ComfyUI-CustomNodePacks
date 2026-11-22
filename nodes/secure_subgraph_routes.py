@@ -12,6 +12,8 @@
   POST /c2c_vault/sg/access/open   L9.48: the same checks as open -> the access lists only (never the graph)
   POST /c2c_vault/sg/access/apply  re-encrypt with new recipients / editors / labels / password (atomic)
   POST /c2c_vault/sg/access/cancel drop the access session
+  POST /c2c_vault/sg/access/issue_key  V6-B: sign an access key (expiry, installations) - needs an access session
+  POST /c2c_vault/sg/access_key/add    V6-B: a recipient enters an access key (checked like a run, then kept)
   POST /c2c_vault/sg/missing          L9.50: what this install lacks to run it (counts + hosts, never names)
   POST /c2c_vault/sg/install_missing  clone those packs at their pinned commits - only with consent
 
@@ -280,7 +282,9 @@ def open_for_edit(body: dict) -> dict:
                          "profile": plain.get("profile") or PROFILE_NAMES.get(_mode_of(payload), "locked"),
                          "editors": editors or [me], "recipients": plain.get("recipients") or [],
                          "packs": plain.get("packs") or [], "at": time.time(),
-                         "client_id": str(body.get("client_id") or "")}
+                         "client_id": str(body.get("client_id") or ""),
+                         # V6-B: an edit re-encrypts from scratch; the access policy and labels must survive it
+                         "keep": {k: plain[k] for k in ("access_keys", "access_labels") if k in plain}}
     out = {"ok": True, "edit_token": token, "interface": plain.get("interface"), "profile": _EDITS[token]["profile"],
            "second_factor": detail["reason"]}
     if isinstance(plain.get("ui"), dict):
@@ -353,7 +357,42 @@ def access_open(body: dict) -> dict:
     def row(c):
         return {"code": c, "label": labels.get(c, ""), "me": c == me}
     return {"ok": True, "access_token": token, "profile": profile, "editors": [row(c) for c in editors],
-            "recipients": [row(c) for c in recipients], "second_factor": factor}
+            "recipients": [row(c) for c in recipients], "second_factor": factor,
+            "access_keys": _access_keys_state(plain, profile)}
+
+
+def _access_keys_state(plain: dict, profile: str) -> dict:
+    """V6-B: what the access dialog shows about access keys (never a key)."""
+    if profile != "sealed_installs":
+        return {"available": False, "required": False, "gen": 0, "issuer": False}
+    from . import vault_access_keys as AK
+    pol = plain.get("access_keys") if isinstance(plain.get("access_keys"), dict) else {}
+    issuers = list(pol.get("issuers") or [])
+    return {"available": True, "required": pol.get("required") is True, "gen": int(pol.get("gen") or 0),
+            "issuer": (not issuers) or AK.author_issuer() in issuers}
+
+
+def _next_access_policy(old, require, revoke: bool, sealed: bool):
+    """V6-B: the vault's new `access_keys` (None = leave the field as it is)."""
+    from . import vault_access_keys as AK
+    if require is None and not revoke:
+        return None
+    if not sealed:
+        if require:
+            raise VaultError("Access keys are for Sealed vaults (authorized installations).")
+        return None
+    pol = dict(old) if isinstance(old, dict) else {}
+    issuers = [str(i) for i in (pol.get("issuers") or [])]
+    gen = int(pol.get("gen") or 0)
+    on = pol.get("required") is True if require is None else bool(require)
+    if on:
+        me = AK.author_issuer()
+        if me not in issuers:
+            issuers.append(me)
+        gen = max(gen, 1)
+        if revoke:
+            gen += 1
+    return {"required": on, "issuers": issuers, "gen": gen}
 
 
 def access_apply(body: dict) -> dict:
@@ -391,6 +430,11 @@ def access_apply(body: dict) -> dict:
         k = s["k"]
     inner = {key: v for key, v in plain.items() if key not in ("recipients", "format")}
     inner.update(editors=editors, access_labels=labels, updated=int(time.time()))
+    require = body.get("require_access_key")
+    policy = _next_access_policy(plain.get("access_keys"), None if require is None else bool(require),
+                                 bool(body.get("revoke_access_keys")), sealed)
+    if policy is not None:
+        inner["access_keys"] = policy
     raw = [vault_keys.parse_public_text(c) for c in recipients] if sealed else None
     new_payload = v2.lock_with(inner, k, vault_id=s["vault_id"], mode=PROFILES[s["profile"]],
                                iface=_iface(plain.get("interface") or {}), recipients=raw)
@@ -404,8 +448,72 @@ def access_apply(body: dict) -> dict:
         SS.RUN_SESSIONS.drop_vault(s["vault_id"])
     if s["profile"] == "locked" and s.get("client_id"):
         SS.RUN_SESSIONS.put(s["client_id"], s["vault_id"], k["kek"])
+    pol = inner.get("access_keys") if isinstance(inner.get("access_keys"), dict) else {}
     return {"ok": True, "payload": new_payload, "vault_id": s["vault_id"], "profile": s["profile"],
-            "password_changed": bool(new_password), "editors": len(editors), "recipients": len(recipients)}
+            "password_changed": bool(new_password), "editors": len(editors), "recipients": len(recipients),
+            "access_keys": {"required": pol.get("required") is True, "gen": int(pol.get("gen") or 0)}}
+
+
+def access_issue_key(body: dict) -> dict:
+    """V6-B: sign an access key for installations of this Sealed vault, valid until a date. Needs the access session
+    (password + second factor); the session stays open so several keys can be issued."""
+    from . import vault_access_keys as AK
+    from . import vault_crypto_v2 as v2, vault_keys
+
+    s = _session(str(body.get("access_token") or ""), kind="access")
+    payload = str(body.get("payload") or "")
+    if _hash(payload) != s["payload_hash"]:
+        raise VaultError("This vault was changed since you unlocked its access (another tab, or an edit). Choose "
+                         "Manage access again.")
+    plain = v2.open_with_kek(payload, s["k"]["kek"], vault_id=s["vault_id"])
+    policy = AK.policy_of(plain)
+    if policy is None:
+        raise VaultError("Turn on 'Require an access key' in this dialog and apply it first.")
+    if AK.author_issuer() not in (policy.get("issuers") or []):
+        raise VaultError("Only the installation that turned on access keys can issue them.")
+    allowed = {vault_keys.public_text(r): r for r in v2.recipients_of(plain)}
+    installs = []
+    for code in _canonical_codes(body.get("installs"), "Installations"):
+        if code not in allowed:
+            raise VaultError("Add that installation to the vault first (Installations that may run it), apply, then "
+                             "issue its key.")
+        installs.append(allowed[code])
+    key = AK.issue(vault_id=s["vault_id"], installs=installs, expires=_expiry(body.get("expires")),
+                   gen=int(policy.get("gen") or 0), note=str(body.get("note") or ""))
+    with _lock:
+        s["at"] = time.time()
+    exp = AK.parse(key)["exp"]
+    return {"ok": True, "key": key, "expires": time.strftime("%Y-%m-%d", time.gmtime(exp)), "installs": len(installs)}
+
+
+def _expiry(value) -> int:
+    """An expiry as unix seconds, or "YYYY-MM-DD" = the last second of that day (UTC)."""
+    import calendar
+    if isinstance(value, (int, float)) and not isinstance(value, bool):
+        return int(value)
+    try:
+        day = time.strptime(str(value or "").strip(), "%Y-%m-%d")
+    except ValueError:
+        raise VaultError("Choose an expiry date.") from None
+    return calendar.timegm(day) + 86399
+
+
+def access_key_add(body: dict) -> dict:
+    """V6-B: a recipient enters an access key for a vault. It is checked like a run on this installation and kept
+    only when it passes; the answer says until when."""
+    from . import secure_subgraph as SS
+    from . import vault_access_keys as AK
+    from . import vault_keys
+
+    vault_id = str(body.get("vault_id") or "")
+    plain = SS.open_for_run(str(body.get("payload") or ""), vault_id, client_id=str(body.get("client_id") or ""),
+                            check_access=False)
+    policy = AK.policy_of(plain)
+    if policy is None:
+        raise VaultError("This vault does not need an access key.")
+    out = AK.accept(str(body.get("token") or ""), vault_id=vault_id, policy=policy,
+                    install_public=vault_keys.install_public_key())
+    return {"ok": True, "expires": out["expires"], "note": out["note"]}
 
 
 def _open_like_a_run(body: dict) -> tuple:
@@ -477,7 +585,7 @@ def commit(body: dict) -> dict:
     plain = {"exec": boundary_exec(interface), "api": api, "ui": body.get("ui"), "interface": interface,
              "editors": s["editors"], "profile": s["profile"],
              "packs": vault_packs.record_safely(api, s["packs"]),                                    # L9.50
-             "updated": int(time.time())}
+             "updated": int(time.time()), **(s.get("keep") or {})}
     recipients = None
     if s["profile"] == "sealed_installs":
         recipients = [base64.b64decode(r) for r in s["recipients"]] or _codes_to_keys([_this_install_code()])
@@ -563,4 +671,6 @@ def register_routes(server) -> None:
     routes.post("/c2c_vault/sg/access/open")(wrap(access_open))
     routes.post("/c2c_vault/sg/access/apply")(wrap(access_apply, 409))
     routes.post("/c2c_vault/sg/access/cancel")(wrap(access_cancel))
+    routes.post("/c2c_vault/sg/access/issue_key")(wrap(access_issue_key, 409))
+    routes.post("/c2c_vault/sg/access_key/add")(wrap(access_key_add))
     routes.get("/c2c_vault/sg/install_code")(wrap(lambda b: {"code": _this_install_code()}, 500))

@@ -124,6 +124,22 @@ Read while building, no code taken:
   (Frequency Separate/Combine and Film Grain from NKD Basic Tools are ported in
   `nodes/frequency_grain/`.)
 
+### C2C Vault V6 (2026-11-21) — ideas only, every line written here (Apache-2.0)
+
+- **ComfyUI-NodeEncrypt** — lvqunx <https://github.com/lvqunx/ComfyUI-NodeEncrypt> · declares **MIT** in
+  `pyproject.toml` and README, ships no `LICENSE` file. The idea of encrypting a node's widget values in place in
+  the browser (per node, per group, per selection) inspired **Lock parameter values** (`js/c2c_lock_params.js`,
+  `js/_lockparams_core.js`, `nodes/lock_params.py`). CNP's design differs: one key per lock operation, the node
+  type and value names bound as AES-GCM associated data, values only in the queued request, server-side redaction
+  of history / PNG metadata / queue views.
+- **ComfyUI-XLJworkflowCipher** — weiqing1987 <https://github.com/weiqing1987/ComfyUI-XLJworkflowCipher> · **no
+  licence** declared. Its expiring access keys (checked by a remote licence server) inspired the offline,
+  author-signed (Ed25519) **vault access keys** for Sealed vaults (`nodes/vault_access_keys.py`). No licence server
+  is used and no code was taken.
+- **ComfyUI-Workflow-Encrypt** — jtydhr88 <https://github.com/jtydhr88/ComfyUI-Workflow-Encrypt> · **AGPL-3.0**.
+  Only its README was read, for the feature list; CNP already had encrypted workflow files (C2C Vault > Save
+  workflow encrypted), so nothing was added from it.
+
 ---
 
 ## Ported code that is NOT open source

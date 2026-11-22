@@ -108,9 +108,21 @@ def needs_tab_key(payload: str) -> bool:
         return True
 
 
-def open_for_run(payload: str, vault_id: str, client_id: Optional[str] = None) -> dict:
+def _check_access_key(plain: dict, vault_id: str) -> None:
+    """V6-B: a Sealed vault that requires an access key runs here only with a valid one - editors are exempt."""
+    from . import vault_access_keys, vault_keys
+
+    policy = vault_access_keys.policy_of(plain)
+    if policy is None:
+        return
+    if vault_keys.public_text(vault_keys.install_public_key()) in (plain.get("editors") or []):
+        return
+    vault_access_keys.check_run(vault_id, policy, install_public=vault_keys.install_public_key())
+
+
+def open_for_run(payload: str, vault_id: str, client_id: Optional[str] = None, check_access: bool = True) -> dict:
     """Decrypt for execution with whatever this install / tab is allowed to use. Raises VaultError with what is
-    missing, never with anything from inside the vault."""
+    missing, never with anything from inside the vault. `check_access=False` only for entering an access key."""
     from . import vault_crypto, vault_crypto_v2 as v2, vault_keys, vault_node
 
     client_id = client_id if client_id is not None else _current_client_id()
@@ -125,10 +137,13 @@ def open_for_run(payload: str, vault_id: str, client_id: Optional[str] = None) -
                                  "yet). Send its author your installation code (C2C menu > Vault > My "
                                  "installation code).")
             try:
-                return v2.open_with_install_key(payload, priv, vault_id=vault_id)
+                plain = v2.open_with_install_key(payload, priv, vault_id=vault_id)
             except VaultError:
                 raise VaultError("This vault is not authorized on this ComfyUI installation. Send its author your "
                                  "installation code (C2C menu > Vault > My installation code).") from None
+            if check_access:
+                _check_access_key(plain, vault_id)
+            return plain
         # L9.148: only THIS tab's key. The old fallback to the global legacy store (vault_node.SESSIONS, filled by
         # the legacy /c2c_vault/unlock route) let any client run a locked vault after one legacy unlock anywhere.
         key = RUN_SESSIONS.get(client_id, vault_id) if client_id else None

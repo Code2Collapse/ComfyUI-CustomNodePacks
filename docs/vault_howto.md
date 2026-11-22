@@ -114,6 +114,69 @@ Workflows with the old **C2C Vault - Locked / Sealed** nodes open as before and 
 vault, with the same payload, sockets and controls. A promoted parameter that had been turned into a `param_N` socket
 keeps its stored value but loses that wire. Reconnect it after the upgrade.
 
+## 8. Lock parameter values (keep the nodes, hide their values)
+
+A vault hides whole nodes. When the layout may stay public but some values may not (a prompt, a seed, LoRA
+strengths, a model choice), lock the values instead.
+
+1. Right-click a node - or select several nodes or a group and right-click one of them or the canvas - and choose
+   **🔒 Lock parameter values…** (the command palette has **Lock parameter values of the selection…**). A selected
+   subgraph node locks the nodes inside it.
+2. The dialog shows how many values in how many nodes will be locked. Type a password twice (**Generate** makes a
+   strong one) and press **Lock**. Every value is encrypted in your browser (PBKDF2-SHA256, 600 000 rounds, then
+   AES-256-GCM); the password is never sent anywhere.
+3. Each node keeps its place and wires; the locked widgets disappear and a card says "Values locked". Saving,
+   autosave, export, copy-paste and undo keep only the encrypted form. A seed's "control after generate" is locked
+   with it, so a locked seed does not change between runs.
+
+**Run:** the first run in a browser tab asks for the password (**Run with locked values**; a wrong password is said
+there). After that the tab runs without asking. The tab that locked the values runs them right away. ComfyUI's
+history, the image metadata (`prompt`) and the queue view show `<locked>` in place of each locked value.
+
+**Change a value:** right-click › **🔓 Remove value lock…** (password needed) puts the values back in the widgets,
+visible and saved in plain text again; edit, then lock again. **🔓 Unlock locked values (this tab)…** unlocks without
+running.
+
+Not lockable: custom editors whose value is not a plain text, number or switch (the dialog lists them), widgets
+driven by a wire, vault nodes (a vault encrypts its inside already). Nodes with locked values cannot be locked as a
+vault; remove their lock first.
+
+What it does not hide: your own ComfyUI sees the values while it runs them (memory, and the request that queues the
+run). If a locked value is invalid - for example a locked model is not installed - ComfyUI's validation error names
+it. A node that shows or saves its input (Show Text, a caption file) outputs the value. Anyone with the workflow can
+try passwords offline, so use a long one. Without ComfyUI-CustomNodePacks the workflow opens with neutral
+placeholder values in those widgets and would run with them.
+
+## 9. Access keys for Sealed vaults (expiry, offline)
+
+A Sealed vault runs without a password on the installations you sealed it for. With access keys, those installations
+also need a key from you, valid until a date you choose. No server is involved: the key is signed by your
+installation and checked on theirs.
+
+**Author**
+
+1. Right-click the vault › **👥 Manage installations & editors…**, confirm with the password and your authenticator
+   code. Turn on **Require an access key to run** and press **Apply**. Save the workflow and send it.
+2. Open the same dialog again and press **Issue an access key…**. Tick the installations, choose the last day the key
+   works (it ends at midnight UTC that day), add a note if you like, and press **Issue key**. Copy the key or
+   **Save key file** (`.c2caccess`) and send it.
+3. Editors never need a key. Only the installation that turned keys on can issue them.
+
+**Recipient:** the first run without a key stops with "This vault needs an access key from its author" and the
+**Access key** dialog opens. Paste the key or **Open key file…** and press **Use this key**; the dialog says until
+when this installation may run the vault. You can also open it from the vault's right-click menu: **🎫 Enter access
+key…**. A newer key with a later date extends access.
+
+Plain refusals you can meet: the key **expired on** a date; it is **for other installations** (send the author your
+installation code); it is **for a different vault**; it **was revoked**; or **this computer's clock is set earlier**
+than the last time a key was checked here (correct the date and time).
+
+**Revoking:** in the access dialog tick **Revoke every key issued so far** and apply. Keys issued before stop opening
+the NEW copy of the workflow; issue fresh keys for the people who keep access. A copy someone already has keeps
+working with its old key until that key expires - that is why every key has an expiry date. The check runs inside
+ComfyUI on the recipient's machine: someone who changes ComfyUI's code can skip it, as with every vault. It is a
+control for honest installations, not copy protection.
+
 ## Vault nodes
 
 You normally never add these from the node menu: the Protect commands create them, and old workflows bring the

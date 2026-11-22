@@ -623,6 +623,17 @@ In-depth notes on the larger nodes (hand-written; parameters are in NODE_REFEREN
   `SDXL · Initial Generation` or `PROMPT · Positive`, with a preview before anything changes. Names and the original
   titles are saved in the workflow; what runs is unchanged. The admin (the ComfyUI page on this machine) sets the
   rules and can lock names. See [docs/node-identity.md](docs/node-identity.md).
+- **Lock parameter values** and **vault access keys** (2026-11-21, no new node, saved workflows and vaults
+  unchanged). Right-click a node, a selection or a group: **🔒 Lock parameter values…** encrypts the values of its
+  widgets in the workflow with a password that never leaves your browser (PBKDF2-SHA256 600 000 + AES-256-GCM). The
+  nodes stay where they are, with their wires; a card on each says how many values are locked. A run asks for the
+  password once per browser tab; ComfyUI's history, the image metadata and the queue view show `<locked>` instead
+  of the values. Works in both renderers, inside subgraphs, and survives save, reload, copy-paste and undo.
+  Sealed vaults can now **require an access key**: in **👥 Manage installations & editors…** turn it on, then issue
+  keys signed by your installation, each for chosen installations and valid until a date. The recipient enters the
+  key once (right-click the vault › **🎫 Enter access key…**, or the dialog that opens when a run is refused).
+  Everything works offline; revoking stops old keys from opening new copies, and expiry ends the copies people
+  already have. See [docs/vault_howto.md](docs/vault_howto.md) sections 8 and 9.
 - **C2C Vault hardening** (2026-11-21): opening a vault for editing or managing its access now counts wrong passwords (5 tries, then a 5-minute wait), the same as running a Locked vault; two-factor setup and reset answer only the ComfyUI page on this machine; a renamed vault keeps its name when you open it.
 - **C2C Vault: lock a selection in one step** (2026-11-20, front end only, saved vaults unchanged): select nodes or
   a group and press **Ctrl+Shift+L**, the lock button in the selection toolbox, or right-click a node and choose
