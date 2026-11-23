@@ -246,7 +246,7 @@ Every node's parameters, modes, and outputs are documented in depth in the `docs
 
 | Guide | Nodes | What's inside |
 |-------|------:|---------------|
-| [**Documentation Index**](docs/README.md) | — | Central nav: quick lookup by task, pack-by-pack reference, image-vs-video helpers |
+| [**Documentation Index**](docs/README.md) | — | Central nav: quick lookup by task, pack-by-pack reference, image-vs-video helpers, every keyboard shortcut in one table |
 | [Inpaint Suite](docs/inpaint-suite.md) | 2 | Inpaint Crop Pro (modes pro / smart aspect / mask prepare) and Inpaint Stitch Pro (blend / paste back / smart / context blend) |
 | [**ProPainter Suite**](docs/propainter.md) ★ new | 5 | Temporal video inpaint, stitch (drop-in for legacy), seam-only refine, object remove (needs ProPainter), RAFT flow refine |
 | [**Face Fixer**](docs/face-fixer.md) | 1 | YOLO11 face detection → per-face KSampler → smart blend with `[SEP]/[ASC]/[DSC]/[SKIP]` wildcard prompts (connect `clip` for per-face prompts); seven controls shown, the rest in Detection / Blend / Face prompts sections; how-to in the link |
