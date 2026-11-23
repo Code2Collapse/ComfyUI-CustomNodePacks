@@ -109,7 +109,10 @@ export function updateSectionBar(node, ownerShown, reapply) {
         root.replaceChildren();
         const label = document.createElement("span");
         label.textContent = "More:";
-        label.style.opacity = ".7";
+        // L9.321 (matrix R1): own C2C ground, same as js/_c2c_node_layout.js - on the transparent bar the label and
+        // the chips took core's text colour over the node body core recolours (2.4:1 / 3.35:1 in the light palette)
+        Object.assign(label.style, { padding: "1px 6px", borderRadius: "10px", color: "var(--c2c-sub, #bab7db)",
+            background: "var(--c2c-bg2, #0c0d23)" });
         root.append(label);
         for (const [name, n] of counts) {
             const chip = document.createElement("button");
@@ -120,8 +123,9 @@ export function updateSectionBar(node, ownerShown, reapply) {
             chip.setAttribute("aria-expanded", String(isOpen));
             Object.assign(chip.style, { font: "inherit", lineHeight: "16px", margin: "0", whiteSpace: "nowrap",
                 cursor: "pointer", borderRadius: "10px", padding: "1px 8px",
-                border: "1px solid rgba(255,255,255,0.25)", color: "inherit",
-                background: isOpen ? "rgba(120,140,255,0.28)" : "transparent" });
+                border: "1px solid var(--c2c-surface2, #3b3a68)", color: "var(--c2c-fg, #e8e6f7)",
+                background: isOpen ? "color-mix(in srgb, var(--c2c-blue, #7ba3f8) 30%, var(--c2c-bg2, #0c0d23))"
+                    : "var(--c2c-surface0, #1d1e45)" });
             chip.dataset.section = name;
             chip.className = "c2c-section-chip";
             chip.addEventListener("pointerdown", (e) => e.stopPropagation());   // a click, not a node drag
@@ -156,7 +160,7 @@ function textWidth(t) {
 function barHeight(chips, width) {
     const avail = Math.max(40, width - 8 - 20);
     let rows = 1;
-    let x = Math.ceil(textWidth("More:")) + 4;
+    let x = Math.ceil(textWidth("More:")) + 12 + 4;          // + the label's 6 px side padding
     for (const c of chips) {
         const cw = Math.ceil(textWidth(c)) + 18;
         if (x > 0 && x + cw > avail) { rows += 1; x = 0; }

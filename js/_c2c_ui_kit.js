@@ -21,9 +21,12 @@
 const KIT_ID = "c2ck-styles";
 
 const CSS = `
-.c2ck{--k-bg:var(--c2c-bg);--k-panel:var(--c2c-panelBg);--k-panel2:var(--c2c-surface0);--k-line:var(--c2c-border);--k-line2:var(--c2c-surface1);
-  --k-fg:var(--c2c-fg);--k-dim:var(--c2c-dim);--k-dim2:var(--c2c-sub);--k-acc:var(--c2c-blue);
-  font-family:ui-sans-serif,system-ui,-apple-system,sans-serif;color:var(--k-fg);box-sizing:border-box;}
+/* the --k-* tokens live on every kit element, not only on .c2ck (L9.321, matrix R1): a .c2ck-panel / .c2ck-menu
+   outside a .c2ck root used var(--k-fg) and got nothing - black text on a near-black button in core's light palette */
+.c2ck,[class^="c2ck-"],[class*=" c2ck-"]{--k-bg:var(--c2c-bg);--k-panel:var(--c2c-panelBg);--k-panel2:var(--c2c-surface0);
+  --k-line:var(--c2c-border);--k-line2:var(--c2c-surface1);
+  --k-fg:var(--c2c-fg);--k-dim:var(--c2c-dim);--k-dim2:var(--c2c-sub);--k-acc:var(--c2c-blue);}
+.c2ck{font-family:ui-sans-serif,system-ui,-apple-system,sans-serif;color:var(--k-fg);box-sizing:border-box;}
 .c2ck *,.c2ck *::before,.c2ck *::after{box-sizing:border-box;}
 
 /* buttons */

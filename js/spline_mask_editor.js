@@ -849,11 +849,12 @@ function installEditor(node) {
     claimUndo(canvas);   // Ctrl+Z here undoes the editor, not the graph (L2.15)
     canvasWrap.appendChild(canvas);
 
+    // L9.321 (matrix R3): overlay1 text was 3.4-3.7:1 on the pill; --c2c-dim is >= 4.5:1 on the night grounds
     const status = document.createElement("div");
     status.style.cssText = `
         position:absolute;left:6px;bottom:6px;padding:3px 7px;
-        background:var(--c2c-bg)d8;border:1px solid ${COLOR.border};border-radius:4px;
-        font-size:10px;color:${COLOR.sub};pointer-events:none;
+        background:color-mix(in srgb, var(--c2c-bg) 85%, transparent);border:1px solid ${COLOR.border};border-radius:4px;
+        font-size:10px;color:var(--c2c-dim);pointer-events:none;
         font-family:ui-monospace,Menlo,monospace;letter-spacing:.2px;
     `;
     canvasWrap.appendChild(status);

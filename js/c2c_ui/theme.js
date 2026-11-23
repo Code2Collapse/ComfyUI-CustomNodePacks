@@ -10,6 +10,10 @@
 const STYLE_ID = "c2c-ui-v1";
 
 const CSS = `
+/* The tokens are declared on :root as well (L9.321, matrix R1): a player bar, a compare view or a kit panel that is
+   not inside .c2c-ui used var(--cu-*) and got nothing (black text on a near-black ground in core's light palette).
+   .c2c-ui / .c2c-ui-editor keep their own copy, so a scoped override still wins inside them. */
+:root,
 .c2c-ui,
 .c2c-ui-editor {
   --cu-ground: var(--c2c-bg3, #07081a);
@@ -20,7 +24,7 @@ const CSS = `
   --cu-edge-strong: var(--c2c-surface2, #3b3a68);
   --cu-ink: var(--c2c-fg, #e8e6f7);
   --cu-ink-soft: var(--c2c-sub, #bab7db);
-  --cu-ink-dim: var(--c2c-dim, #6f6d9b);
+  --cu-ink-dim: var(--c2c-dim, #9593c4);   /* >= 4.5:1 on every night surface up to --cu-edge (L9.321 R3) */
   --cu-accent: var(--c2c-mauve, #b494ff);
   --cu-accent-hover: var(--c2c-accentLink, #c0aaff);
   --cu-on-accent: var(--c2c-bg3, #07081a);
@@ -33,6 +37,10 @@ const CSS = `
   --cu-series-4: var(--c2c-red, #f27a92);
   --cu-series-5: #7fd4f2;
   --cu-series-6: var(--c2c-ok, #8ee09d);
+}
+
+.c2c-ui,
+.c2c-ui-editor {
   font-family: 'Segoe UI', system-ui, sans-serif;
   font-size: 12px;
   color: var(--cu-ink);
@@ -664,6 +672,24 @@ const CSS = `
   justify-content: center;
   background: var(--cu-sunken);
   z-index: 1;
+  /* L9.321 (D3/D4): the empty state was taller than a short pane and spilled over the chips above it (a click on
+     a chip landed on the empty state). Clip to the pane, and compact the empty state by the pane's own height. */
+  overflow: hidden;
+  container-type: size;
+}
+
+@container (max-height: 180px) {
+  .c2c-ui .c2c-ui-chart__overlay .c2c-ui-empty,
+  .c2c-ui-editor .c2c-ui-chart__overlay .c2c-ui-empty { gap: 3px; padding: 6px 8px; }
+  .c2c-ui .c2c-ui-chart__overlay .c2c-ui-empty__mark,
+  .c2c-ui-editor .c2c-ui-chart__overlay .c2c-ui-empty__mark,
+  .c2c-ui .c2c-ui-chart__overlay .c2c-ui-empty__brand,
+  .c2c-ui-editor .c2c-ui-chart__overlay .c2c-ui-empty__brand { display: none; }
+}
+
+@container (max-height: 72px) {
+  .c2c-ui .c2c-ui-chart__overlay .c2c-ui-empty__title,
+  .c2c-ui-editor .c2c-ui-chart__overlay .c2c-ui-empty__title { display: none; }
 }
 
 .c2c-ui .c2c-ui-chart__overlay[hidden],

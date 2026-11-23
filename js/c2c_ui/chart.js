@@ -119,7 +119,7 @@ function _resolveColor(root, tokenOrHex) {
         "--cu-series-6": "#8ee09d",
         "--cu-danger": "#f27a92",
         "--cu-edge": "#2a2a57",
-        "--cu-ink-dim": "#6f6d9b",
+        "--cu-ink-dim": "#9593c4",
         "--cu-ink-soft": "#bab7db",
         "--cu-sunken": "#0c0d23",
     };

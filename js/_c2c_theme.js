@@ -88,7 +88,8 @@ const CORE = {
         bg: "#12132f", bg2: "#0c0d23", bg3: "#07081a", surface0: "#1d1e45",
         surface1: "#2a2a57", surface2: "#3b3a68", overlay0: "#4e4d80", overlay1: "#6664a0",
         overlay2: "#8280ba", fg: "#e8e6f7", sub: "#bab7db", subtext1: "#d2cfee",
-        dim: "#6f6d9b", border: "#2a2a57", highlightBase: "#ffffff", shadowBase: "#000000",
+        // dim was #6f6d9b: 3.3-4.1:1 on the night grounds; #9593c4 is >= 4.5:1 up to surface1 (L9.321 R3)
+        dim: "#9593c4", border: "#2a2a57", highlightBase: "#ffffff", shadowBase: "#000000",
         mauve: "#b494ff", blue: "#7ba3f8", sky: "#7fd4f2", sapphire: "#5ec2e3",
         teal: "#76dccb", green: "#8ee09d", yellow: "#f3d288", peach: "#f1aa7b",
         red: "#f27a92", pink: "#eba2de", lavender: "#c6c2ff", rosewater: "#f2e4e2",

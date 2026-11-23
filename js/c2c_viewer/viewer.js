@@ -144,7 +144,7 @@ function tokens(root) {
     const get = (name, fallback) => (cs.getPropertyValue(name) || "").trim() || fallback;
     return {
         accent: get("--cu-accent", "#b494ff"), danger: get("--cu-danger", "#f27a92"), ok: get("--cu-ok", "#7fe0ab"),
-        warn: get("--cu-warn", "#f3d288"), ink: get("--cu-ink", "#e8e6f7"), dim: get("--cu-ink-dim", "#6f6d9b"),
+        warn: get("--cu-warn", "#f3d288"), ink: get("--cu-ink", "#e8e6f7"), dim: get("--cu-ink-dim", "#9593c4"),
         ground: get("--cu-ground", "#07081a"), sunken: get("--cu-sunken", "#0c0d23"),
         edge: get("--cu-edge-strong", "#3b3a68"),
         series: [1, 2, 3, 4, 5, 6].map((i) => get(`--cu-series-${i}`, "#76dccb")),

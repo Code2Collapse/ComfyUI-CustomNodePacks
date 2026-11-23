@@ -273,11 +273,13 @@ app.registerExtension({
             el.appendChild(cvs);
 
             // displayMode persists via a hidden widget so it survives save/load.
+            // white on accentVivid was 4.11:1; 85 % of it over black keeps the hue at 5.4:1 (L9.321, matrix D10)
+            const SEG_ON = "color-mix(in srgb, var(--c2c-accentVivid) 85%, #000)";
             const setDisplayMode = (mode) => {
                 S.displayMode = (mode === "time") ? "time" : "frames";
-                segTime.style.background   = S.displayMode === "time"   ? "var(--c2c-accentVivid)" : "transparent";
+                segTime.style.background   = S.displayMode === "time"   ? SEG_ON : "transparent";
                 segTime.style.color        = S.displayMode === "time"   ? "var(--c2c-white)" : "var(--c2c-fg)";
-                segFrames.style.background = S.displayMode === "frames" ? "var(--c2c-accentVivid)" : "transparent";
+                segFrames.style.background = S.displayMode === "frames" ? SEG_ON : "transparent";
                 segFrames.style.color      = S.displayMode === "frames" ? "var(--c2c-white)" : "var(--c2c-fg)";
                 node._render?.();
             };

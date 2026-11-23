@@ -183,7 +183,7 @@ function barHeight(node, width) {
     if (!chips.length) return 0;
     const avail = Math.max(40, width - 2 * BAR_MARGIN - 2 * PAD_X);
     let rows = 1;
-    let x = Math.ceil(textWidth("More:")) + GAP;
+    let x = Math.ceil(textWidth("More:")) + LABEL_PAD + GAP;
     for (const c of chips) {
         const w = Math.ceil(textWidth(chipText(c.name, c.count, c.open))) + 18;
         if (x > 0 && x + w > avail) { rows += 1; x = 0; }
@@ -209,12 +209,19 @@ function ensureBar(node) {
     return w;
 }
 
+// L9.321 (matrix R1): the label and the chips carry their own C2C ground. On a transparent bar they took core's text
+// colour (#222 in the light palette) over the node body core recolours - 2.4:1 / 3.35:1, and no text colour at all
+// reaches 4.5:1 on the light palette's classic node body (100,105,202).
+const LABEL_PAD = 12;                                        // the label's horizontal padding, counted in barHeight
+const LABEL_STYLE = { padding: "1px 6px", borderRadius: "10px", color: "var(--c2c-sub, #bab7db)",
+    background: "var(--c2c-bg2, #0c0d23)" };
+
 function drawBar(node, bar) {
     const root = bar.element;
     root.replaceChildren();
     const label = document.createElement("span");
     label.textContent = "More:";
-    label.style.opacity = ".7";
+    Object.assign(label.style, LABEL_STYLE);
     root.append(label);
     for (const c of node.__c2cLayoutChips) {
         const chip = document.createElement("button");
@@ -225,8 +232,10 @@ function drawBar(node, bar) {
         chip.title = c.open ? `Hide the ${c.name} controls` : `Show the ${c.name} controls (${c.count})`;
         chip.setAttribute("aria-expanded", String(c.open));
         Object.assign(chip.style, { font: "inherit", lineHeight: "16px", cursor: "pointer", borderRadius: "10px",
-            padding: "1px 8px", margin: "0", whiteSpace: "nowrap", border: "1px solid rgba(255,255,255,0.25)",
-            color: "inherit", background: c.open ? "rgba(120,140,255,0.28)" : "transparent" });
+            padding: "1px 8px", margin: "0", whiteSpace: "nowrap", border: "1px solid var(--c2c-surface2, #3b3a68)",
+            color: "var(--c2c-fg, #e8e6f7)",
+            background: c.open ? "color-mix(in srgb, var(--c2c-blue, #7ba3f8) 30%, var(--c2c-bg2, #0c0d23))"
+                : "var(--c2c-surface0, #1d1e45)" });
         chip.addEventListener("pointerdown", (e) => e.stopPropagation());
         chip.addEventListener("click", (e) => {
             e.stopPropagation();

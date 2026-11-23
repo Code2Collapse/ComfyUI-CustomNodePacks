@@ -40,7 +40,7 @@ function ensurePickerStyles() {
     el.textContent = `
 .mec-mp-root{display:flex;flex-direction:column;gap:6px;width:100%;height:100%;
   box-sizing:border-box;padding:6px;min-height:0;font:11px ui-sans-serif,system-ui;}
-.mec-mp-head{display:flex;align-items:center;gap:6px;flex:0 0 auto;color:var(--c2c-overlay1);}
+.mec-mp-head{display:flex;align-items:center;gap:6px;flex:0 0 auto;color:var(--c2c-dim);}
 .mec-mp-head b{color:var(--c2c-fg);font-weight:600;}
 .mec-mp-grid{display:flex;gap:6px;flex:1 1 auto;min-height:0;}
 .mec-mp-tile{position:relative;flex:1 1 0;min-width:0;border-radius:6px;overflow:hidden;
@@ -58,7 +58,7 @@ function ensurePickerStyles() {
 .mec-mp-badge{position:absolute;top:4px;left:4px;min-width:15px;height:15px;border-radius:3px;
   background:rgba(0,0,0,.66);color:var(--c2c-fg);font-size:9px;line-height:15px;text-align:center;
   padding:0 3px;pointer-events:none;}
-.mec-mp-tile.sel .mec-mp-badge{background:var(--c2c-blueAction);color:var(--c2c-bg3);font-weight:700;}
+.mec-mp-tile.sel .mec-mp-badge{background:var(--c2c-blueAction);color:var(--c2c-white,#fff);font-weight:700;}
 .mec-mp-score{position:absolute;left:0;right:0;bottom:0;padding:2px 5px;font-size:10px;
   color:var(--c2c-fg);background:rgba(0,0,0,.62);pointer-events:none;
   display:flex;justify-content:space-between;gap:4px;}
@@ -67,6 +67,8 @@ function ensurePickerStyles() {
 `;
     document.head.appendChild(el);
 }
+
+const PICKER_MIN_H = 150;
 
 function installPicker(node) {
     if (node._mecPickerDom) return;
@@ -236,9 +238,15 @@ function installPicker(node) {
         getValue: () => "",
         setValue: () => {},
         serialize: false,
+        // L9.321 (matrix D5): without a floor core gave the grid its 50 px default in classic, and once the inputs,
+        // widgets and the A28 sections bar were laid out the three tiles were crushed to a few px. 150 = the
+        // header row + tiles that still show their thumbnail, score and badge.
+        getMinHeight: () => PICKER_MIN_H,
     });
-    if (!node.size || node.size[1] < 260) {
-        node.size = [Math.max(node.size?.[0] || 0, 320), Math.max(node.size?.[1] || 0, 260)];
+    // the node's own minimum now counts the grid floor (computeSize reads getMinHeight); never shrink a saved size
+    const fit = node.computeSize?.() || [320, 260];
+    if (!node.size || node.size[1] < fit[1] || node.size[0] < 320) {
+        node.size = [Math.max(node.size?.[0] || 0, fit[0], 320), Math.max(node.size?.[1] || 0, fit[1], 260)];
     }
 
     const poll = setInterval(() => { // c2c-allow-interval: load source image until ready, cancelled onRemoved

@@ -18,6 +18,7 @@
  *   Works the same inside subgraphs and in both renderers: it only touches its own DOM and its own node's widgets.
  */
 import { fmtNum } from "./c2c_video_player_ui.js";
+import { ensureStyles as ensureUiTokens } from "./c2c_ui/theme.js";
 import {
     LOOP_LABELS, formatSeconds, loopStep, nextLoopMode, nextSpeed, parseFrameInput, rulerTicks, shuttle, timecode,
     selectionFromWidgets, widgetsFromSelection,
@@ -30,6 +31,9 @@ const UNIT_KEY = "c2c.vplayer.unit";
 const THUMB_RELEASE_MS = 8000;
 
 function ensureStyles() {
+    // the --cu-* tokens this sheet uses come from c2c_ui/theme.js: a player outside a .c2c-ui root (the compare
+    // view) had none of them before the theme sheet was on the page (L9.321, matrix R1)
+    ensureUiTokens();
     if (document.getElementById(STYLE_ID)) return;
     for (const old of ["c2c-vplayer-v1", "c2c-vplayer-v2"]) document.getElementById(old)?.remove();
     const s = document.createElement("style");
@@ -53,8 +57,8 @@ function ensureStyles() {
 .c2c-vplayer__frame-input { width: 96px; height: 18px; font-size: 11px; padding: 0 4px;
   border-radius: 3px; border: 1px solid var(--cu-accent); background: var(--cu-ground); color: var(--cu-ink);
   font-variant-numeric: tabular-nums; }
-.c2c-vplayer__track { position: relative; height: 18px; border-radius: 4px; background: var(--cu-edge); cursor: pointer;
-  touch-action: none; }
+.c2c-vplayer__track { position: relative; height: 18px; margin: 0 4px; border-radius: 4px; background: var(--cu-edge);
+  cursor: pointer; touch-action: none; }
 .c2c-vplayer__sel { position: absolute; top: 3px; bottom: 3px; background: var(--cu-accent); opacity: 0.55; border-radius: 2px; }
 .c2c-vplayer__handle { position: absolute; top: 0; bottom: 0; width: 8px; margin-left: -4px; border-radius: 3px;
   background: var(--cu-accent); cursor: ew-resize; box-shadow: 0 0 0 1px var(--cu-ground); }
@@ -62,7 +66,7 @@ function ensureStyles() {
   pointer-events: none; }
 .c2c-vplayer__hover { position: absolute; top: 0; bottom: 0; width: 1px; background: var(--cu-ink-soft); opacity: 0.7;
   pointer-events: none; display: none; }
-.c2c-vplayer__ruler { position: relative; height: 13px; margin: 0 0 1px; pointer-events: none; }
+.c2c-vplayer__ruler { position: relative; height: 13px; margin: 0 4px 1px; pointer-events: none; }
 .c2c-vplayer__tick { position: absolute; top: 0; width: 1px; background: var(--cu-edge-strong); }
 .c2c-vplayer__tick--major { height: 5px; }
 .c2c-vplayer__tick--minor { height: 3px; opacity: 0.7; }
@@ -315,6 +319,7 @@ export function attachPlayer(host, video, opts = {}) {
                 const lab = document.createElement("span");
                 lab.className = "c2c-vplayer__tick-label";
                 lab.style.left = `${x}%`;
+                if (px < 1) lab.style.transform = "none";      // the first label starts at the track, not left of it
                 lab.textContent = t.label;
                 frag.appendChild(lab);
                 lastLabelRight = px + t.label.length * 3.2;
