@@ -2495,3 +2495,9 @@ and why, an overlap curve, and Show node. It updates when a run finishes; it nev
 ## Drop-downs fit the panel (2026-11-23)
 
 A drop-down with a long option no longer runs past the node edge.
+
+## Readable in light and dark themes (2026-11-23)
+
+Node panels from this pack were checked in both renderers, light and dark themes, two display scales and three zoom
+levels. Dim text, badges and chips now reach the WCAG contrast of 4.5:1, and the C2C colours apply wherever a panel is
+shown. Saved workflows are unchanged.
