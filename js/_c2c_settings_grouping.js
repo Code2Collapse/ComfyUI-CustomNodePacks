@@ -23,6 +23,7 @@
  *   3. A short delayed re-sweep catches any lazily/late-registered settings.
  */
 import { app } from "../../scripts/app.js";
+import { HIDDEN, MERGED_OVERLAYS, placeSetting } from "./_c2c_settings_tree.js";
 
 // OmniScale is a C2C pack too: its API key belongs under C2C (owner A9: "not all settings are in C2C").
 const OURS = /^(c2c|mec|omniscale)\./i;
@@ -62,10 +63,17 @@ function titleCase(s) {
     return String(s).replace(/[_-]+/g, " ").replace(/\b\w/g, (c) => c.toUpperCase()).trim();
 }
 
-/** Compute the normalized category array for one setting (or null if not ours). */
+/** Compute the normalized category array for one setting (or null if not ours). Placed settings (the L9.306
+ *  tree in _c2c_settings_tree.js) go to their task group; anything else keeps the automatic sub-group. */
 function normalizeCategory(setting) {
     const id = setting && typeof setting.id === "string" ? setting.id : "";
     if (!OURS.test(id)) return null;
+    // The frontend builds Settings from the category PATH and keys each row by its LAST element
+    // (useSettingUI: buildTree(settings, s => s.category || s.id.split("."))). A 2-element ["C2C", group] gave every
+    // setting of a group the same key, so the dialog drew ONE row per group and hid the rest (~118 of 199 C2C
+    // settings, measured live 2026-11-23). The setting id is therefore always the last element.
+    const placed = placeSetting(id);
+    if (placed) return ["C2C", placed.group, id];
     let sub;
     if (Array.isArray(setting.category) && setting.category.length) {
         // Keep their sub-grouping but strip any leading C2C/MEC brand token.
@@ -79,7 +87,39 @@ function normalizeCategory(setting) {
         const seg = id.split(".")[1] || "General";
         sub = [PRETTY[seg] || titleCase(seg)];
     }
-    return ["C2C", ...sub];
+    return ["C2C", sub[0], id];
+}
+
+const _MERGED_AWAY = new Set(MERGED_OVERLAYS.map(([overlay]) => overlay));
+
+/** Plain name + order from the tree; a merged Overlays switch is no longer shown (its value was folded in). */
+function presentation(id) {
+    const out = {};
+    const placed = placeSetting(id);
+    if (placed) {
+        out.sortOrder = placed.sortOrder;
+        if (placed.name) out.name = placed.name;
+    }
+    if (_MERGED_AWAY.has(id) || HIDDEN.has(id)) out.type = "hidden";
+    return out;
+}
+
+/** One-time fold: a button hidden through the generic Overlays switch stays hidden through the feature's own switch,
+ *  then the Overlays switch is reset to "shown" (its row is no longer displayed). Values only move to "off". */
+async function foldMergedOverlays() {
+    const st = app.extensionManager?.setting;
+    if (!st?.get || !st?.set) return 0;
+    let n = 0;
+    for (const [overlay, own] of MERGED_OVERLAYS) {
+        try {
+            if (st.get(overlay) === false) {
+                await st.set(own, false);
+                await st.set(overlay, true);
+                n++;
+            }
+        } catch (_) { /* a missing setting is fine */ }
+    }
+    return n;
 }
 
 let _patched = false;
@@ -90,7 +130,7 @@ function patchAddSetting() {
     const wrapped = function (params) {
         try {
             const cat = normalizeCategory(params);
-            if (cat) params = { ...params, category: cat };
+            if (cat) params = { ...params, category: cat, ...presentation(params.id) };
         } catch (_) { /* never block a registration */ }
         return orig(params);
     };
@@ -108,9 +148,13 @@ function sweepExisting() {
     for (const setting of Object.values(store)) {
         const cat = normalizeCategory(setting);
         if (!cat) continue;
-        const cur = Array.isArray(setting.category) ? setting.category.join("/") : "";
-        if (cur === cat.join("/")) continue;
-        try { setting.category = cat; changed++; } catch (_) { /* ignore frozen */ }
+        const want = { category: cat, ...presentation(setting.id) };
+        const same = (Array.isArray(setting.category) ? setting.category.join("/") : "") === cat.join("/")
+            && (want.name === undefined || setting.name === want.name)
+            && (want.sortOrder === undefined || setting.sortOrder === want.sortOrder)
+            && (want.type === undefined || setting.type === want.type);
+        if (same) continue;
+        try { Object.assign(setting, want); changed++; } catch (_) { /* ignore frozen */ }
     }
     return changed;
 }
@@ -127,7 +171,9 @@ app.registerExtension({
     async setup() {
         if (!_patched) patchAddSetting();
         const n = sweepExisting();
-        console.log(`[C2C.SettingsGrouping] unified ${n} setting(s) under one "C2C" section`);
+        const folded = await foldMergedOverlays();
+        console.log(`[C2C.SettingsGrouping] unified ${n} setting(s) under one "C2C" section`
+            + (folded ? `; folded ${folded} duplicate button switch(es)` : ""));
         // Catch any settings registered lazily after first paint.
         setTimeout(sweepExisting, 1500);
         setTimeout(sweepExisting, 4000);
