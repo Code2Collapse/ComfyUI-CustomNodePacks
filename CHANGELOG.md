@@ -4,6 +4,18 @@ All notable changes to ComfyUI-CustomNodePacks are documented here.
 
 ## Unreleased
 
+- **Lock parameter values** (C2C Vault V6, no new node). Right-click a node, a selection or a group ›
+  **🔒 Lock parameter values…**: the values of its widgets are encrypted in the workflow with a password that never
+  leaves the browser (PBKDF2-SHA256 600 000 + AES-256-GCM, node type and value names bound to the ciphertext). The
+  nodes keep their place and wires; a card says how many values are locked. The first run in a browser tab asks for
+  the password; ComfyUI's history, the image metadata and the queue view show `<locked>` instead of the values.
+  Locked values copied onto a node of another type are refused at run time (that node could output them). Works in
+  both renderers and inside subgraphs; survives save, reload, copy-paste and undo.
+- **Vault access keys for Sealed vaults.** **👥 Manage installations & editors…** can require an access key to run:
+  the author issues keys signed by their installation (Ed25519), each for chosen installations and valid until a
+  date; the recipient enters it once (right-click the vault › **🎫 Enter access key…**, or the dialog that opens when
+  a run is refused). Offline, no licence server; revoking stops old keys opening new copies, expiry ends the rest.
+  Editors never need a key. Vaults saved before this run unchanged. See docs/vault_howto.md sections 8 and 9.
 - **Settings > C2C rebuilt.** About 70 of the ~190 C2C settings could not be reached in the Settings dialog: they were
   filed under one shared two-level category and the dialog drew one row per group. Every setting now has its own row,
   in 18 task groups (Appearance, Canvas & wires, Editing & shortcuts, Performance & memory, Previews & video, ...) with

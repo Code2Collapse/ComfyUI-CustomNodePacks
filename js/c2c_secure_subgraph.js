@@ -1294,11 +1294,6 @@ function reconnectParentInputs(graph, sg, wires) {
   }
 }
 
-/**
- * V1 one-step lock: whatever is selected (nodes, a group, or one subgraph node) -> ONE dialog -> the A26 transaction
- * (convert to a native subgraph + protect, one undo step, exact rollback). `items` overrides the canvas selection
- * (the node menu on an unselected node). Resolves with the vault node or null.
- */
 /** V6-A: a node (or a subgraph holding one) whose parameter values are locked (js/c2c_lock_params.js). */
 function hasLockedValues(n, seen = new Set()) {
   if (!n || seen.has(n)) return false;
@@ -1307,6 +1302,11 @@ function hasLockedValues(n, seen = new Set()) {
   return isSubgraphNode(n) && (n.subgraph?.nodes || []).some((c) => hasLockedValues(c, seen));
 }
 
+/**
+ * V1 one-step lock: whatever is selected (nodes, a group, or one subgraph node) -> ONE dialog -> the A26 transaction
+ * (convert to a native subgraph + protect, one undo step, exact rollback). `items` overrides the canvas selection
+ * (the node menu on an unselected node). Resolves with the vault node or null.
+ */
 async function lockSelection(canvas, profileHint, items = null) {
   const r = resolveLockSelection(items ?? selectedItemsOf(canvas), { LiteGraph: globalThis.LiteGraph });
   if (r.problems.length) { toast(r.problems[0], true); return null; }

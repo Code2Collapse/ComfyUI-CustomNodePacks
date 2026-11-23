@@ -191,15 +191,23 @@ const isLink = (v) => Array.isArray(v) && v.length === 2 && typeof v[0] === "str
  * Put this tab's decrypted values into the API prompt (mutates `output`). Only inputs the frontend already wrote as
  * plain values are replaced (never a link, never a key it left out); each touched entry gets
  * `_meta.c2c_locked = [names]` so the server keeps them out of history, PNG metadata and queue views.
- * @returns {{missing: {execId: string, env: object}[], injected: number}}
+ * An entry whose class_type is not the type the envelope was sealed for (an envelope copied onto another node, e.g.
+ * one that echoes its input) is never filled: it is reported in `mismatched`.
+ * @returns {{missing: {execId: string, env: object}[], mismatched: {execId: string, env: object, nodeType: string}[],
+ *   injected: number}}
  */
 export function injectLockedValues(output, { nodeFor, valuesFor }) {
   const missing = [];
+  const mismatched = [];
   let injected = 0;
   for (const [execId, entry] of Object.entries(output || {})) {
     if (!entry || typeof entry !== "object" || !entry.inputs) continue;
     const env = envelopeOf(nodeFor(execId));
     if (!env) continue;
+    if (String(entry.class_type ?? "") !== env.type) {
+      mismatched.push({ execId, env, nodeType: String(entry.class_type ?? "") });
+      continue;
+    }
     const values = valuesFor(env);
     if (!values) { missing.push({ execId, env }); continue; }
     const names = [];
@@ -211,5 +219,5 @@ export function injectLockedValues(output, { nodeFor, valuesFor }) {
     entry._meta = { ...(entry._meta || {}), [LOCKED_META]: names };
     injected += names.length;
   }
-  return { missing, injected };
+  return { missing, mismatched, injected };
 }

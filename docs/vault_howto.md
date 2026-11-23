@@ -126,12 +126,14 @@ strengths, a model choice), lock the values instead.
    strong one) and press **Lock**. Every value is encrypted in your browser (PBKDF2-SHA256, 600 000 rounds, then
    AES-256-GCM); the password is never sent anywhere.
 3. Each node keeps its place and wires; the locked widgets disappear and a card says "Values locked". Saving,
-   autosave, export, copy-paste and undo keep only the encrypted form. A seed's "control after generate" is locked
+   autosave, export and copy-paste keep only the encrypted form (undo back past the lock itself returns the plain
+   values to this tab, as before you locked them). A seed's "control after generate" is locked
    with it, so a locked seed does not change between runs.
 
 **Run:** the first run in a browser tab asks for the password (**Run with locked values**; a wrong password is said
 there). After that the tab runs without asking. The tab that locked the values runs them right away. ComfyUI's
-history, the image metadata (`prompt`) and the queue view show `<locked>` in place of each locked value.
+history (including the inputs shown with a run error), the image metadata (`prompt`) and the queue view show
+`<locked>` in place of each locked value.
 
 **Change a value:** right-click › **🔓 Remove value lock…** (password needed) puts the values back in the widgets,
 visible and saved in plain text again; edit, then lock again. **🔓 Unlock locked values (this tab)…** unlocks without
@@ -139,11 +141,14 @@ running.
 
 Not lockable: custom editors whose value is not a plain text, number or switch (the dialog lists them), widgets
 driven by a wire, vault nodes (a vault encrypts its inside already). Nodes with locked values cannot be locked as a
-vault; remove their lock first.
+vault; remove their lock first. Locked values only ever go into a node of the type they were locked on: if a copy
+of the lock ends up on another kind of node, the run stops with "locked values sit on a node of another type" and
+names that node.
 
 What it does not hide: your own ComfyUI sees the values while it runs them (memory, and the request that queues the
 run). If a locked value is invalid - for example a locked model is not installed - ComfyUI's validation error names
-it. A node that shows or saves its input (Show Text, a caption file) outputs the value. Anyone with the workflow can
+it, and so does the server log (which any page of this ComfyUI can read); an error message written by a node can
+quote its input too. A node that shows or saves its input (Show Text, a caption file) outputs the value. Anyone with the workflow can
 try passwords offline, so use a long one. Without ComfyUI-CustomNodePacks the workflow opens with neutral
 placeholder values in those widgets and would run with them.
 

@@ -42,6 +42,7 @@ VERSION = 1
 DOMAIN = b"c2c-vault-access-key-v1\x00"
 STORE_FILE: Optional[Path] = None      # tests point this at a temp file; None = the ComfyUI user directory
 MAX_KEYS_PER_VAULT = 16
+MAX_VAULTS = 256                       # vaults whose keys are kept; the oldest key set goes first
 MAX_TOKEN_CHARS = 8192
 MAX_INSTALLS = 64
 NOTE_MAX = 60
@@ -49,6 +50,7 @@ TEN_YEARS = 10 * 366 * 86400
 CLOCK_SLACK = 86400                    # time zones and small drift are not a "clock set back"
 SEEN_STEP = 60                         # the high-water mark is written only when it moves this much
 _NAME = "author_ed25519_private"
+_CLOCK_NAME = "access_key_clock"        # the clock high-water mark, mirrored in the secrets store (see note_seen)
 _lock = threading.Lock()
 _KID_RE = re.compile(r"^[0-9a-f]{16}$")
 
@@ -82,7 +84,7 @@ def _unb64u(text: str) -> bytes:
 
 
 # ── the author's signing key ────────────────────────────────────────────────────────────────────────────────────
-def _author_private():
+def _author_private(create: bool = True):
     from cryptography.hazmat.primitives import serialization
     from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 
@@ -90,6 +92,8 @@ def _author_private():
         stored = vault_store.get(_NAME)
         if stored:
             return Ed25519PrivateKey.from_private_bytes(base64.b64decode(stored))
+        if not create:
+            return None
         key = Ed25519PrivateKey.generate()
         raw = key.private_bytes(serialization.Encoding.Raw, serialization.PrivateFormat.Raw,
                                 serialization.NoEncryption())
@@ -103,9 +107,11 @@ def _public_raw(private) -> bytes:
     return private.public_key().public_bytes(serialization.Encoding.Raw, serialization.PublicFormat.Raw)
 
 
-def author_issuer() -> str:
-    """This installation's issuer id: standard base64 of its raw Ed25519 public key (public, safe to show)."""
-    return base64.b64encode(_public_raw(_author_private())).decode("ascii")
+def author_issuer(create: bool = True) -> Optional[str]:
+    """This installation's issuer id: standard base64 of its raw Ed25519 public key (public, safe to show).
+    `create=False`: None when this installation has never made a signing key (nothing is created)."""
+    key = _author_private() if create else _author_private(create=False)
+    return None if key is None else base64.b64encode(_public_raw(key)).decode("ascii")
 
 
 def install_key_id(public_raw: bytes) -> str:
@@ -241,23 +247,40 @@ def add_token(vault_id: str, token: str) -> None:
         lst = [t for t in data["keys"].get(str(vault_id), []) if t != token] + [str(token)]
         lst.sort(key=iat)
         data["keys"][str(vault_id)] = lst[-MAX_KEYS_PER_VAULT:]
+        if len(data["keys"]) > MAX_VAULTS:          # bounded file: drop the vaults whose newest key is oldest
+            newest = {v: max((iat(t) for t in ts), default=-1) for v, ts in data["keys"].items()}
+            for v in sorted(newest, key=newest.get)[:len(data["keys"]) - MAX_VAULTS]:
+                del data["keys"][v]
         _save(data)
 
 
+def _store_seen() -> int:
+    try:
+        return int(vault_store.get(_CLOCK_NAME) or 0)
+    except Exception:  # noqa: BLE001 - an unreadable mark is "no mark", never a crash
+        return 0
+
+
 def last_seen() -> int:
+    """The latest time an access key was checked here: the larger of the keys file and the secrets-store copy, so
+    editing or deleting the (plain) keys file does not reset it (review 2026-11-23)."""
     with _lock:
-        return _load()["seen"]
+        return max(_load()["seen"], _store_seen())
 
 
 def note_seen(now: float) -> None:
     with _lock:
         data = _load()
-        if now - data["seen"] > SEEN_STEP:
+        if now - max(data["seen"], _store_seen()) > SEEN_STEP:
             data["seen"] = int(now)
             try:
                 _save(data)
             except OSError as exc:                            # a read-only user dir must not stop a run
                 log.warning("C2C Vault: could not record the access-key clock mark: %s", exc)
+            try:
+                vault_store.put(_CLOCK_NAME, str(int(now)))
+            except Exception as exc:  # noqa: BLE001
+                log.warning("C2C Vault: could not record the access-key clock mark in the secrets store: %s", exc)
 
 
 def _check_clock(now: float) -> None:

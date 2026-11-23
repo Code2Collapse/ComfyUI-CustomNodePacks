@@ -368,8 +368,14 @@ def _access_keys_state(plain: dict, profile: str) -> dict:
     from . import vault_access_keys as AK
     pol = plain.get("access_keys") if isinstance(plain.get("access_keys"), dict) else {}
     issuers = list(pol.get("issuers") or [])
+    # only LOOK at this install's signing key: viewing access never creates one, and a secrets-store failure only
+    # means "not an issuer here" (review 2026-11-23: it used to create a key on every Manage access, or answer 500)
+    try:
+        mine = AK.author_issuer(create=False) if issuers else None
+    except Exception:  # noqa: BLE001
+        mine = None
     return {"available": True, "required": pol.get("required") is True, "gen": int(pol.get("gen") or 0),
-            "issuer": (not issuers) or AK.author_issuer() in issuers}
+            "issuer": (not issuers) or (mine is not None and mine in issuers)}
 
 
 def _next_access_policy(old, require, revoke: bool, sealed: bool):
@@ -384,14 +390,18 @@ def _next_access_policy(old, require, revoke: bool, sealed: bool):
     pol = dict(old) if isinstance(old, dict) else {}
     issuers = [str(i) for i in (pol.get("issuers") or [])]
     gen = int(pol.get("gen") or 0)
-    on = pol.get("required") is True if require is None else bool(require)
-    if on:
+    was_on = pol.get("required") is True
+    on = was_on if require is None else bool(require)
+    if on and not was_on:
+        # the installation that TURNS keys on becomes an issuer; a later Apply by another editor (a label edit sends
+        # the switch too) never adds itself (review 2026-11-23)
         me = AK.author_issuer()
         if me not in issuers:
             issuers.append(me)
+    if on:
         gen = max(gen, 1)
-        if revoke:
-            gen += 1
+    if revoke and (on or was_on):
+        gen += 1                                  # also when turning keys off: switching back on never revives them
     return {"required": on, "issuers": issuers, "gen": gen}
 
 
@@ -489,10 +499,15 @@ def access_issue_key(body: dict) -> dict:
 def _expiry(value) -> int:
     """An expiry as unix seconds, or "YYYY-MM-DD" = the last second of that day (UTC)."""
     import calendar
-    if isinstance(value, (int, float)) and not isinstance(value, bool):
+    import math
+    if isinstance(value, bool) or value is None:
+        raise VaultError("Choose an expiry date.")
+    if isinstance(value, (int, float)):
+        if isinstance(value, float) and not math.isfinite(value):   # JSON accepts Infinity / NaN: int() -> 500
+            raise VaultError("Choose an expiry date.")
         return int(value)
     try:
-        day = time.strptime(str(value or "").strip(), "%Y-%m-%d")
+        day = time.strptime(str(value).strip(), "%Y-%m-%d")
     except ValueError:
         raise VaultError("Choose an expiry date.") from None
     return calendar.timegm(day) + 86399

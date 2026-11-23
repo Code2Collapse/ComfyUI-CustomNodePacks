@@ -326,6 +326,11 @@ async function withRealValues(output) {
   const copy = structuredClone(output);         // the caller's object keeps placeholders (it may be reused / shown)
   const fill = () => injectLockedValues(copy, { nodeFor: nodeByExecId, valuesFor: (env) => UNLOCKED.get(env.id) ?? null });
   let r = fill();
+  if (r.mismatched.length) {                     // checked before any password is asked; never names a value
+    const n = nodeByExecId(r.mismatched[0].execId);
+    throw new Error(`Run cancelled: locked values sit on a node of another type (${n?.title || r.mismatched[0].nodeType}). ` +
+      "Remove that node or its lock.");
+  }
   if (r.missing.length) {
     const nodes = [...new Set(r.missing.map((m) => nodeByExecId(m.execId)).filter(Boolean))];
     if (!(await unlockDialog(nodes, { forRun: true }))) throw new Error("Run cancelled: locked values need their password.");

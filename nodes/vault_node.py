@@ -958,6 +958,8 @@ class C2C_VaultSealed(C2C_VaultLocked):
                                          "run here. Ask the author to seal it for this install's public key (C2C "
                                          "Vault menu), or open it with the password.")
                     plain = v2.open_with_install_key(vault_payload, private, vault_id=vault_id)
+                    from .secure_subgraph import _check_access_key    # V6-B: same access-key rule as the new vault
+                    _check_access_key(plain, vault_id)
                 elif mode == v2.MODE_SEALED_PORTABLE:
                     plain = v2.open_portable(vault_payload, vault_id=vault_id)
                 else:

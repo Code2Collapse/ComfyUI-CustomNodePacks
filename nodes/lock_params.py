@@ -4,7 +4,8 @@ The front end (js/c2c_lock_params.js) keeps a locked node's values encrypted in 
 only into the one request that queues a prompt, marking each such entry with `_meta.c2c_locked = [input names]`.
 The server has to see the values to run them; this module keeps them out of what it stores or hands out:
 
-  history          PromptQueue.task_done(..., process_item=) is chained: the stored prompt is redacted
+  history          PromptQueue.task_done(..., process_item=) is chained: the stored prompt is redacted, and so are
+                   the locked inputs of an execution_error kept in history['status'] (`current_inputs`)
   hidden PROMPT    DynamicPrompt.get_original_prompt returns a redacted copy (SaveImage's PNG metadata, metadata
                    nodes); execution reads `original_prompt` / get_node directly and is unchanged
   /queue, /api/jobs  get_current_queue / get_current_queue_volatile return redacted copies
@@ -70,6 +71,36 @@ def _redact_item(item):
     return item
 
 
+def _marks(prompt) -> dict:
+    """{node id: [locked input names]} of a prompt."""
+    if not isinstance(prompt, dict):
+        return {}
+    return {str(nid): names for nid, e in prompt.items() for names in [_marked(e)] if names}
+
+
+def redact_status(status, marks: dict):
+    """An ExecutionStatus whose execution_error messages show "<locked>" for a locked node's inputs: core copies the
+    error (with `current_inputs` = the failing node's real values) into history['status'] apart from the prompt
+    (execution.py 655 / 711 / 1345). The same object when nothing changes; the messages it holds are never mutated."""
+    msgs = getattr(status, "messages", None)
+    if not marks or not msgs or not hasattr(status, "_replace"):
+        return status
+    out, changed = [], False
+    for m in msgs:
+        try:
+            event, data = m
+        except (TypeError, ValueError):
+            out.append(m)
+            continue
+        names = marks.get(str(data.get("node_id"))) if isinstance(data, dict) else None
+        cur = data.get("current_inputs") if names else None
+        if isinstance(cur, dict) and any(n in cur for n in names):
+            data = dict(data, current_inputs={k: ([LOCKED] if k in names else v) for k, v in cur.items()})
+            m, changed = (event, data), True
+        out.append(m)
+    return status._replace(messages=out) if changed else status
+
+
 _MISSING = object()
 
 
@@ -122,9 +153,16 @@ def install(server, dynamic_prompt_cls=None) -> bool:
         if not getattr(q, "__c2c_lock_params", False):
             orig_done = q.task_done
 
-            def task_done(item_id, history_result, status, *a, _orig=orig_done, **k):
+            def task_done(item_id, history_result, status, *a, _orig=orig_done, _q=q, **k):
                 core = k.pop("process_item", a[0] if a else None)
                 rest = a[1:] if a else ()
+                try:
+                    running = getattr(_q, "currently_running", None) or {}
+                    item = running.get(item_id)
+                    marks = _marks(item[2]) if isinstance(item, (list, tuple)) and len(item) > 2 else {}
+                    status = redact_status(status, marks)
+                except Exception:  # noqa: BLE001
+                    log.warning("C2C lock parameters: error-status redaction failed", exc_info=True)
 
                 def process_item(item, _core=core):
                     item = _core(item) if _core is not None else item
