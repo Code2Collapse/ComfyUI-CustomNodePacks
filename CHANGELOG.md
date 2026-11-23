@@ -2,6 +2,20 @@
 
 All notable changes to ComfyUI-CustomNodePacks are documented here.
 
+## 2.0.0 – 2026-11-23
+
+First Comfy Registry release since 1.30.3. Highlights since then (details in the entries below and in README.md):
+
+- **C2C Vault**: lock a selection in one step (Ctrl+Shift+L, toolbox, node / canvas menu, groups), a redesigned Vault
+  UI, failed-password lockout on open / manage access, two-factor setup answers only this machine.
+- **Node Identity**: admin-controlled title visibility and deterministic semantic node names (display title only).
+- **Consolidation**: duplicate mask / matting / editor nodes merged into fewer, stronger nodes; saved workflows migrate
+  automatically on load.
+- **Two or more new features per node** across masks, segmentation, inpaint, tiling, loaders, video, diagnostics.
+- **Tooltips** on every input and output; NODE_REFERENCE generated from the live registration.
+- **Fixes**: Control AOV depth sizes, ONYX post_refine, frequency filters under --cpu, token badge no longer breaks
+  re-queue caching, and many more.
+
 ## Unreleased – 2026-11-02 (Workflow Issues: no false "not connected" on dropdowns, L9.98)
 
 - **The fault.** On any graph with newer-style (V3) nodes, the **⚠ N workflow issues** button listed every dropdown
