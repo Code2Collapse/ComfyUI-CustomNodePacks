@@ -6,7 +6,7 @@ All notable changes to ComfyUI-CustomNodePacks are documented here.
 
 First Comfy Registry release since 1.30.3. Highlights since then (details in the entries below and in README.md):
 
-- **C2C Vault**: lock a selection in one step (Ctrl+Shift+L, toolbox, node / canvas menu, groups), a redesigned Vault
+- **C2C Vault**: lock a selection in one step (Alt+Shift+L, toolbox, node / canvas menu, groups), a redesigned Vault
   UI, failed-password lockout on open / manage access, two-factor setup answers only this machine.
 - **Node Identity**: admin-controlled title visibility and deterministic semantic node names (display title only).
 - **Consolidation**: duplicate mask / matting / editor nodes merged into fewer, stronger nodes; saved workflows migrate

@@ -27,7 +27,7 @@ You do not need to make a subgraph first: the vault does that for you, in the sa
 
 1. Select the nodes - or select a group to protect everything inside it.
 2. Do one of these (they all open the same dialog):
-   - press **Ctrl+Shift+L**;
+   - press **Alt+Shift+L**;
    - click the lock button in the selection toolbox above the selection;
    - right-click one of the selected nodes (or an empty spot of the canvas) and choose
      **🔒 Lock as C2C Vault (password to run)…** or **🔒 Seal as C2C Vault (authorized installations)…**.
