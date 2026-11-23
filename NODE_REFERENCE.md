@@ -138,8 +138,8 @@ Regenerate them after changing any node's inputs, outputs or source header:
   - [Mask + Matting](#maskopsmec)
   - [Mask Refiner](#maskrefinemec)
 - **🐺 C2C/🧰 Core/Plate** (2)
-  - [PAR Desqueeze (anamorphic → square px)](#pardesqueezemec)
-  - [PAR Resqueeze (back to plate)](#parresqueezemec)
+  - [PAR Desqueeze (C2C, anamorphic → square px)](#pardesqueezemec)
+  - [PAR Resqueeze (C2C, back to plate)](#parresqueezemec)
 - **🐺 C2C/🧰 Core/Preview** (2)
   - [Video Comparer — Player + Wipe/Diff/Scopes](#videocomparerc2c)
   - [Video Frame Player](#videoframeplayermec)
@@ -2837,7 +2837,7 @@ Unified, training-free mask refinement. Toggle each stage on or off and chain th
 
 ### PARDesqueezeMEC
 
-**Shown in the menu as:** PAR Desqueeze (anamorphic → square px)
+**Shown in the menu as:** PAR Desqueeze (C2C, anamorphic → square px)
 
 Convert an anamorphic plate to SQUARE pixels before AI processing (Nuke: 4448x3840 @ PAR 1.7266 → 7680x3840 at 2:1). Wire par_info into PARResqueezeMEC to restore the original geometry losslessly.
 
@@ -2875,7 +2875,7 @@ Convert an anamorphic plate to SQUARE pixels before AI processing (Nuke: 4448x38
 
 ### PARResqueezeMEC
 
-**Shown in the menu as:** PAR Resqueeze (back to plate)
+**Shown in the menu as:** PAR Resqueeze (C2C, back to plate)
 
 Return an AI-processed square-pixel frame to the plate's original pixel dimensions (PAR metadata is reapplied in Nuke). Wire par_info from PARDesqueezeMEC — the round trip restores the exact original W×H even if the AI changed resolution.
 

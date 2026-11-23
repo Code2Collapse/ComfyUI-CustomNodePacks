@@ -31,7 +31,7 @@ pixels are resampled on the way there and back, so they are not bit-identical. W
 
 ## PAR Desqueeze (`PARDesqueezeMEC`)
 
-**Menu:** 🐺 C2C/🧰 Core/Plate, shown as "PAR Desqueeze (anamorphic → square px)" ·
+**Menu:** 🐺 C2C/🧰 Core/Plate, shown as "PAR Desqueeze (C2C, anamorphic → square px)" ·
 **Parameters:** [NODE_REFERENCE](../NODE_REFERENCE.md#pardesqueezemec)
 
 ### What it is for
@@ -80,7 +80,7 @@ to leave in a template graph.
 
 ## PAR Resqueeze (`PARResqueezeMEC`)
 
-**Menu:** 🐺 C2C/🧰 Core/Plate, shown as "PAR Resqueeze (back to plate)" ·
+**Menu:** 🐺 C2C/🧰 Core/Plate, shown as "PAR Resqueeze (C2C, back to plate)" ·
 **Parameters:** [NODE_REFERENCE](../NODE_REFERENCE.md#parresqueezemec)
 
 ### What it is for

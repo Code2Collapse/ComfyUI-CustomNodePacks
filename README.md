@@ -415,8 +415,8 @@ CustomNodePacks registers **101 nodes** (86 when ComfyUI-OmniScale is installed:
 
 | Node | id | What it does |
 |---|---|---|
-| PAR Desqueeze (anamorphic → square px) | [`PARDesqueezeMEC`](NODE_REFERENCE.md#pardesqueezemec) | Convert an anamorphic plate to SQUARE pixels before AI processing (Nuke: 4448x3840 @ PAR 1.7266 → 7680x3840 at 2:1). |
-| PAR Resqueeze (back to plate) | [`PARResqueezeMEC`](NODE_REFERENCE.md#parresqueezemec) | Return an AI-processed square-pixel frame to the plate's original pixel dimensions (PAR metadata is reapplied in Nuke). |
+| PAR Desqueeze (C2C, anamorphic → square px) | [`PARDesqueezeMEC`](NODE_REFERENCE.md#pardesqueezemec) | Convert an anamorphic plate to SQUARE pixels before AI processing (Nuke: 4448x3840 @ PAR 1.7266 → 7680x3840 at 2:1). |
+| PAR Resqueeze (C2C, back to plate) | [`PARResqueezeMEC`](NODE_REFERENCE.md#parresqueezemec) | Return an AI-processed square-pixel frame to the plate's original pixel dimensions (PAR metadata is reapplied in Nuke). |
 
 ### 🐺 C2C/🧰 Core/Preview
 

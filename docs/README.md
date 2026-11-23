@@ -199,8 +199,8 @@ Deprecated, kept so saved workflows load. No guide: each has a migration page wi
 
 | Node | id | Guide | Parameters |
 |---|---|---|---|
-| PAR Desqueeze (anamorphic → square px) | `PARDesqueezeMEC` | [anamorphic-par](./anamorphic-par.md#par-desqueeze-pardesqueezemec) | [ref](../NODE_REFERENCE.md#pardesqueezemec) |
-| PAR Resqueeze (back to plate) | `PARResqueezeMEC` | [anamorphic-par](./anamorphic-par.md#par-resqueeze-parresqueezemec) | [ref](../NODE_REFERENCE.md#parresqueezemec) |
+| PAR Desqueeze (C2C, anamorphic → square px) | `PARDesqueezeMEC` | [anamorphic-par](./anamorphic-par.md#par-desqueeze-pardesqueezemec) | [ref](../NODE_REFERENCE.md#pardesqueezemec) |
+| PAR Resqueeze (C2C, back to plate) | `PARResqueezeMEC` | [anamorphic-par](./anamorphic-par.md#par-resqueeze-parresqueezemec) | [ref](../NODE_REFERENCE.md#parresqueezemec) |
 
 ### Preview
 

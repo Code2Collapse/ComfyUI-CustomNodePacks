@@ -345,6 +345,6 @@ NODE_CLASS_MAPPINGS = {
     "PARResqueezeMEC": PARResqueezeMEC,
 }
 NODE_DISPLAY_NAME_MAPPINGS = {
-    "PARDesqueezeMEC": "PAR Desqueeze (anamorphic → square px)",
-    "PARResqueezeMEC": "PAR Resqueeze (back to plate)",
+    "PARDesqueezeMEC": "PAR Desqueeze (C2C, anamorphic → square px)",
+    "PARResqueezeMEC": "PAR Resqueeze (C2C, back to plate)",
 }
