@@ -2480,3 +2480,18 @@ ComfyUI's own reroutes (and the SAM / ViT-Matte loaders) keep the graph readable
 
 A complete, auto-generated reference covering every node, return type and widget exposed by this pack lives in [NODE_REFERENCE.md](./NODE_REFERENCE.md). It is regenerated whenever `INPUT_TYPES` change.
 
+
+## Load Video (C2C): IMAGE and LATENT on separate outputs (2026-11-23)
+
+Output 0 is always the frames (IMAGE). The latent has its own output, `latent` (the last one); connect a VAE to fill
+it. Saved workflows that took a latent from output 0 are re-wired to the new output when they load, inside subgraphs
+too, and API prompts are migrated on the server.
+
+## Diagnostics: Masks tab (2026-11-23)
+
+The C2C Diagnostics sidebar has a Masks tab: the latest Mask Temporal / Mask Refine runs with the frames they flagged
+and why, an overlap curve, and Show node. It updates when a run finishes; it never polls.
+
+## Drop-downs fit the panel (2026-11-23)
+
+A drop-down with a long option no longer runs past the node edge.
