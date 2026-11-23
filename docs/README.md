@@ -338,6 +338,26 @@ Deprecated, kept so saved workflows load. No guide: each has a migration page wi
 | [migration/](migration/README.md) | One page per deprecated or removed node, with measured parity |
 | [APP_GATEWAY_DEPLOY](APP_GATEWAY_DEPLOY.md) | Deploying the C2C App Gateway (let others run a workflow without seeing it) |
 
+### Keyboard shortcuts
+
+Every shortcut this pack registers. All of them show in ComfyUI's **Settings ▸ Keybinding** panel, where you can
+change or remove them.
+
+| Keys | What it does |
+|---|---|
+| Alt+Shift+O | Show or hide the OmniBar |
+| Ctrl+Alt+D | Open the Workflow Doctor panel |
+| Ctrl+Alt+H | Open the auto-checkpoint history (earlier versions of this workflow) |
+| Ctrl+Alt+B | Build a workflow from a plain-English description ([ai-spine](ai-spine.md)) |
+| Ctrl+Alt+Shift+B / M / N | Bypass / mute / set back to normal every node of the selected node's type |
+| Alt+Shift+L | Lock the selected nodes or group into a vault |
+| Alt+Shift+T | Hide or show every node title ([node-identity](node-identity.md)) |
+| Alt+A | Smart align the selected nodes ([align-and-guides](align-and-guides.md)) |
+| Alt+Shift+← / → / ↑ / ↓ | Align left / right / top / bottom |
+| Alt+Shift+X / Alt+Shift+Y | Centre on a vertical / horizontal line |
+| Alt+Shift+H / Alt+Shift+V | Distribute horizontally / vertically |
+| Alt+Shift+G | Turn the smart drag guides on or off |
+
 ### Design records (written before the code; kept as history)
 
 [save-video-v2](save-video-v2.md), [LOAD_SAVE_VIDEO_CM_DESIGN](LOAD_SAVE_VIDEO_CM_DESIGN.md),
