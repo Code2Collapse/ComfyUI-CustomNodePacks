@@ -9,7 +9,7 @@
  */
 import { app } from "../../scripts/app.js";
 import { api } from "../../scripts/api.js";
-import { keepWorkflowLinkSlots, migrateWorkflow } from "./_c2c_migrate_core.js";
+import { keepWorkflowLinkSlots, migrateWorkflow, splitWorkflowOutputs } from "./_c2c_migrate_core.js";
 
 const SETTING = "c2c.migrate.auto";
 // L7.65 P08: survivors whose saved inputs can sit on other slots than the current definition's (Inpaint Stitch Pro
@@ -113,6 +113,17 @@ app.registerExtension({
             if (moved.length) console.info(`[C2C] links kept on their inputs: ${moved.join("; ")}`);
         } catch (err) {
             console.warn("[C2C] link slot check skipped:", err);
+        }
+        // owner 2026-11-23: Load Video (C2C)'s latent left output 0 (now IMAGE only) for its own output 10. Saved links
+        // from 0 into a LATENT input move there - after the migration above (a Load Video Path becomes a Load Video on
+        // output 0), with the setting off too: without it an old save's latent link would land on an IMAGE output
+        // (no describe: creating a Load Video here would run its UI; configure takes each output's name and type from
+        // the definition by index, so the padded entries need only their links)
+        try {
+            const moved = splitWorkflowOutputs(graphData);
+            if (moved.length) console.info(`[C2C] Load Video latent links moved to output 10: ${moved.join("; ")}`);
+        } catch (err) {
+            console.warn("[C2C] Load Video latent split skipped:", err);
         }
     },
 });

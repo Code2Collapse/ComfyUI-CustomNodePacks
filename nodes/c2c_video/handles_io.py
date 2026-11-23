@@ -239,6 +239,8 @@ def export_range(images, audio, range_in: int, range_out: int, fps: float):
 # record of the run that produced the cached frames, and a record of different settings is never used.
 
 LOADER_CLASSES = ("LoadVideoC2C", "LoadVideoPathC2C")
+# a Load's frames: output 0 (IMAGE) or output 10 (the VAE-encoded latent, owner 2026-11-23: never mixed into 0)
+FRAME_SLOTS = (0, 10)
 _LOADS: "OrderedDict[str, tuple[str, dict]]" = OrderedDict()
 _LOADS_MAX = 64
 MAX_HOPS = 256
@@ -308,7 +310,7 @@ def trace_loader(prompt: dict, start_id: Any, input_name: str, kind: str = "IMAG
             return None, f"node {src} is not in the prompt"
         cls = str(n.get("class_type") or "")
         if cls in LOADER_CLASSES:
-            return (src, "") if slot == 0 else (None, f"Load Video #{src} output {slot} is not its frames")
+            return (src, "") if slot in FRAME_SLOTS else (None, f"Load Video #{src} output {slot} is not its frames")
         ins = n.get("inputs") or {}
         nxt = None
         for name in _typed_input_names(cls, kind):
@@ -344,7 +346,7 @@ def upstream_loads(prompt: dict, start_id: Any, input_name: str, kind: str = "IM
             continue
         cls = str(n.get("class_type") or "")
         if cls in LOADER_CLASSES:
-            if int(link[1]) == 0 and src not in found:
+            if int(link[1]) in FRAME_SLOTS and src not in found:
                 found.append(src)
             continue
         ins = n.get("inputs") or {}

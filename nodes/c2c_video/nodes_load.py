@@ -611,6 +611,7 @@ def note_skipped(unique_id: str | None, skipped: tuple[int, ...]) -> None:
 
 
 _EXACT = DecoderPlan("exact", "exact")
+LATENT_SLOT = 10                    # Load Video (C2C)'s latent output (owner 2026-11-23: never mixed into IMAGE)
 
 
 def _with_fallback(h: C2CVideo, plan: DecoderPlan | None, work):
@@ -861,11 +862,18 @@ def execute_video_load(
     frame_offset: int = 0,
     missing_frames: str = "skip (as before)",
     edge_policy: str = "hold",
-) -> tuple[Any, int, LazyAudio | None, dict, C2CVideo, Any | None, str, str, Any, str]:
-    """(IMAGE or LATENT, frame_count, audio, video_info, video, mask, info, frame_map, exr_passes, metadata). The
+) -> tuple[Any, int, LazyAudio | None, dict, C2CVideo, Any | None, str, str, Any, str, dict | None]:
+    """(IMAGE, frame_count, audio, video_info, video, mask, info, frame_map, exr_passes, metadata, latent). The
     defaults of every input added after the first release reproduce the old behaviour (decoder "auto" only switches
-    readers where the frames are identical; missing frames "skip" as the old sequence reader did)."""
+    readers where the frames are identical; missing frames "skip" as the old sequence reader did). IMAGE is always
+    decoded frames; the latent (owner 2026-11-23: separate slots, never mixed) is its own output and needs a VAE."""
     import json
+
+    # an unknown prompt (None) counts as "everything linked" for decoding, never as a latent asked for without a VAE
+    if vae is None and prompt is not None and unique_id is not None:
+        if is_output_linked(prompt, unique_id, LATENT_SLOT):
+            raise ValueError(f"{node_name}: the latent output is connected but no VAE is - connect a VAE to use the "
+                             "latent output (or read the IMAGE output instead).")
 
     hopt = dict(handles or {})
     hmode = str(hopt.get("mode") or "off")
@@ -933,7 +941,9 @@ def execute_video_load(
     count = len(loaded)
     needs_image = is_output_linked(prompt, unique_id, 0)
     needs_mask = is_output_linked(prompt, unique_id, 5)
-    plan = plan_decoder(loaded, decoder, cuda=device_is_cuda()) if (needs_image or needs_mask) else None
+    needs_latent = vae is not None and is_output_linked(prompt, unique_id, LATENT_SLOT)
+    decode = needs_image or needs_mask
+    plan = plan_decoder(loaded, decoder, cuda=device_is_cuda()) if (decode or needs_latent) else None
     numbers = MEDIA.source_numbers(raw)
     frame_map = LEDGER.new(list(loaded.selected_indices()), fps=Fraction(loaded.fps).limit_denominator(1_000_000),
                            path=str(getattr(raw.source, "path", "") or getattr(raw.source, "pattern", "")),
@@ -962,20 +972,27 @@ def execute_video_load(
             summary["colour"] = colour.record
         return json.dumps(summary, indent=2)
 
-    note_skipped(unique_id, tuple(s for s, needed in ((0, needs_image), (5, needs_mask)) if not needed))
+    # without a VAE the latent output is always None, so it is never a skipped decode (a full decode stays cached)
+    note_skipped(unique_id, tuple(s for s, needed in ((0, needs_image), (5, needs_mask),
+                                                      (LATENT_SLOT, needs_latent or vae is None)) if not needed))
     tail = (json.dumps(frame_map), passes, metadata)
-    if not (needs_image or needs_mask):
-        return (None, count, audio, video_info, loaded, None, info(None)) + tail
-    if vae is not None and needs_image:
-        latent, used = encode_with_plan(loaded, vae, plan, colour)
-        return (latent, count, audio, video_info, loaded, None, info(used)) + tail
-    check_image_budget(node_name, count, loaded.width, loaded.height, loaded.has_alpha)
-    image, mask, used = decode_with_plan(loaded, plan, colour)
+    if not (decode or needs_latent):
+        return (None, count, audio, video_info, loaded, None, info(None)) + tail + (None,)
+    image = mask = latent = None
+    used = plan
+    if decode:
+        check_image_budget(node_name, count, loaded.width, loaded.height, loaded.has_alpha)
+        image, mask, used = decode_with_plan(loaded, plan, colour)
+    if needs_latent:
+        if image is not None:                       # decoded once: encode exactly those (colour-managed) frames
+            latent = _encode_chunks(loaded, vae, (image[i:i + _CHUNK].numpy() for i in range(0, count, _CHUNK)))
+        else:
+            latent, used = encode_with_plan(loaded, vae, plan, colour)
     if not needs_image:
         image = None
     if not needs_mask:
         mask = None
-    return (image, count, audio, video_info, loaded, mask, info(used)) + tail
+    return (image, count, audio, video_info, loaded, mask, info(used)) + tail + (latent,)
 
 
 def media_summary(raw: C2CVideo, loaded: C2CVideo, facts, timeline, *, data_layer: bool = False) -> dict[str, Any]:
@@ -1268,7 +1285,7 @@ class LoadVideoC2C:
                 "select_every_nth": ("INT", _widget("Keep every Nth frame.", default=1, min=1, max=100_000)),
             },
             "optional": {
-                "vae": ("VAE", _widget("Encode to LATENT instead of IMAGE.")),
+                "vae": ("VAE", _widget("Connect to fill the latent output.")),
                 "format": (FORMAT_CHOICES, _widget("Model preset (frame grid / dim multiple).", default="None")),
                 "crop_x": ("FLOAT", _widget(CROP_TIP, default=0.0, min=0.0, max=1.0, step=0.001)),
                 "crop_y": ("FLOAT", _widget(CROP_TIP, default=0.0, min=0.0, max=1.0, step=0.001)),
@@ -1318,22 +1335,29 @@ class LoadVideoC2C:
             "hidden": {"prompt": "PROMPT", "unique_id": "UNIQUE_ID"},
         }
 
-    # outputs 7-9 appended (L9.89): saved links to 0-6 keep their meaning; the info output is the MEDIA_INFO
-    RETURN_TYPES = ("IMAGE,LATENT", "INT", "AUDIO", "VHS_VIDEOINFO", "C2C_VIDEO", "MASK", "STRING", "STRING",
-                    "C2C_EXR_PASSES", "STRING")
+    # outputs 7-9 appended (L9.89): saved links to 0-6 keep their meaning; the info output is the MEDIA_INFO.
+    # Output 10 (owner 2026-11-23: "always keep separate slots and never mixed"): output 0 was "IMAGE,LATENT" (a LATENT
+    # when a VAE was wired); it is IMAGE only now and the latent has its own slot. Saved links from 0 into a LATENT
+    # input move to 10 on load (js/_c2c_migrate_core.js splitWorkflowOutputs) and in API prompts
+    # (nodes/_legacy_replacements.py split_outputs_api_prompt).
+    RETURN_TYPES = ("IMAGE", "INT", "AUDIO", "VHS_VIDEOINFO", "C2C_VIDEO", "MASK", "STRING", "STRING",
+                    "C2C_EXR_PASSES", "STRING", "LATENT")
     RETURN_NAMES = ("IMAGE", "frame_count", "audio", "video_info", "video", "mask", "info", "frame_map", "exr_passes",
-                    "metadata")
-    OUTPUT_TOOLTIPS = ("The frames (a LATENT when a VAE is connected).", "Frames loaded.", "The audio of the loaded "
+                    "metadata", "latent")
+    OUTPUT_TOOLTIPS = ("The frames (always IMAGE, with or without a VAE).", "Frames loaded.", "The audio of the loaded "
                        "frames.", "Source and loaded numbers (VHS-compatible).", "The lazy media handle: nothing "
                        "decoded until a node reads a window.", "1 - alpha, when the source has alpha.", "MEDIA_INFO: "
                        "what the source is and exactly what loaded (JSON).", "Output frame -> source frame and its "
                        "frame NUMBER (h3.frame_ledger v1.1 JSON; -1 = a black frame).", "Every EXR layer, lazily "
-                       "(empty for other sources).", "The source's header / container metadata (JSON).")
+                       "(empty for other sources).", "The source's header / container metadata (JSON).",
+                       "LATENT: the frames encoded with the connected VAE (empty without a VAE; connecting this "
+                       "without a VAE is an error).")
     FUNCTION = "load_video"
     CATEGORY = CATEGORY
     DESCRIPTION = ("Load a video, an image sequence or an EXR sequence as frames - streamed, not decoded all at once - "
                    "with VHS-style frame rate, size, cap, skip and every-Nth controls, audio, alpha as a mask, and a "
-                   "frame map back to the source frame numbers. With a VAE connected it returns a LATENT.")
+                   "frame map back to the source frame numbers. Connect a VAE to also get the frames encoded on the "
+                   "latent output; IMAGE stays the frames.")
 
     def load_video(
         self,
@@ -1425,7 +1449,8 @@ class LoadVideoC2C:
     def IS_CHANGED(cls, video, **kwargs):
         path = node_path(video, kwargs.get("location"), kwargs.get("path"))
         return (is_changed_source(path, kwargs.get("source_mode")) + "|"
-                + decode_links_token(kwargs.get("unique_id"), (0, 5)) + colour_token(path, kwargs.get("colorspace_in")))
+                + decode_links_token(kwargs.get("unique_id"), (0, 5, LATENT_SLOT))
+                + colour_token(path, kwargs.get("colorspace_in")))
 
     @classmethod
     def VALIDATE_INPUTS(cls, video, location="input folder", path="", source_mode="auto"):

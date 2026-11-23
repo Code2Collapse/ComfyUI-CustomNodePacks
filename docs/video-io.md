@@ -8,7 +8,7 @@ AV Handles does the handle part as a separate node, for frames that do not come 
 
 | Node | Use it to |
 |---|---|
-| [Load Video (C2C)](#load-video-c2c-loadvideoc2c) | Load a movie, image, image sequence or EXR sequence as frames, audio, mask, or a LATENT |
+| [Load Video (C2C)](#load-video-c2c-loadvideoc2c) | Load a movie, image, image sequence or EXR sequence as frames, audio, mask, and (with a VAE) a LATENT |
 | [Load Images Path (C2C)](#load-images-path-c2c-loadimagespathc2c) | Load every image of one folder, in name order, with a cap / skip / every-Nth |
 | [Video Info (C2C)](#video-info-c2c-videoinfoc2c) | Turn a loader's `video_info` into numbers (fps, frame count, size) |
 | [Save Video (C2C)](#save-video-c2c-savevideoc2c) | Write H.264 / H.265 / ProRes / DNxHR / FFV1 / WebM / GIF / WebP or an image sequence |
@@ -56,7 +56,8 @@ Load Video (C2C) ──IMAGE──────► your graph ──► Save Vide
                  (video_info is optional: Save finds this Load on its own)
 
 With a VAE:
-VAE Loader ──vae──► Load Video (C2C) ──IMAGE (a LATENT now)──► sampler
+VAE Loader ──vae──► Load Video (C2C) ──latent (output 10)──► sampler
+                                     ──IMAGE (still the frames)──► preview / anything that takes IMAGE
 ```
 
 ### Key controls
@@ -79,7 +80,12 @@ VAE Loader ──vae──► Load Video (C2C) ──IMAGE (a LATENT now)──�
 
 ### VAE: loading straight to a LATENT
 
-Connect a `vae` and the first output carries a LATENT instead of IMAGE (the `mask` output is then empty).
+Connect a `vae` and read the `latent` output (the last one, output 10). IMAGE and LATENT are separate outputs and never
+mixed (owner 2026-11-23): `IMAGE` is always the frames, with or without a VAE, and `mask` still works. Only what is
+connected is made: `latent` alone encodes without keeping the IMAGE frames; IMAGE and `latent` together decode once and
+encode those same frames. Connecting `latent` without a VAE stops with "connect a VAE to use the latent output".
+Workflows saved before 2026-11-23 that read the latent from the first output load with that link moved to `latent`
+(the front end on load, and the server for API prompts; decided by the input it feeds being a LATENT input).
 
 - **Wan 2.1 / Wan 2.2 video VAE** (2026-11-19, 0a0579c): the frames are fed to the encoder while they stream in,
   in the same steps core uses, with one causal cache. Untiled, the latent is identical to core's own VAE Encode
@@ -104,7 +110,7 @@ Connect a `vae` and the first output carries a LATENT instead of IMAGE (the `mas
   frame). `frame_offset` shifts the reported numbers only.
 - `exr_passes`: every EXR layer, read lazily. `metadata` (JSON): the header or container tags.
 
-IMAGE and MASK are decoded only when something reads them. With only `video`, `info` or `frame_count` connected,
+IMAGE, MASK and the latent are made only when something reads them. With only `video`, `info` or `frame_count` connected,
 nothing is decoded.
 
 ### Common mistakes

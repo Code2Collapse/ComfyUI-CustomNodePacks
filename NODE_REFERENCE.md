@@ -5072,7 +5072,7 @@ Load a folder of numbered images as frames, in name order, with a cap, a skip an
 
 **Shown in the menu as:** Load Video (C2C)
 
-Load a video, an image sequence or an EXR sequence as frames - streamed, not decoded all at once - with VHS-style frame rate, size, cap, skip and every-Nth controls, audio, alpha as a mask, and a frame map back to the source frame numbers. With a VAE connected it returns a LATENT.
+Load a video, an image sequence or an EXR sequence as frames - streamed, not decoded all at once - with VHS-style frame rate, size, cap, skip and every-Nth controls, audio, alpha as a mask, and a frame map back to the source frame numbers. Connect a VAE to also get the frames encoded on the latent output; IMAGE stays the frames.
 
 **Source:** `ComfyUI-CustomNodePacks/nodes/c2c_video/nodes_load.py`  
 **Provenance:** ComfyUI-4K-Video-Save-Load — HallettVisual (Matthew Hallett) (https://github.com/HallettVisual/ComfyUI-4K-Video-Save-Load) - per CREDITS.md
@@ -5093,7 +5093,7 @@ Load a video, an image sequence or an EXR sequence as frames - streamed, not dec
 
 | Parameter | Type | Constraints | What it does |
 |---|---|---|---|
-| `vae` | `VAE` |  | Encode to LATENT instead of IMAGE. |
+| `vae` | `VAE` |  | Connect to fill the latent output. |
 | `format` | choice: `None`, `AnimateDiff`, `Mochi`, `LTXV`, `Hunyuan`, `Cosmos`, `Wan`, `MiniMax H3` | default `"None"` | Model preset (frame grid / dim multiple). |
 | `crop_x` | `FLOAT` | default `0.0`, range 0.0…1.0, step 0.001 | Crop, as a fraction of the frame (x, y, width, height; 0, 0, 1, 1 = no crop). Set it with the Crop tool in the player; custom_width / custom_height then resize the cropped frame. |
 | `crop_y` | `FLOAT` | default `0.0`, range 0.0…1.0, step 0.001 | Crop, as a fraction of the frame (x, y, width, height; 0, 0, 1, 1 = no crop). Set it with the Crop tool in the player; custom_width / custom_height then resize the cropped frame. |
@@ -5131,7 +5131,7 @@ Load a video, an image sequence or an EXR sequence as frames - streamed, not dec
 
 | # | Name | Type | What it is |
 |---|---|---|---|
-| 0 | `IMAGE` | `IMAGE,LATENT` | The frames (a LATENT when a VAE is connected). |
+| 0 | `IMAGE` | `IMAGE` | The frames (always IMAGE, with or without a VAE). |
 | 1 | `frame_count` | `INT` | Frames loaded. |
 | 2 | `audio` | `AUDIO` | The audio of the loaded frames. |
 | 3 | `video_info` | `VHS_VIDEOINFO` | Source and loaded numbers (VHS-compatible). |
@@ -5141,6 +5141,7 @@ Load a video, an image sequence or an EXR sequence as frames - streamed, not dec
 | 7 | `frame_map` | `STRING` | Output frame -> source frame and its frame NUMBER (h3.frame_ledger v1.1 JSON; -1 = a black frame). |
 | 8 | `exr_passes` | `C2C_EXR_PASSES` | Every EXR layer, lazily (empty for other sources). |
 | 9 | `metadata` | `STRING` | The source's header / container metadata (JSON). |
+| 10 | `latent` | `LATENT` | LATENT: the frames encoded with the connected VAE (empty without a VAE; connecting this without a VAE is an error). |
 
 
 ---
