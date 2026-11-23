@@ -1269,3 +1269,38 @@ NODE_DISPLAY_NAME_MAPPINGS = {
     "MagnificLibraryReference": "OmniScale Library Reference",
     "MagnificMetadata": "OmniScale Metadata (unpack)",
 }
+
+# One-sentence node descriptions (shown in the node library and the node's help). Set here, in one table, so the
+# classes above stay as they are; every sentence states what the node does in this file, nothing more.
+_DESCRIPTIONS = {
+    MagnificSaveTo: "Pick the project (and optionally a folder) your new creations are stored in; leave it "
+                    "unconnected and results go to your Personal project.",
+    MagnificLibraryReference: "Pick a Library asset (character, style, element or location) from your own or the "
+                              "public catalog to guide a generation; chain several through the chain socket.",
+    MagnificGenerateImage: "Generate an image from a prompt on your signed-in account; resolution choices follow "
+                           "the chosen model.",
+    MagnificUpscaleImage: "Upscale an image 2x to 16x: creative invents new detail, precision stays faithful to "
+                          "the input.",
+    MagnificStockSearch: "Search stock images and return one result, picked by index or at random; the info "
+                         "output lists what else matched.",
+    MagnificGenerateVideo: "Generate a video from a prompt (and optional start image); duration, resolution and "
+                           "aspect ratio follow the chosen model.",
+    MagnificUpscaleVideo: "Upscale a video clip (creative, precision or topaz mode), optionally raising the frame "
+                          "rate; preview runs only 12 frames.",
+    MagnificGenerateMusic: "Generate music from a description (genre, mood, instruments, lyrics), with or without "
+                           "vocals.",
+    MagnificVoiceover: "Speak the given text with a voice from your account (text to speech).",
+    MagnificSkinEnhancer: "Add natural skin detail to a portrait: faithful keeps the face as it is, creative and "
+                          "flexible change more.",
+    MagnificRemoveBackground: "Cut the subject out of an image; returns the cutout and its MASK.",
+    MagnificRetouch: "Edit only the masked area of an image: replace it with what the prompt says, or erase it.",
+    MagnificStockPicker: "Search stock images and pick one from a thumbnail grid; the clicked image becomes the "
+                         "IMAGE output.",
+    MagnificCreationPicker: "Browse a project or folder and reuse one of your earlier creations (image, video or "
+                            "audio, by content_type); the picked one fills the matching output.",
+    MagnificMetadata: "Unpack a result's metadata into plain outputs: model, prompt, seed, creation id, tool and "
+                      "url.",
+}
+for _cls, _text in _DESCRIPTIONS.items():
+    if not getattr(_cls, "DESCRIPTION", None):
+        _cls.DESCRIPTION = _text
