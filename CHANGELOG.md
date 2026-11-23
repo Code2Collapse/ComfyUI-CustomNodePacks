@@ -2,11 +2,23 @@
 
 All notable changes to ComfyUI-CustomNodePacks are documented here.
 
+## Unreleased
+
+- **Settings > C2C rebuilt.** About 70 of the ~190 C2C settings could not be reached in the Settings dialog: they were
+  filed under one shared two-level category and the dialog drew one row per group. Every setting now has its own row,
+  in 18 task groups (Appearance, Canvas & wires, Editing & shortcuts, Performance & memory, Previews & video, ...) with
+  plain names, and a feature's switches sit together ("Undo panel: keep graph snapshots / snapshots kept / show
+  button"). Setting ids and saved values are unchanged. The duplicate Overlays switches for the Auto-checkpoint and
+  Workflow doctor buttons are folded into each feature's own switch.
+- **Shortcuts no longer collide with core or popular packs.** Lock selection as C2C Vault is **Alt+Shift+L**
+  (Ctrl+Shift+L belonged to KJNodes and the frontend refused ours with an error at start-up). The Bulk Value Editor is
+  **Alt+Shift+E**: it used to swallow core's Ctrl+Shift+E, so Convert to Subgraph did nothing while it was enabled.
+
 ## 2.0.0 – 2026-11-23
 
 First Comfy Registry release since 1.30.3. Highlights since then (details in the entries below and in README.md):
 
-- **C2C Vault**: lock a selection in one step (Ctrl+Shift+L, toolbox, node / canvas menu, groups), a redesigned Vault
+- **C2C Vault**: lock a selection in one step (Alt+Shift+L, toolbox, node / canvas menu, groups), a redesigned Vault
   UI, failed-password lockout on open / manage access, two-factor setup answers only this machine.
 - **Node Identity**: admin-controlled title visibility and deterministic semantic node names (display title only).
 - **Consolidation**: duplicate mask / matting / editor nodes merged into fewer, stronger nodes; saved workflows migrate

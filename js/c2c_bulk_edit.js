@@ -2,7 +2,8 @@
 // ---------------------------------------------------------------------
 // What it does:
 //   • Select 2+ nodes of the SAME class (or compatible classes) →
-//     press Ctrl+Shift+E (or right-click → "Bulk-edit widgets…") →
+//     press Alt+Shift+E (or right-click → "Bulk-edit widgets…") →
+//     (not Ctrl+Shift+E: that is core's Convert to Subgraph; this handler used to swallow it)
 //     floating panel shows the INTERSECTION of widgets across the
 //     selection. Edit a value here → applied to every selected node.
 //   • Numeric, text, combo, boolean widgets all supported.
@@ -230,8 +231,10 @@ function isEditingField() {
 }
 
 function onKey(ev) {
-    if (!(ev.ctrlKey || ev.metaKey) || !ev.shiftKey) return;
-    if (ev.key !== "e" && ev.key !== "E") return;
+    // Alt+Shift+E. Ctrl+Shift+E belongs to core (Convert to Subgraph) and must reach it. ev.code, because
+    // Alt+Shift changes ev.key on some layouts (macOS Option types a character).
+    if (!ev.altKey || !ev.shiftKey || ev.ctrlKey || ev.metaKey) return;
+    if (ev.code !== "KeyE" && ev.key !== "e" && ev.key !== "E") return;
     if (isEditingField()) return;
     try {
         if (app.ui?.settings?.getSettingValue?.(SETTING_ID, true) === false) return;
@@ -260,7 +263,7 @@ app.registerExtension({
     name: "C2C.BulkEdit",
     settings: [{
         id: SETTING_ID,
-        name: "Bulk Value Editor (Ctrl+Shift+E)",
+        name: "Bulk Value Editor (Alt+Shift+E)",
         type: "boolean", defaultValue: true,
         category: ["c2c", "Editing", "Bulk Edit"],
     }],
@@ -270,6 +273,6 @@ app.registerExtension({
     async setup() {
         window.addEventListener("keydown", onKey, true);
         legacyCanvasMenu("bulk_edit", _mergeCanvasMenuItems);
-        console.log("[C2C.BulkEdit] ready (Ctrl+Shift+E).");
+        console.log("[C2C.BulkEdit] ready (Alt+Shift+E).");
     },
 });

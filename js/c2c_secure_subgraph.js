@@ -1790,11 +1790,13 @@ function lockMenuItems(items) {
 
 app.registerExtension({
   name: "C2C.SecureSubgraph",
-  // V1: one command for the palette, the selection toolbox (js/c2c_vault.js returns it) and Ctrl+Shift+L (core has
-  // Ctrl+Shift+E = Convert to Subgraph; Ctrl+Shift+L is free in frontend 1.53.10 and in every C2C pack)
+  // V1: one command for the palette, the selection toolbox (js/c2c_vault.js returns it) and Alt+Shift+L ("L" for lock).
+  // Not Ctrl+Shift+L: KJNodes binds it (ToggleForceShowSetGetLinks) and the frontend refuses the duplicate. Not
+  // Ctrl+Alt+<key>: that is AltGr on many European Windows layouts, and Ctrl+Alt+V is the explicit MEC paste
+  // (js/c2c_clipboard.js). Alt+Shift+L is unused by core 1.53.10, KJNodes and every C2C pack (scanned 2026-11-23).
   commands: [{ id: LOCK_CMD, label: "Lock selection as C2C Vault…", icon: "pi pi-lock",
     function: () => lockSelection(app.canvas, null) }],
-  keybindings: [{ combo: { key: "l", ctrl: true, shift: true }, commandId: LOCK_CMD }],
+  keybindings: [{ combo: { key: "l", alt: true, shift: true }, commandId: LOCK_CMD }],
   setup() {
     installGuards();
     app.canvas?.canvas?.addEventListener("litegraph:set-graph", onSetGraph);

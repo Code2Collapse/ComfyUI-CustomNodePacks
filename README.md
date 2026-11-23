@@ -636,7 +636,7 @@ In-depth notes on the larger nodes (hand-written; parameters are in NODE_REFEREN
   already have. See [docs/vault_howto.md](docs/vault_howto.md) sections 8 and 9.
 - **C2C Vault hardening** (2026-11-21): opening a vault for editing or managing its access now counts wrong passwords (5 tries, then a 5-minute wait), the same as running a Locked vault; two-factor setup and reset answer only the ComfyUI page on this machine; a renamed vault keeps its name when you open it.
 - **C2C Vault: lock a selection in one step** (2026-11-20, front end only, saved vaults unchanged): select nodes or
-  a group and press **Ctrl+Shift+L**, the lock button in the selection toolbox, or right-click a node and choose
+  a group and press **Alt+Shift+L**, the lock button in the selection toolbox, or right-click a node and choose
   **Lock as C2C Vault** / **Seal as C2C Vault**. One dialog names the vault, picks who can run it and takes the
   password; the selection becomes a subgraph and is locked in the same undo step (no "Convert to Subgraph" first).
   Every Vault dialog and the vault node's body were redesigned: a status card shows Sealed / Locked / Portable, the
@@ -2104,7 +2104,7 @@ Argon2id). ComfyUI's own scheduler runs the inside, exactly like an ordinary sub
 hidden inputs (NKD's V3 nodes), lists, caching, interrupts and progress all work. The rest of the workflow stays
 ordinary JSON.
 
-**Make one:** select the nodes (or a group) and press **Ctrl+Shift+L**, click the lock button in the selection
+**Make one:** select the nodes (or a group) and press **Alt+Shift+L**, click the lock button in the selection
 toolbox, or right-click one of the selected nodes (or the canvas) and choose **🔒 Seal as C2C Vault** or **🔒 Lock as
 C2C Vault**. The selection is turned into a subgraph and locked in one step. You can also right-click a subgraph node
 and choose **Protect this subgraph as C2C Vault**. One dialog names the vault, shows what each choice means (who can
