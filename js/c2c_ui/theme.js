@@ -243,6 +243,7 @@ const CSS = `
 .c2c-ui .c2c-ui-row,
 .c2c-ui-editor .c2c-ui-row {
   display: flex;
+  min-width: 0;
   align-items: center;
   gap: 8px;
   min-height: 28px;
@@ -295,6 +296,11 @@ const CSS = `
 .c2c-ui .c2c-ui-select,
 .c2c-ui-editor .c2c-ui-select {
   flex: 1;
+  /* A <select> will not shrink below its longest option without these: long
+     option text (OCIO view names) pushed the select past the node edge (L9.309). */
+  min-width: 0;
+  max-width: 100%;
+  text-overflow: ellipsis;
   padding: 4px 8px;
   border-radius: 6px;
   border: 1px solid var(--cu-edge);
