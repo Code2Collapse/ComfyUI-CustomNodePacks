@@ -12,6 +12,7 @@
 //   5. Patterns         Read-only listing of loaded patterns (id/category/priority/source).
 
 import { app } from "../../scripts/app.js";
+import { api } from "../../scripts/api.js";
 import { reportFailure as __c2cReport } from "./_c2c_report.js";
 import { c2cConfirm } from "./_c2c_dialog.js";
 // Lite mode: this is an AMBIENT extension (no node depends on it), so in lite
@@ -1561,11 +1562,163 @@ async function _renderIntegrity(body) {
 // -----------------------------------------------------------------------
 // Tab manager
 // -----------------------------------------------------------------------
+
+// -----------------------------------------------------------------------
+// Masks tab (L9.302): mask integrity reports from Mask Temporal / Mask Refine (GET /c2c/mask_integrity/recent).
+// Event-driven: the server sends "c2c.mask_integrity" once per report; an open tab re-reads the list then.
+// No polling (the old 1.5 s HUD poller was removed in 2a1575b: RAM budget).
+// -----------------------------------------------------------------------
+const MASK_EVENT = "c2c.mask_integrity";
+const _maskViews = new Set();          // open Masks tab bodies -> re-render on the event
+
+function _maskSpark(values) {
+    // IoU with the previous frame, 0..1: a dip is where the mask jumped. SVG strokes take CSS variables (canvas would not).
+    const v = (values || []).filter(Number.isFinite);
+    if (v.length < 2) return null;
+    const W = 220, H = 28;
+    const pts = v.map((y, i) => `${(i / (v.length - 1) * W).toFixed(1)},${(H - Math.max(0, Math.min(1, y)) * H).toFixed(1)}`);
+    const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+    svg.setAttribute("viewBox", `0 0 ${W} ${H}`);
+    svg.setAttribute("preserveAspectRatio", "none");
+    svg.style.cssText = "width:100%;height:28px;display:block;margin-top:4px;";
+    const line = document.createElementNS("http://www.w3.org/2000/svg", "polyline");
+    line.setAttribute("points", pts.join(" "));
+    line.setAttribute("fill", "none");
+    line.setAttribute("stroke", "var(--c2c-blue)");
+    line.setAttribute("stroke-width", "1.5");
+    line.setAttribute("vector-effect", "non-scaling-stroke");
+    const title = document.createElementNS("http://www.w3.org/2000/svg", "title");
+    title.textContent = `Overlap with the previous frame (IoU), lowest ${Math.min(...v).toFixed(2)}`;
+    svg.append(title, line);
+    return svg;
+}
+
+function _goToNode(id) {
+    const g = app.graph;
+    const node = id ? (g?.getNodeById?.(Number(id)) ?? g?.getNodeById?.(id)) : null;
+    if (!node) { _toast(`Node #${id} is not in the open graph (it may sit inside a subgraph).`, "warn"); return; }
+    try {
+        app.canvas.selectNode?.(node);
+        app.canvas.centerOnNode?.(node);
+        app.canvas.setDirty?.(true, true);
+    } catch (e) { __c2cReport("c2c_diagnostics_sidebar", e); }
+}
+
+function _maskCard(r) {
+    const n = r.flagged_count || 0;
+    const card = document.createElement("div");
+    card.className = "mec-diag-card " + (n ? "warn" : "ok");
+    const head = document.createElement("div");
+    head.className = "mec-diag-row";
+    const who = document.createElement("b");
+    who.textContent = String(r.source || "mask").replace(/MEC$/, "");
+    const right = document.createElement("span");
+    right.textContent = n ? `${n} of ${r.B} frames flagged` : `${r.B} frames, none flagged`;
+    head.append(who, right);
+    card.appendChild(head);
+    const meta = document.createElement("div");
+    meta.className = "mec-diag-meta";
+    meta.textContent = _fmtTs(r.ts) + (r.node ? ` · node #${r.node}` : "");
+    card.appendChild(meta);
+    if (n) {
+        const all = r.flagged_frames || [];
+        const fr = document.createElement("div");
+        fr.className = "mec-diag-meta";
+        fr.textContent = "Frames: " + all.slice(0, 40).join(", ") + (all.length > 40 ? " ..." : "");
+        card.appendChild(fr);
+        const reasons = Object.entries(r.reasons || {}).slice(0, 6);
+        if (reasons.length) {
+            const rs = document.createElement("div");
+            rs.className = "mec-diag-meta";
+            rs.textContent = reasons.map(([f, why]) => `${f}: ${Array.isArray(why) ? why.join(", ") : why}`).join(" · ");
+            card.appendChild(rs);
+        }
+    }
+    const spark = _maskSpark(r.iou_prev);
+    if (spark) card.appendChild(spark);
+    if (r.node) {
+        const go = document.createElement("button");
+        go.className = "mec-diag-btn";
+        go.style.marginTop = "4px";
+        go.textContent = "Show node";
+        go.onclick = () => _goToNode(r.node);
+        card.appendChild(go);
+    }
+    return card;
+}
+
+async function _renderMasks(body) {
+    body.innerHTML = "";
+    body.dataset.c2cTab = "mask";
+    _maskViews.add(body);
+
+    const toolbar = document.createElement("div");
+    toolbar.className = "mec-diag-toolbar";
+    const refresh = document.createElement("button");
+    refresh.className = "mec-diag-btn primary";
+    refresh.textContent = "Refresh";
+    const clear = document.createElement("button");
+    clear.className = "mec-diag-btn";
+    clear.textContent = "Clear";
+    const onlyFlagged = document.createElement("label");
+    onlyFlagged.style.cssText = "display:flex;align-items:center;gap:4px;font-size:11px;";
+    const cb = document.createElement("input");
+    cb.type = "checkbox";
+    cb.id = "c2c-diag-mask-flagged";
+    onlyFlagged.append(cb, document.createTextNode("Flagged only"));
+    toolbar.append(refresh, clear, onlyFlagged);
+    const hint = document.createElement("div");
+    hint.className = "mec-diag-meta";
+    hint.style.cssText = "padding:0 2px 6px;";
+    hint.textContent = "Mask Temporal and Mask Refine check each run for frames where the mask's area, position or "
+        + "shape jumps. The latest 16 runs are listed; new runs appear as they finish.";
+    const list = document.createElement("div");
+    body.append(toolbar, hint, list);
+
+    async function load() {
+        const j = await _api("/c2c/mask_integrity/recent?limit=16");
+        list.innerHTML = "";
+        if (!j.success) {
+            list.appendChild(Object.assign(document.createElement("div"),
+                { className: "mec-diag-empty", textContent: `Mask reports unavailable: ${j.message || j.error || "no reply"}` }));
+            return;
+        }
+        let rows = (j.data || []).slice().reverse();
+        if (cb.checked) rows = rows.filter(r => (r.flagged_count || 0) > 0);
+        if (!rows.length) {
+            list.appendChild(Object.assign(document.createElement("div"), {
+                className: "mec-diag-empty",
+                textContent: cb.checked ? "No flagged frames in the latest runs."
+                    : "No mask reports yet. Run Mask Temporal (MEC) or Mask Refine (MEC) on a clip.",
+            }));
+            return;
+        }
+        for (const r of rows) list.appendChild(_maskCard(r));
+    }
+    body._c2cMaskLoad = load;
+    refresh.onclick = load;
+    cb.onchange = load;
+    clear.onclick = async () => {
+        const j = await _api("/c2c/mask_integrity/clear", { method: "POST" });
+        if (j.success) { _toast("Mask reports cleared", "success"); load(); }
+        else _toast("Clear failed: " + (j.message || j.error), "error");
+    };
+    load();
+}
+
+function _onMaskReport() {
+    for (const body of [..._maskViews]) {
+        if (!body.isConnected || body.dataset.c2cTab !== "mask") { _maskViews.delete(body); continue; }
+        body._c2cMaskLoad?.();
+    }
+}
+
 const TABS = [
     { id: "diag",  label: "Diagnostics", render: _renderDiagnostics },
     { id: "stats", label: "Statistics",  render: _renderStatistics },
     { id: "clip",  label: "Clipboard",   render: _renderClipboard  },
     { id: "intg",  label: "Integrity",   render: _renderIntegrity  },
+    { id: "mask",  label: "Masks",       render: _renderMasks      },   // L9.302: mask integrity reports
     { id: "set",   label: "Settings",    render: _renderSettings   },
     { id: "pat",   label: "Patterns",    render: _renderPatterns   },
     { id: "batch", label: "Batching",    render: renderBatchingTable },   // L2.54: Image batching per node
@@ -1704,6 +1857,7 @@ function _mountSidebar(el) {
         active = id;
         for (const t of TABS) buttons[t.id].classList.toggle("active", t.id === id);
         const def = TABS.find(t => t.id === id);
+        delete body.dataset.c2cTab;          // only the Masks tab re-renders on its event
         if (def) def.render(body);
     }
     for (const t of TABS) {
@@ -1736,6 +1890,8 @@ app.registerExtension({
                 type: "custom",
                 render(el) { _mountSidebar(el); },
             });
+            // L9.302: one listener for the life of the page; it only re-reads the list while a Masks tab is open
+            api.addEventListener(MASK_EVENT, _onMaskReport);
             console.log("[MEC.diagnostics] sidebar registered (id=mec.diagnostics)");
         } catch (e) {
             console.warn("[MEC.diagnostics] sidebar register failed:", e);
