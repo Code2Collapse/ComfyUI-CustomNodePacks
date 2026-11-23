@@ -296,3 +296,129 @@ export function migrateWorkflow(data, table, isRegistered, describe) {
     out.notes = [...notes].map(([k, v]) => `${k}: ${v}`);
     return out;
 }
+
+/**
+ * Owner 2026-11-23 ("separate image/latent of load video c2c. always keep separate slots and never mixed"): Load Video
+ * (C2C)'s output 0 was "IMAGE,LATENT" (a LATENT when a VAE was wired); it is IMAGE only now and the latent is
+ * output 10.
+ * type -> {from, to, kind, name, fromType}: a saved link from `from` whose READER takes `kind` (and not IMAGE) moves to
+ * `to`; the links that stay on `from` get `fromType` (the saved "IMAGE,LATENT" link type is gone with the mix).
+ * Same rule for API prompts: nodes/_legacy_replacements.py OUTPUT_SPLITS - keep the two in step.
+ */
+export const OUTPUT_SPLITS = { LoadVideoC2C: { from: 0, to: 10, kind: "LATENT", name: "latent", fromType: "IMAGE" } };
+const SUBGRAPH_INPUT_ID = -10;
+const SUBGRAPH_OUTPUT_ID = -20;
+const MAX_DEPTH = 8;
+
+const setLinkType = (l, t) => { if (linkArr(l)) l[5] = t; else l.type = t; };
+const sameId = (a, b) => String(a) === String(b);
+
+/** "LATENT" / "IMAGE" when a slot type names exactly one of them; null for a wildcard, a mix or anything else. */
+function kindOf(type) {
+    const parts = String(type ?? "").split(",").map((s) => s.trim());
+    const lat = parts.includes("LATENT"), img = parts.includes("IMAGE");
+    return lat && !img ? "LATENT" : img && !lat ? "IMAGE" : null;
+}
+
+/** One kind when every reader agrees, else null. */
+const agree = (kinds) => (kinds.length && kinds.every((k) => k && k === kinds[0]) ? kinds[0] : null);
+
+/**
+ * The kind a link's reader takes: the target input's own type; through a subgraph node into the subgraph (what its
+ * inner input feeds); out of a subgraph through its output node (what every instance's output feeds outside).
+ */
+function readerKind(ctx, graph, link, depth) {
+    if (depth > MAX_DEPTH) return null;
+    const tid = L.target(link), ts = L.targetSlot(link);
+    if (sameId(tid, SUBGRAPH_OUTPUT_ID)) {
+        const own = kindOf(graph.outputs?.[ts]?.type);
+        if (own || !graph.id) return own;
+        const kinds = [];
+        for (const g of ctx.graphs) {
+            for (const n of g.nodes || []) {
+                if (n.type !== graph.id) continue;
+                for (const l of g.links || []) {
+                    if (!sameId(L.origin(l), n.id) || L.originSlot(l) !== ts) continue;
+                    kinds.push(readerKind(ctx, g, l, depth + 1));
+                }
+            }
+        }
+        return agree(kinds);
+    }
+    const node = (graph.nodes || []).find((n) => sameId(n.id, tid));
+    if (!node) return null;
+    const inputs = Array.isArray(node.inputs) ? node.inputs : [];
+    const inp = inputs.find((i) => i && i.link != null && sameId(i.link, L.id(link))) ?? inputs[ts];
+    const own = kindOf(inp?.type);
+    if (own) return own;
+    const def = ctx.defs.get(node.type);
+    if (!def) return null;
+    const slot = inp ? inputs.indexOf(inp) : ts;
+    const inner = (def.links || []).filter((l) => sameId(L.origin(l), SUBGRAPH_INPUT_ID) && L.originSlot(l) === slot);
+    return agree(inner.map((l) => readerKind(ctx, def, l, depth + 1)));
+}
+
+/**
+ * Move each OUTPUT_SPLITS link in one graph: the link's origin_slot and type, and the node's outputs[].links (the
+ * outputs list is padded to the new slot: frontend 1.53 configure keeps saved outputs by INDEX and takes each one's
+ * name / type from the definition). Idempotent.
+ */
+function splitGraph(ctx, graph, describe, splits) {
+    const moved = [];
+    if (!graph || !Array.isArray(graph.nodes)) return moved;
+    for (const node of graph.nodes) {
+        const sp = splits[node.type];
+        if (!sp) continue;
+        const onFrom = (graph.links || []).filter((l) => sameId(L.origin(l), node.id) && L.originSlot(l) === sp.from);
+        const readers = onFrom.filter((l) => readerKind(ctx, graph, l, 0) === sp.kind);
+        for (const l of onFrom) if (!readers.includes(l) && sp.fromType) setLinkType(l, sp.fromType);
+        if (!readers.length) continue;
+        const outs = Array.isArray(node.outputs) ? node.outputs : (node.outputs = []);
+        const defOuts = describe?.(node.type)?.outputs || [];
+        for (let i = 0; i <= sp.to; i++) {
+            if (outs[i]) continue;
+            const d = defOuts[i] || (i === sp.to ? { name: sp.name, type: sp.kind } : { name: "", type: "*" });
+            outs[i] = { name: d.name, type: d.type, links: [] };
+        }
+        const to = outs[sp.to];
+        to.links = Array.isArray(to.links) ? to.links : [];
+        to.type = sp.kind;
+        if (!to.name) to.name = sp.name;
+        for (const l of readers) {
+            const id = L.id(l);
+            L.setOriginSlot(l, sp.to);
+            setLinkType(l, sp.kind);
+            const from = outs[sp.from];
+            if (Array.isArray(from?.links)) from.links = from.links.filter((x) => !sameId(x, id));
+            if (!to.links.some((x) => sameId(x, id))) to.links.push(id);
+            moved.push(`${node.type} (#${node.id}) link ${id}: output ${sp.from} -> ${sp.to} (${sp.kind})`);
+        }
+        // a subgraph output fed by this link now carries the split's type
+        if (Array.isArray(graph.outputs)) {
+            for (const l of readers) {
+                if (sameId(L.target(l), SUBGRAPH_OUTPUT_ID) && graph.outputs[L.targetSlot(l)]) {
+                    graph.outputs[L.targetSlot(l)].type = sp.kind;
+                }
+            }
+        }
+    }
+    return moved;
+}
+
+/**
+ * splitGraph on the root graph and every subgraph definition (the reader of a link may sit across a subgraph
+ * boundary, so every graph is visible to every other). Runs after migrateWorkflow (a Load Video Path (C2C) migrated to
+ * Load Video (C2C) on output 0 is split too).
+ * @param {object} data - the serialised workflow
+ * @param {(type: string) => ({outputs: object[]} | null)} [describe]
+ * @param {object} [splits] - OUTPUT_SPLITS
+ * @returns {string[]} one line per link that moved
+ */
+export function splitWorkflowOutputs(data, describe = null, splits = OUTPUT_SPLITS) {
+    const defsList = (data?.definitions?.subgraphs) || [];
+    const graphs = [data, ...defsList].filter(Boolean);
+    const ctx = { graphs, defs: new Map(defsList.filter((d) => d?.id).map((d) => [d.id, d])) };
+    const moved = [];
+    for (const g of graphs) moved.push(...splitGraph(ctx, g, describe, splits));
+    return moved;
+}

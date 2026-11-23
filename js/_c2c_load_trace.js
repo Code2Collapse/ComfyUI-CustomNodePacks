@@ -8,6 +8,9 @@
  */
 
 export const LOADER_TYPES = new Set(["LoadVideoC2C", "LoadVideoPathC2C"]);
+// a Load's frames: output 0 (IMAGE) or output 10 (the VAE-encoded latent; owner 2026-11-23: never mixed into 0) -
+// handles_io.py FRAME_SLOTS
+const FRAME_SLOTS = new Set([0, 10]);
 const MAX_HOPS = 256;
 
 function linkOf(graph, id) {
@@ -109,7 +112,7 @@ export function traceLoads(app, node, inputName = "images", kind = "IMAGE") {
     let o = origin(graph, node, start, parents), why = `${inputName} is not wired`;
     for (let hop = 0; o && hop < MAX_HOPS; hop++) {
         if (LOADER_TYPES.has(o.node.type)) {
-            if (o.slot === 0) out.primary = describe(o, parents);
+            if (FRAME_SLOTS.has(o.slot)) out.primary = describe(o, parents);
             else why = `Load Video output ${o.slot} is not its frames`;
             break;
         }
@@ -127,7 +130,7 @@ export function traceLoads(app, node, inputName = "images", kind = "IMAGE") {
         if (seen.has(key)) continue;
         seen.add(key);
         if (LOADER_TYPES.has(c.node.type)) {
-            if (c.slot === 0 && !found.has(key)) found.set(key, describe(c, parents));
+            if (FRAME_SLOTS.has(c.slot) && !found.has(key)) found.set(key, describe(c, parents));
             continue;
         }
         const ins = typedInputs(c.node, kind).map((i) => origin(c.graph, c.node, i, parents)).filter(Boolean);

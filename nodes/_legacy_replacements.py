@@ -163,6 +163,58 @@ def migrate_api_prompt(prompt: Any, registered: Any = None) -> int:
     return len(targets)
 
 
+# Owner 2026-11-23 ("separate image/latent of load video c2c. always keep separate slots and never mixed"): Load Video
+# (C2C)'s output 0 was "IMAGE,LATENT" (a LATENT when a VAE was wired); it is IMAGE only now and the latent is output 10.
+# class -> (old slot, new slot, the input type whose readers move). The front end does the same to saved workflows
+# (js/_c2c_migrate_core.js OUTPUT_SPLITS); keep the two in step.
+OUTPUT_SPLITS: dict[str, tuple[int, int, str]] = {"LoadVideoC2C": (0, 10, "LATENT")}
+
+
+def _input_type(cls: Any, name: str) -> str | None:
+    try:
+        spec = cls.INPUT_TYPES() or {}
+    except Exception:  # noqa: BLE001 - an INPUT_TYPES that fails is simply not resolved
+        return None
+    for sec in ("required", "optional"):
+        s = (spec.get(sec) or {}).get(name)
+        if isinstance(s, (list, tuple)) and s and isinstance(s[0], str):
+            return s[0]
+    return None
+
+
+def split_outputs_api_prompt(prompt: Any, mappings: Any) -> int:
+    """Re-link every input that reads OUTPUT_SPLITS' old slot and is of the split's type (exactly that type: an input
+    that also takes IMAGE, or a wildcard, stays) to the new slot, in place. ``mappings``: the live
+    NODE_CLASS_MAPPINGS, to read each reader's input type; None = nothing is moved. Returns how many links moved."""
+    if not isinstance(prompt, dict) or not mappings:
+        return 0
+    splits = {str(k): OUTPUT_SPLITS[v["class_type"]] for k, v in prompt.items()
+              if isinstance(v, dict) and v.get("class_type") in OUTPUT_SPLITS}
+    if not splits:
+        return 0
+    types: dict[tuple[str, str], str | None] = {}
+    moved = 0
+    for node in prompt.values():
+        ins = node.get("inputs") if isinstance(node, dict) else None
+        if not isinstance(ins, dict):
+            continue
+        for name, value in list(ins.items()):
+            if not (isinstance(value, list) and len(value) == 2 and str(value[0]) in splits):
+                continue
+            old, new, kind = splits[str(value[0])]
+            if not isinstance(value[1], int) or value[1] != old:
+                continue
+            key = (str(node.get("class_type")), name)
+            if key not in types:
+                cls = mappings.get(key[0])
+                types[key] = _input_type(cls, name) if cls is not None else None
+            parts = [t.strip() for t in str(types[key] or "").split(",")]
+            if kind in parts and "IMAGE" not in parts:
+                ins[name] = [value[0], new]
+                moved += 1
+    return moved
+
+
 _WIDGET_TYPES = {"INT", "FLOAT", "STRING", "BOOLEAN", "COMBO"}
 
 
@@ -224,6 +276,9 @@ def _on_prompt(json_data: Any) -> Any:
                         fill_required_defaults(v, mappings[v["class_type"]])
             if n:
                 _log.info("[C2C] migrated %d legacy node(s) in an API prompt", n)
+            s = split_outputs_api_prompt(prompt, mappings)              # after the migration: Path -> Load Video
+            if s:
+                _log.info("[C2C] moved %d latent link(s) to Load Video (C2C)'s latent output in an API prompt", s)
     except Exception as exc:  # a migration problem must never block a prompt
         _log.warning("[C2C] API prompt migration skipped: %s", exc)
     return json_data
