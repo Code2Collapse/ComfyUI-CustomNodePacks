@@ -2,6 +2,12 @@
 
 All notable changes to ComfyUI-CustomNodePacks are documented here.
 
+## Unreleased
+
+- **Shortcuts no longer collide with core or popular packs.** Lock selection as C2C Vault is **Alt+Shift+L**
+  (Ctrl+Shift+L belonged to KJNodes and the frontend refused ours with an error at start-up). The Bulk Value Editor is
+  **Alt+Shift+E**: it used to swallow core's Ctrl+Shift+E, so Convert to Subgraph did nothing while it was enabled.
+
 ## 2.0.0 – 2026-11-23
 
 First Comfy Registry release since 1.30.3. Highlights since then (details in the entries below and in README.md):
