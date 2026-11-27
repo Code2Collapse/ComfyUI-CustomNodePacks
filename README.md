@@ -390,6 +390,7 @@ CustomNodePacks registers **101 nodes** (86 when ComfyUI-OmniScale is installed:
 |---|---|---|
 | Image Mask Editor (C2C) | [`ImageMaskEditorC2C`](NODE_REFERENCE.md#imagemaskeditorc2c) | Paint a mask over the image that actually reaches this node. |
 | Mask Placement — Prompt/Ref → Place → Track | [`MaskPlacementMEC`](NODE_REFERENCE.md#maskplacementmec) | Universal mask placement: source an alpha (wire a mask, or give a text prompt + SAM model and it segments the object for you), place it with a draggable 4-corner perspective quad, and propagate across the video. |
+| Mask Combine (C2C) | `MaskCombineMEC` | Combine any number of masks: connect the last empty socket and another appears (up to 100; chain a second node for more). Union, add, subtract (first minus rest), intersect, multiply, screen, difference, average; soft edges kept. Other sizes are resized to the first mask; one-frame masks repeat over a clip. |
 | Mask Tools (C2C) | [`MaskToolsMEC`](NODE_REFERENCE.md#masktoolsmec) | Keyers and matte operations in one node: colour, luma and difference keys; grade (gain, gamma, clamp, invert, black / white point, lift, offset - as Nuke Grade); grow or shrink each side (left / right / up / down) with a feather; combine two mattes; gradient; grain; motion blur; edge spread; channel |
 
 ### 🐺 C2C/🧰 Core/Model Analysis
