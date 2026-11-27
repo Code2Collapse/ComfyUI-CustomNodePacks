@@ -254,6 +254,10 @@ except Exception as _exc:  # pragma: no cover
     )
     _MASKPLACE_MAPPINGS, _MASKPLACE_DISPLAY = {}, {}
 
+# Mask Combine: any number of masks, growing inputs (core Autogrow; owner request 2026-11-27)
+_MASKCOMBINE_MAPPINGS, _MASKCOMBINE_DISPLAY = (m or {} for m in _c2c_try_import(
+    ".nodes.mask_combine", "NODE_CLASS_MAPPINGS", "NODE_DISPLAY_NAME_MAPPINGS"))
+
 # SAM + ViTMatte is a backend of MaskOps (nodes/mask_matting, L7.65 P05).
 
 # Mask toolkit (LayerMask port — torch-native, batch-correct)
@@ -846,6 +850,7 @@ _C2C_FAMILIES = [
     ("SAM Multi-Mask Picker", _SAMPICKER_MAPPINGS, _SAMPICKER_DISPLAY),
     ("SAM Loader/Generator", _SAM_MAPPINGS, _SAM_DISPLAY),
     ("Mask Placement", _MASKPLACE_MAPPINGS, _MASKPLACE_DISPLAY),
+    ("Mask Combine", _MASKCOMBINE_MAPPINGS, _MASKCOMBINE_DISPLAY),
     ("Matte (legacy)", _LEGACY_MATTE_MAPPINGS, _LEGACY_MATTE_DISPLAY),
     ("Mask editors (legacy)", _LEGACY_EDITOR_MAPPINGS, _LEGACY_EDITOR_DISPLAY),
     ("Semantic Segment", _SEMSEG_MAPPINGS, _SEMSEG_DISPLAY),
