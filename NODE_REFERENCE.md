@@ -1,7 +1,7 @@
 # C2C / MEC Custom Node Packs — Node Reference
 
 <!-- C2C:NODE-COUNTS:BEGIN -->
-**ComfyUI-CustomNodePacks** registers **101** nodes across these families:
+**ComfyUI-CustomNodePacks** registers **102** nodes across these families:
 
 | Family | Nodes |
 |--------|------:|
@@ -26,6 +26,7 @@
 | SAM Multi-Mask Picker | 1 |
 | SAM Loader/Generator | 2 |
 | Mask Placement | 1 |
+| Mask Combine | 1 |
 | Semantic Segment | 1 |
 | NukeNodeMax | 1 |
 | Video Stabilizer | 1 |
@@ -43,7 +44,7 @@
 
 Startup log line to verify the pack loaded:
 
-`[C2C] CustomNodePacks: 101 nodes loaded (Vault 6, Folder Incrementer 5, Render farm 3, C2C Distributed 2, Fluid Shots/Audio 3, C2C video 3, MaskEditControl 9, Image Mask Editor 1, Model analysis 1, Face Fixer 1, Mask + Matting 5, Layer Effects 1, Mask toolkit 1, Frequency / Grain 3, Tiled refinement 4, Magnific 15, AV Handles 1, Save Video 1, SAM Multi-Mask Picker 1, SAM Loader/Generator 2, Mask Placement 1, Semantic Segment 1, NukeNodeMax 1, Video Stabilizer 1, C2C helpers 8, Prompt Relay 3, AsymFlow sampler 1, HDR Color Science 1, LocateAnything 2, Segment (C2C) 1, Facepoints 1, Nano Banana 1, Control AOV 1, Restored VFX 3, Legacy (deprecated) 7) - 0 failed`
+`[C2C] CustomNodePacks: 102 nodes loaded (Vault 6, Folder Incrementer 5, Render farm 3, C2C Distributed 2, Fluid Shots/Audio 3, C2C video 3, MaskEditControl 9, Image Mask Editor 1, Model analysis 1, Face Fixer 1, Mask + Matting 5, Layer Effects 1, Mask toolkit 1, Frequency / Grain 3, Tiled refinement 4, Magnific 15, AV Handles 1, Save Video 1, SAM Multi-Mask Picker 1, SAM Loader/Generator 2, Mask Placement 1, Mask Combine 1, Semantic Segment 1, NukeNodeMax 1, Video Stabilizer 1, C2C helpers 8, Prompt Relay 3, AsymFlow sampler 1, HDR Color Science 1, LocateAnything 2, Segment (C2C) 1, Facepoints 1, Nano Banana 1, Control AOV 1, Restored VFX 3, Legacy (deprecated) 7) - 0 failed`
 <!-- C2C:NODE-COUNTS:END -->
 
 

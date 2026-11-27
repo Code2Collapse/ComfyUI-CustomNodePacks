@@ -232,7 +232,9 @@ def morph_close(mask_bhw: torch.Tensor, kernel: int = 9) -> torch.Tensor:
     return m.squeeze(1)
 
 
-def grow_or_shrink(mask_bhw: torch.Tensor, pixels: int) -> torch.Tensor:
+def grow_or_shrink(mask_bhw: torch.Tensor, pixels: int, binary: bool = True) -> torch.Tensor:
+    """Grey dilate (pixels > 0) / erode (< 0). binary=True keeps the old 0/1 output (smart crop); binary=False keeps
+    soft values, which the mask editor needs (audit M-11: a 0.01 haze grew into a fully opaque frame)."""
     if pixels == 0:
         return mask_bhw
     kernel = abs(int(pixels)) * 2 + 1
@@ -244,7 +246,8 @@ def grow_or_shrink(mask_bhw: torch.Tensor, pixels: int) -> torch.Tensor:
         m = F.max_pool2d(m, kernel_size=kernel, stride=1, padding=pad)
     else:
         m = -F.max_pool2d(-m, kernel_size=kernel, stride=1, padding=pad)
-    return (m.squeeze(1) > 0).float()
+    m = m.squeeze(1)
+    return (m > 0).float() if binary else m.clamp(0.0, 1.0)
 
 
 def fill_holes_torch(mask_bhw: torch.Tensor, iterations: int = 64) -> torch.Tensor:

@@ -361,8 +361,17 @@ def _chroma_lock(m: np.ndarray, rgb: np.ndarray,
                                      iterations=int(band_radius)).astype(np.float32)
     else:
         band = (mg > 0.05).astype(np.float32)
-    blend = (1.0 - strength) + strength * chroma_dom
-    out = m * (1.0 - band) + (m * blend) * band
+    # Audit M-08: the old blend (1-strength)+strength*chroma_dom halved alpha on every edge without a colour change,
+    # including ordinary light/dark edges and the solid interior next to them. Now only SOFT alpha (0<m<1) inside the
+    # band is touched, and only where neither the luma nor the chroma gradient (spread over the band) shows an image
+    # edge: a fringe no real edge supports is pulled down, a real edge - luma or chroma - is left as it is.
+    support = np.maximum(gL_n, gC_n).astype(np.float32)
+    if _HAS_SCIPY:
+        support = _ndi.grey_dilation(support, size=(2 * int(band_radius) + 1,) * 2)
+    support = np.clip(support / max(float(support.max()), 1e-6) * 4.0, 0.0, 1.0)
+    soft = ((m > 0.0) & (m < 1.0)).astype(np.float32)
+    w = float(strength) * (1.0 - support) * band * soft
+    out = m * (1.0 - w)
     return out.clip(0.0, 1.0)
 
 
@@ -382,8 +391,15 @@ def _speck_removal(m: np.ndarray, min_area: int = 32,
         comp = labels == lbl
         if comp.sum() >= int(min_area):
             keep |= comp
-    # holes inside foreground
-    inv = 1 - keep.astype(np.uint8)
+    # Audit M-07: the old code OR'd the holes into `keep` and returned m * keep - m is 0 inside a hole, so nothing was
+    # ever filled; and m * keep also cut every soft edge pixel below 0.5 off the components it kept. Now: only the
+    # dropped specks (with a 2 px fringe that does not reach a kept component) are removed, small enclosed holes are
+    # set to 1, and every other pixel keeps its value.
+    drop = binary.astype(bool) & ~keep
+    if drop.any():
+        drop = _ndi.binary_dilation(drop, iterations=2) & ~_ndi.binary_dilation(keep, iterations=2) | drop
+    holes = np.zeros_like(keep)
+    inv = ~keep
     h_labels, h_n = _ndi.label(inv)
     for lbl in range(1, h_n + 1):
         comp = h_labels == lbl
@@ -392,8 +408,8 @@ def _speck_removal(m: np.ndarray, min_area: int = 32,
                 or comp[:, 0].any() or comp[:, -1].any()):
             continue
         if comp.sum() < int(fill_holes_below):
-            keep |= comp
-    out = m * keep.astype(np.float32)
+            holes |= comp
+    out = np.where(holes, 1.0, np.where(drop, 0.0, m)).astype(np.float32)
     return out.clip(0.0, 1.0)
 
 

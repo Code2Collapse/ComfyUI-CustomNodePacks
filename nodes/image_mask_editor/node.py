@@ -388,7 +388,7 @@ class ImageMaskEditorC2C:
     @staticmethod
     def _finish(mask, grow, feather, threshold, invert):
         """The shared result stage: grow / shrink, feather, threshold, invert (identity at the defaults)."""
-        out = grow_or_shrink(mask, int(grow))
+        out = grow_or_shrink(mask, int(grow), binary=False)      # soft masks stay soft (audit M-11)
         out = gaussian_blur(out, int(round(float(feather))))
         if float(threshold) > 0:
             out = (out >= float(threshold)).float()

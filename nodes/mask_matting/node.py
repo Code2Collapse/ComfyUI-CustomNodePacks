@@ -481,6 +481,29 @@ def _ready_segmenters() -> set:
     except Exception:  # noqa: BLE001
         return {k for k, c in all_segmenters().items() if getattr(c, "STATUS", "ready") == "ready"}
 
+
+def _neg_bbox_exclusion(box, alpha: torch.Tensor, coarse) -> Optional[torch.Tensor]:
+    """Exclusion matte N for a negative box (audit M-01): inside the box, everything the segmenter left OUT of its
+    mask (N = 1 - coarse, soft); outside the box nothing. Without a usable coarse mask the whole box is excluded.
+    Returns [B,H,W] on alpha's device, or None for an empty box."""
+    x0, y0, x1, y1 = (int(v) for v in box)
+    h, w = int(alpha.shape[-2]), int(alpha.shape[-1])
+    x0, x1 = max(0, min(x0, x1)), min(w, max(x0, x1))
+    y0, y1 = max(0, min(y0, y1)), min(h, max(y0, y1))
+    if x1 <= x0 or y1 <= y0:
+        return None
+    rect = torch.zeros_like(alpha)
+    rect[..., y0:y1, x0:x1] = 1.0
+    if isinstance(coarse, torch.Tensor) and coarse.ndim >= 2 and tuple(coarse.shape[-2:]) == (h, w):
+        c = coarse.float().to(alpha.device).clamp(0, 1)
+        c = c.reshape(-1, h, w)
+        if c.shape[0] == 1 and alpha.ndim == 3 and alpha.shape[0] != 1:
+            c = c.expand(alpha.shape[0], h, w)
+        if alpha.ndim == 3 and c.shape[0] == alpha.shape[0]:
+            return rect * (1.0 - c)
+    return rect
+
+
 class MaskOpsMEC:
     """Unified segmenter + matter + refine + diagnose node.
 
@@ -1853,7 +1876,13 @@ class MaskOpsMEC:
                             robust_info["error"] = str(_e)
 
                     if external_mask is not None:
-                        em = to_mask(external_mask)
+                        em = _fit_mask(to_mask(external_mask), mask_t.shape[-2:], "external_mask")
+                        if em.ndim == mask_t.ndim == 3 and em.shape[0] == 1 and mask_t.shape[0] > 1:
+                            em = em.expand_as(mask_t)          # one drawn frame applies to the whole clip (M-04)
+                        if em.shape != mask_t.shape:
+                            _mask_notes.append(f"external_mask has {em.shape[0]} frames but the clip has "
+                                               f"{mask_t.shape[0]}: it was NOT applied (give 1 frame or one per "
+                                               f"frame)")
                         if em.shape == mask_t.shape:
                             # Skip AND-merge if the external mask is effectively empty
                             # (e.g. an unconfigured SplineMaskEditor with 0 shapes).
@@ -1865,7 +1894,7 @@ class MaskOpsMEC:
                                 )
                             else:
                                 # logical AND: refine the user's hint
-                                mask_t = torch.minimum(mask_t, em)
+                                mask_t = torch.minimum(mask_t, em.to(mask_t.device, mask_t.dtype))
 
                     if _cache is not None:
                         _vstage["track"] = "ran"
@@ -2053,19 +2082,37 @@ class MaskOpsMEC:
                         alpha_t = torch.maximum(alpha_t, lm)
                     elif luma_mix == "replace":
                         alpha_t = lm
-            # 2. Holdout / core overrides (garbage matte semantics).
-            if holdout_mask is not None:
-                hm = _fit_mask(to_mask(holdout_mask), alpha_t.shape[-2:], "holdout_mask")
-                if hm.shape[-2:] == alpha_t.shape[-2:]:
-                    if hm.shape[0] != alpha_t.shape[0] and hm.shape[0] == 1:
-                        hm = hm.expand_as(alpha_t)
-                    alpha_t = (alpha_t * (1.0 - hm.to(alpha_t.device))).clamp(0, 1)
+            # 2a. Final edge treatment (hard binary / feather) FIRST, then core and holdout on top of it, so a
+            #     feather can neither re-soften a forced core nor bleed alpha back into a holdout (audit M-05), and
+            #     the exclusion wins where holdout and core overlap (M-06). Despill / lightwrap / edge bands below
+            #     still read this final alpha.
+            if str(edge_mode) not in ("soft", ""):
+                alpha_t = _vfx.edge_treatment(
+                    alpha_t, str(edge_mode),
+                    threshold=float(edge_threshold),
+                    feather=float(edge_feather))
+            # 2b. Core (forced opaque), then exclusions: what the segmenter carved out of a neg_bbox, and the
+            #     holdout (garbage) matte. A_out = max(A, core) * (1 - N): the matter cannot bring an excluded region
+            #     back (audit M-01: the trimap made the carved box "unknown" and the matter re-filled it to ~0.56).
             if core_mask is not None:
                 cm = _fit_mask(to_mask(core_mask), alpha_t.shape[-2:], "core_mask")
                 if cm.shape[-2:] == alpha_t.shape[-2:]:
                     if cm.shape[0] != alpha_t.shape[0] and cm.shape[0] == 1:
                         cm = cm.expand_as(alpha_t)
                     alpha_t = torch.maximum(alpha_t, cm.to(alpha_t.device)).clamp(0, 1)
+            _nb = parse_bbox(neg_bbox) if neg_bbox is not None else None
+            if _nb is not None:
+                excl = _neg_bbox_exclusion(_nb, alpha_t, locals().get("mask_t"))
+                if excl is not None:
+                    alpha_t = (alpha_t * (1.0 - excl)).clamp(0, 1)
+                    _mask_notes.append("neg_bbox: what the segmenter excluded inside the box is kept at alpha 0 "
+                                       "after matting")
+            if holdout_mask is not None:
+                hm = _fit_mask(to_mask(holdout_mask), alpha_t.shape[-2:], "holdout_mask")
+                if hm.shape[-2:] == alpha_t.shape[-2:]:
+                    if hm.shape[0] != alpha_t.shape[0] and hm.shape[0] == 1:
+                        hm = hm.expand_as(alpha_t)
+                    alpha_t = (alpha_t * (1.0 - hm.to(alpha_t.device))).clamp(0, 1)
             if object_alphas_out is not None and object_alphas_out.numel() > 0:
                 n_planes = object_alphas_out.shape[0]
                 if holdout_mask is not None:
@@ -2083,7 +2130,7 @@ class MaskOpsMEC:
                         object_alphas_out = (
                             object_alphas_out * (1.0 - hm.to(object_alphas_out.device))
                         ).clamp(0, 1)
-                if core_mask is not None:
+                if core_mask is not None and holdout_mask is None:     # the exclusion wins (M-06)
                     cm = to_mask(core_mask)
                     if cm.shape[-2:] != object_alphas_out.shape[-2:]:
                         cm = torch.nn.functional.interpolate(cm.float().unsqueeze(1), size=tuple(
@@ -2098,18 +2145,6 @@ class MaskOpsMEC:
                         object_alphas_out = torch.maximum(
                             object_alphas_out, cm.to(object_alphas_out.device),
                         ).clamp(0, 1)
-            # 2b. Final edge treatment (hard binary / feather).
-            #     Deliberately placed HERE: after the holdout and core
-            #     overrides, so a forced-opaque core cannot be re-softened,
-            #     and BEFORE despill/lightwrap/edge-bands, which all read the
-            #     final alpha. Running it any later would leave the outputs
-            #     disagreeing about where the edge is.
-            if str(edge_mode) not in ("soft", ""):
-                alpha_t = _vfx.edge_treatment(
-                    alpha_t, str(edge_mode),
-                    threshold=float(edge_threshold),
-                    feather=float(edge_feather))
-
             # 3. Despill on the source image (using the FINAL alpha as mask).
             if despill != "off" and float(despill_strength) > 0:
                 despilled = _vfx.despill(

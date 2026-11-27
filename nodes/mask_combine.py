@@ -81,31 +81,35 @@ def conform(items: list[tuple[str, torch.Tensor]], size_mode: str) -> tuple[list
 
 
 def combine(ms: list[torch.Tensor], operation: str) -> torch.Tensor:
-    if operation == "union (max)":
-        r = torch.stack(ms).amax(0)
-    elif operation == "add (clamped)":
-        r = torch.stack(ms).sum(0)
-    elif operation == "subtract (first minus rest)":
-        r = ms[0].clone()
-        for m in ms[1:]:
-            r = r * (1.0 - m.clamp(0, 1))
-    elif operation == "intersect (min)":
-        r = torch.stack(ms).amin(0)
-    elif operation == "multiply":
-        r = ms[0].clone()
-        for m in ms[1:]:
-            r = r * m
-    elif operation == "screen":
-        r = 1.0 - torch.stack([1.0 - m.clamp(0, 1) for m in ms]).prod(0)
-    elif operation == "difference":
-        r = ms[0].clone()
-        for m in ms[1:]:
-            r = (r - m).abs()
-    elif operation == "average":
-        r = torch.stack(ms).mean(0)
-    else:
+    """Running in-place reduction: peak memory is the result plus one input, whatever the mask count (a torch.stack
+    of N masks held N extra copies - 124 frames of 2K is ~1 GB per mask)."""
+    if operation not in OPERATIONS:
         raise ValueError(f"Mask Combine: unknown operation {operation!r}; choose one of {', '.join(OPERATIONS)}.")
-    return r.clamp(0.0, 1.0).contiguous()
+    r = ms[0].float().clone()
+    if r.shape[0] != max(m.shape[0] for m in ms):                   # a 1-frame first mask expanded over the clip
+        r = r.expand(max(m.shape[0] for m in ms), -1, -1).clone()
+    if operation == "screen":
+        r = 1.0 - r.clamp_(0, 1)                                     # r holds prod(1 - m)
+    for m in ms[1:]:
+        if operation == "union (max)":
+            torch.maximum(r, m, out=r)
+        elif operation in ("add (clamped)", "average"):
+            r.add_(m)
+        elif operation == "subtract (first minus rest)":
+            r.mul_(1.0 - m.clamp(0, 1))
+        elif operation == "intersect (min)":
+            torch.minimum(r, m, out=r)
+        elif operation == "multiply":
+            r.mul_(m)
+        elif operation == "screen":
+            r.mul_(1.0 - m.clamp(0, 1))
+        elif operation == "difference":
+            r.sub_(m).abs_()
+    if operation == "average":
+        r.div_(len(ms))
+    elif operation == "screen":
+        r = 1.0 - r
+    return r.clamp_(0.0, 1.0).contiguous()
 
 
 class MaskCombineMEC(io.ComfyNode):

@@ -218,15 +218,17 @@ class MaskPropagateVideo:
         imgs_gray = []
         for i in _PB.track(range(B), B, "MaskPropagate"):
             _IC.check()
-            frame = (images[i].cpu().numpy() * 255).astype(np.uint8)
+            frame = (np.clip(images[i].cpu().numpy()[..., :3], 0.0, 1.0) * 255).astype(np.uint8)   # no uint8 wrap on HDR (audit M-15)
             gray = cv2.cvtColor(frame, cv2.COLOR_RGB2GRAY)
             imgs_gray.append(gray)
 
         # Forward propagation
         current_mask = src_mask.cpu().numpy()
         for i in _PB.track(range(source_frame + 1, B), None, "MaskPropagate"):
+            # backward warp: sample the previous mask with the flow from THIS frame to the previous one (audit M-10:
+            # prev->cur flow moved the mask the wrong way, IoU 0.08 after 3 frames of a +4 px/frame move)
             flow = cv2.calcOpticalFlowFarneback(
-                imgs_gray[i-1], imgs_gray[i],
+                imgs_gray[i], imgs_gray[i-1],
                 None, 0.5, 3, 15, 3, 5, 1.2, 0
             )
             h, w = flow.shape[:2]
@@ -248,7 +250,7 @@ class MaskPropagateVideo:
             current_mask = src_mask.cpu().numpy()
             for i in _PB.track(range(source_frame - 1, -1, -1), None, "MaskPropagate"):
                 flow = cv2.calcOpticalFlowFarneback(
-                    imgs_gray[i+1], imgs_gray[i],
+                    imgs_gray[i], imgs_gray[i+1],
                     None, 0.5, 3, 15, 3, 5, 1.2, 0
                 )
                 h, w = flow.shape[:2]
