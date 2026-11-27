@@ -40,6 +40,16 @@ from . import _c2c_automation as A
 
 log = logging.getLogger("C2C.Webhook")
 
+
+def _c2c_refuse_remote(req, what: str = "This"):
+    """Audit B-0x: 403 unless the request comes from the ComfyUI page on this machine (nodes/_local_ui_guard.py)."""
+    try:
+        from ._local_ui_guard import refuse_remote
+    except ImportError:                                  # loaded by file path (tests / tools)
+        from _local_ui_guard import refuse_remote
+    return refuse_remote(req, what)
+
+
 _inbound: dict[str, dict] = {}
 _outbound: dict[str, dict] = {}
 _log: deque[dict] = deque(maxlen=100)
@@ -197,6 +207,9 @@ def register_routes(server) -> None:
 
     @server.routes.post("/c2c/webhook/register")
     async def wh_register(request: web.Request) -> web.Response:
+        _deny = _c2c_refuse_remote(request, "Registering a webhook")
+        if _deny is not None:
+            return _deny
         body = await body_of(request)
         wid = clean_id(body.get("id")) or __import__("uuid").uuid4().hex[:8]
         path = str(body.get("workflow") or "").strip().strip('"')
@@ -219,6 +232,9 @@ def register_routes(server) -> None:
 
     @server.routes.post("/c2c/webhook/unregister")
     async def wh_unregister(request: web.Request) -> web.Response:
+        _deny = _c2c_refuse_remote(request, "Removing a webhook")
+        if _deny is not None:
+            return _deny
         wid = str((await body_of(request)).get("id", ""))
         if wid not in _inbound:
             return err("not found", 404)
@@ -261,6 +277,9 @@ def register_routes(server) -> None:
 
     @server.routes.post("/c2c/webhook/outbound/add")
     async def wh_out_add(request: web.Request) -> web.Response:
+        _deny = _c2c_refuse_remote(request, "Adding an outbound webhook")
+        if _deny is not None:
+            return _deny
         body = await body_of(request)
         url = str(body.get("url") or "").strip()
         if not url.lower().startswith(("http://", "https://")):
@@ -278,6 +297,9 @@ def register_routes(server) -> None:
 
     @server.routes.post("/c2c/webhook/outbound/remove")
     async def wh_out_remove(request: web.Request) -> web.Response:
+        _deny = _c2c_refuse_remote(request, "Removing an outbound webhook")
+        if _deny is not None:
+            return _deny
         oid = str((await body_of(request)).get("id", ""))
         if oid not in _outbound:
             return err("not found", 404)
@@ -288,6 +310,9 @@ def register_routes(server) -> None:
 
     @server.routes.post("/c2c/webhook/outbound/test")
     async def wh_out_test(request: web.Request) -> web.Response:
+        _deny = _c2c_refuse_remote(request, "Testing an outbound webhook")
+        if _deny is not None:
+            return _deny
         oid = str((await body_of(request)).get("id", ""))
         ep = _outbound.get(oid)
         if ep is None:

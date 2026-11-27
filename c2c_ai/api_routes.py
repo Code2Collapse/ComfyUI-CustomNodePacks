@@ -95,10 +95,10 @@ def register_routes(server) -> None:
         pn = t.get_extra_info("peername") if t else None
         return pn[0] if isinstance(pn, (tuple, list)) and pn else req.remote
 
-    def _refuse_remote(req):
+    def _refuse_remote(req, what: str = "API keys can be managed"):
         if _local_ui(req.headers, _peer(req)):
             return None
-        return _err("LOCAL_UI_ONLY", "API keys can be managed only from the ComfyUI page on this machine "
+        return _err("LOCAL_UI_ONLY", f"{what} only from the ComfyUI page on this machine "
                                      "(http://127.0.0.1 or localhost).", code=403)
 
     # Track D.1 — translate a raw error string through the deterministic
@@ -170,6 +170,10 @@ def register_routes(server) -> None:
 
     @routes.post("/c2c/ai/probe")
     async def _probe(_req):
+        # audit B-06: these routes spend the owner's provider keys / CPU - local page only, like the key routes
+        _deny = _refuse_remote(_req, "The AI assistant can be used")
+        if _deny is not None:
+            return _deny
         loop = asyncio.get_event_loop()
         data = await loop.run_in_executor(None, get_router().probe_all)
         return _ok(data)
@@ -177,6 +181,10 @@ def register_routes(server) -> None:
     # --------------------------------------------------------------- ask
     @routes.post("/c2c/ai/ask")
     async def _ask(req):
+        # audit B-06: these routes spend the owner's provider keys / CPU - local page only, like the key routes
+        _deny = _refuse_remote(req, "The AI assistant can be used")
+        if _deny is not None:
+            return _deny
         body = await req.json()
         feature = body.get("feature") or "anonymous"
         msgs_raw = body.get("messages") or []
@@ -251,6 +259,10 @@ def register_routes(server) -> None:
     # ----------------------------------------------------------- stream (SSE)
     @routes.post("/c2c/ai/stream")
     async def _stream(req):
+        # audit B-06: these routes spend the owner's provider keys / CPU - local page only, like the key routes
+        _deny = _refuse_remote(req, "The AI assistant can be used")
+        if _deny is not None:
+            return _deny
         body = await req.json()
         feature = body.get("feature") or "anonymous"
         msgs_raw = body.get("messages") or []
@@ -322,6 +334,10 @@ def register_routes(server) -> None:
     # client-side via the Doctor's Error Log tab.
     @routes.post("/c2c/doctor/explain")
     async def _doctor_explain(req):
+        # audit B-06: these routes spend the owner's provider keys / CPU - local page only, like the key routes
+        _deny = _refuse_remote(req, "The AI assistant can be used")
+        if _deny is not None:
+            return _deny
         body = await req.json()
         message    = (body.get("message") or "").strip()
         traceback  = (body.get("traceback") or "").strip()

@@ -671,6 +671,16 @@ def register_routes(server) -> None:
     routes.post("/c2c_vault/sg/info")(wrap(info, 400))
     async def install_handler(request):                       # git clone can take a minute: off the event loop
         import asyncio
+        # Audit B-04: installing code is a local user's decision. "consent": true in the body was the only check, so
+        # any client that could reach a --listen server could have a (publicly-keyed portable) vault name any repo
+        # and get it cloned into custom_nodes - code that runs at the next start.
+        try:
+            from ._local_ui_guard import refuse_remote
+        except ImportError:                                   # loaded by file path (tests / tools)
+            from _local_ui_guard import refuse_remote
+        deny = refuse_remote(request, "Installing missing node packs")
+        if deny is not None:
+            return deny
         try:
             body = await request.json()
         except Exception:  # noqa: BLE001

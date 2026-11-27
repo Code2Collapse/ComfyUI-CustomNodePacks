@@ -294,6 +294,15 @@ def build_class_pkg_map(dir_entries: List[Dict[str, Any]]) -> Dict[str, str]:
 # ---------------------------------------------------------------------------
 # Scan driver
 # ---------------------------------------------------------------------------
+def _refuse_remote(req, what: str = "This"):
+    """403 unless the request comes from the ComfyUI page on this machine (nodes/_local_ui_guard.py)."""
+    try:
+        from ._local_ui_guard import refuse_remote
+    except ImportError:                                  # loaded by file path (tests / tools)
+        from _local_ui_guard import refuse_remote
+    return refuse_remote(req, what)
+
+
 # Roots permitted for /load (set on every scan) - prevents path traversal.
 _ALLOWED_ROOTS: Set[str] = set()
 
@@ -387,6 +396,9 @@ def register_routes(server) -> None:
 
     @routes.post("/c2c/library/locations")
     async def _set_locations(req):
+        _deny = _refuse_remote(req, "Changing the workflow library folders")   # audit B-01
+        if _deny is not None:
+            return _deny
         try:
             body = await req.json()
         except Exception:
@@ -417,6 +429,10 @@ def register_routes(server) -> None:
         except Exception:
             body = {}
         entries = body.get("directories")
+        if _refuse_remote(req) is not None:
+            # audit B-01: a remote client may rescan the SAVED folders, never name its own (that rewrote the allow-list
+            # /load reads from: any JSON-parsable file on disk became readable)
+            entries = None
         if not isinstance(entries, list) or not entries:
             entries = _load_locations()
         else:
@@ -436,7 +452,7 @@ def register_routes(server) -> None:
     @routes.get("/c2c/library/load")
     async def _load(req):
         path = req.query.get("path") or ""
-        if not path or not _is_allowed(path):
+        if not path or not path.lower().endswith(".json") or not _is_allowed(path):
             return web.json_response(
                 {"success": False, "error": "path_not_allowed"}, status=200)
         try:

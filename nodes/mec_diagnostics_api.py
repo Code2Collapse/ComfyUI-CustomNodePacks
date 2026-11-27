@@ -501,6 +501,13 @@ def register_routes(server) -> None:
                 "ollama_unavailable", "ollama_llm module not importable"),
                 status=500)
         url = req.query.get("url")
+        if url:   # audit B-07: a client-chosen URL makes the server fetch it - only for the local page
+            try:
+                from ._local_ui_guard import refuse_remote as _rr
+            except ImportError:
+                from _local_ui_guard import refuse_remote as _rr
+            if _rr(req) is not None:
+                url = None
         if not url:
             ea = _import_ea()
             s = ea.load_settings() if ea else {}

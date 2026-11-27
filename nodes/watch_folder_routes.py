@@ -37,6 +37,15 @@ from pathlib import Path
 
 from . import _c2c_automation as A
 
+
+def _c2c_refuse_remote(req, what: str = "This"):
+    """Audit B-0x: 403 unless the request comes from the ComfyUI page on this machine (nodes/_local_ui_guard.py)."""
+    try:
+        from ._local_ui_guard import refuse_remote
+    except ImportError:                                  # loaded by file path (tests / tools)
+        from _local_ui_guard import refuse_remote
+    return refuse_remote(req, what)
+
 log = logging.getLogger("C2C.WatchFolder")
 
 _watchers: dict[str, dict] = {}            # normalised path -> watcher
@@ -224,6 +233,19 @@ def _persist() -> None:
         log.warning("WatchFolder: could not save watchers: %s", exc)
 
 
+def _outside_media_roots(path: str):
+    """The refusal message when ``path`` is outside the media roots (input / output / temp / C2C_MEDIA_ROOTS), else
+    None. A broken policy module refuses (fail closed)."""
+    try:
+        try:
+            from ..c2c_core import media_roots as roots
+        except (ImportError, ValueError):
+            from c2c_core import media_roots as roots
+        return roots.check_route_path(path)
+    except Exception as exc:  # noqa: BLE001
+        return f"Folder could not be checked against the media roots ({exc}); add it to C2C_MEDIA_ROOTS."
+
+
 def validate(body: dict) -> dict:
     """The watcher spec from a request body, or ValueError with the reason."""
     path = str(body.get("path") or "").strip().strip('"')
@@ -231,6 +253,9 @@ def validate(body: dict) -> dict:
         raise ValueError("Folder path is required.")
     if not os.path.isdir(path):
         raise ValueError(f"Folder not found: {path}")
+    blocked = _outside_media_roots(path)          # audit B-03: the same media-roots rule as every other file route
+    if blocked:
+        raise ValueError(blocked)
     action = _ACTION_ALIAS.get(body.get("action"), body.get("action") or "notify")
     if action not in ACTIONS:
         raise ValueError(f"Unknown action '{action}' (one of: {', '.join(ACTIONS)}).")
@@ -288,6 +313,9 @@ def register_routes(server) -> None:
 
     @server.routes.post("/c2c/watchfolder/add")
     async def wf_add(request: web.Request) -> web.Response:
+        _deny = _c2c_refuse_remote(request, "Watching a folder")
+        if _deny is not None:
+            return _deny
         try:
             spec = validate(await body_of(request))
         except ValueError as exc:
@@ -302,6 +330,9 @@ def register_routes(server) -> None:
 
     @server.routes.post("/c2c/watchfolder/remove")
     async def wf_remove(request: web.Request) -> web.Response:
+        _deny = _c2c_refuse_remote(request, "Removing a watched folder")
+        if _deny is not None:
+            return _deny
         k = _key((await body_of(request)).get("path", ""))
         w = _watchers.pop(k, None)
         if w is None:
@@ -318,6 +349,9 @@ def register_routes(server) -> None:
 
     @server.routes.post("/c2c/watchfolder/clear_events")
     async def wf_clear(_request: web.Request) -> web.Response:
+        _deny = _c2c_refuse_remote(_request, "Clearing watch events")
+        if _deny is not None:
+            return _deny
         _events.clear()
         return web.json_response({"status": "cleared"})
 

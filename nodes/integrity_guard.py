@@ -44,6 +44,16 @@ from typing import Any, Dict, List, Optional, Tuple
 
 log = logging.getLogger("MEC.integrity")
 
+
+def _c2c_refuse_remote(req, what: str = "This"):
+    """Audit B-0x: 403 unless the request comes from the ComfyUI page on this machine (nodes/_local_ui_guard.py)."""
+    try:
+        from ._local_ui_guard import refuse_remote
+    except ImportError:                                  # loaded by file path (tests / tools)
+        from _local_ui_guard import refuse_remote
+    return refuse_remote(req, what)
+
+
 _HERE = os.path.dirname(os.path.abspath(__file__))
 _PACK_ROOT = os.path.dirname(_HERE)
 _CHECKSUM_PATH = os.path.join(_PACK_ROOT, "third_party", "checksums.json")
@@ -864,6 +874,9 @@ def register_routes(server) -> None:
 
     @routes.post("/nukenodemax/reinstall")
     async def _reinstall(req):
+        _deny = _c2c_refuse_remote(req, "Reinstalling a package")
+        if _deny is not None:
+            return _deny
         body = {}
         try:
             body = await req.json()
@@ -881,7 +894,8 @@ def register_routes(server) -> None:
         install_cmd, why = reinstall_plan(str(package), _UV_BIN)
         if install_cmd is None:
             return web.json_response({"ok": False, "error": why}, status=400)
-        result = _run(install_cmd, timeout=600)
+        import asyncio   # audit B-02: pip/uv runs up to 600 s - off the event loop, or the whole server freezes
+        result = await asyncio.get_running_loop().run_in_executor(None, lambda: _run(install_cmd, timeout=600))
         # Rescan after the change — force, bypass cache, run immediately.
         start_background_scan(force=True, delay=0.0)
         return web.json_response({"ok": result["ok"], **result})
@@ -923,6 +937,9 @@ def register_routes(server) -> None:
 
     @routes.post("/c2c/integrity/heal")
     async def _heal(req):
+        _deny = _c2c_refuse_remote(req, "Installing a pack's missing requirements")
+        if _deny is not None:
+            return _deny
         try:
             body = await req.json()
         except Exception:
@@ -962,7 +979,9 @@ def register_routes(server) -> None:
                  "message": "this pack has risky entries — "
                             "POST with 'force': true to install anyway",
                  "report": pack.report}, status=409)
-        result = install_missing(pack.safe_to_install, force=force)
+        import asyncio   # audit B-02: off the event loop
+        result = await asyncio.get_running_loop().run_in_executor(
+            None, lambda: install_missing(pack.safe_to_install, force=force))
         # On success, rescan integrity so the INT pill clears the warning.
         if result.get("ok"):
             start_background_scan(force=True, delay=0.0)
