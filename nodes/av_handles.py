@@ -735,7 +735,9 @@ class AVHandlesMEC:
                 tgt = 0
                 if isinstance(handles, dict):
                     tgt = int(handles.get("target") or 0)
-                if not tgt:
+                if not tgt and not isinstance(handles, dict):
+                    # audit (c2c_backend_audit av_handles.py:734): wired handles always win - a stale
+                    # av_handles_memory.json target from another clip must not override them
                     rem = recall(key)
                     tgt = int(getattr(rem, "target", 0) or 0) if rem else 0
                 if tgt:
@@ -754,10 +756,13 @@ class AVHandlesMEC:
                     "The remembered count does not belong to this clip — "
                     "check the add side ran on the same material.")
             remembered = recall(key)
+            wired_fps = float(handles.get("fps") or 0.0) if isinstance(handles, dict) else 0.0
             fps, fps_from = resolve_fps(
-                images, audio, manual_fps or (remembered.fps if remembered else 0.0),
+                images, audio, manual_fps or wired_fps or (remembered.fps if remembered else 0.0),
                 src_frames)
-            if remembered and not manual_fps:
+            if wired_fps and not manual_fps:
+                fps_from = "from the wired handles"
+            elif remembered and not manual_fps:
                 fps_from = "carried from the add side"
             out_img = trim_ends(images, head, tail) if images is not None else None
             exact_aud, sync_note = None, None

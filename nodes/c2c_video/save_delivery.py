@@ -108,8 +108,16 @@ def validate_output(paths: list[str], spec: Any, *, frames: int, width: int, hei
     try:
         if getattr(spec, "sequence", False):
             ext = "." + str(getattr(spec, "file_ext", None) or getattr(spec, "ext", "")).lower().lstrip(".")
-            files = [f for f in os.listdir(master) if f.lower().endswith(ext)] if os.path.isdir(master) else []
-            checked.update(kind="sequence", folder=master, files=len(files))
+            # audit (c2c_backend_audit save_delivery.py:107-114): for a sequence `paths` lists the FRAME files, so
+            # paths[0] is a file and isdir() was always false -> every sequence was reported as "0 files". Count the
+            # written frame files that exist (a folder path is still accepted).
+            if os.path.isdir(master):
+                folder = master
+                files = [f for f in os.listdir(master) if f.lower().endswith(ext)]
+            else:
+                folder = os.path.dirname(master)
+                files = [p for p in paths if str(p).lower().endswith(ext) and os.path.isfile(p)]
+            checked.update(kind="sequence", folder=folder, files=len(files))
             if len(files) != int(frames):
                 problems.append(f"{len(files)} {ext} files in the folder, {frames} frames were meant to be written")
         elif getattr(spec, "codec", "") in ("pil_gif", "pil_webp"):
