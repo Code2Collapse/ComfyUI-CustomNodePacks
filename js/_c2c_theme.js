@@ -769,10 +769,12 @@ export function applyResponsiveCSS() {
    black widget shape shows through (verified live 2026-05-28). We use a
    solid panel shade slightly lighter than the typical ComfyUI node body
    (#353535) so the textarea is visually delimited but not jarring. */
+/* agy review 2026-11-28: this rule reaches EVERY node's textarea (core and other packs), so it takes its colours from
+   ComfyUI's own palette variables (a light theme stays light); the old dark values are only the fallback. */
 textarea.comfy-multiline-input {
-    background: #2b2b30 !important;
-    color: var(--c2c-fg, #e6e6e6) !important;
-    border: 1px solid rgba(255, 255, 255, 0.10) !important;
+    background: var(--comfy-input-bg, #2b2b30) !important;
+    color: var(--input-text, var(--c2c-fg, #e6e6e6)) !important;
+    border: 1px solid var(--border-color, rgba(255, 255, 255, 0.10)) !important;
     border-radius: 4px !important;
     padding: 2px 6px !important;
     box-sizing: border-box !important;
@@ -780,11 +782,9 @@ textarea.comfy-multiline-input {
                 background     var(--c2c-dur-fast, 120ms) var(--c2c-ease-out, ease-out);
 }
 textarea.comfy-multiline-input:hover {
-    background: #32323a !important;
-    border-color: rgba(255, 255, 255, 0.18) !important;
+    border-color: var(--descrip-text, rgba(255, 255, 255, 0.18)) !important;
 }
 textarea.comfy-multiline-input:focus {
-    background: #32323a !important;
     outline: none !important;
     border-color: var(--c2c-blue, #89b4fa) !important;
     box-shadow: 0 0 0 2px rgba(137, 180, 250, 0.35) !important;
