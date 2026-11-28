@@ -220,3 +220,10 @@ Vendored third-party packages (under third_party/):
       Algorithm: Gordon Chen and contributors, https://github.com/GordonChen19/Prompt-Relay (no licence published
                 upstream, checked 2026-11-28).
       License:  Apache-2.0 for this re-implementation, by the owner's decision; see nodes/prompt_relay/NOTICE.md.
+
+  * ComfyUI-AusBoss shared UI foundation (js/c2c_shared/: widget_visibility, graph_ids, canvas_passthrough,
+    core_preview, panel_layout)
+      Author:   ausboss
+      Source:   https://github.com/ausboss/ComfyUI-AusBoss (js/shared/*.mjs)
+      License:  MIT, Copyright (c) 2026 ausboss (js/c2c_shared/LICENSE-AUSBOSS.txt)
+      Usage:    one renderer-safe foundation for C2C node UIs (agy review Phase 3 item 12, 2026-11-28).
