@@ -977,7 +977,13 @@ class FolderIncrementer:
     @classmethod
     def IS_CHANGED(cls, **kwargs):
         if kwargs.get("layout") == LAYOUT_CHOICES[1]:
-            return _bvm_engine().IS_CHANGED(**_bvm_kwargs(**kwargs))
+            # audit (c2c_backend_audit folder_incrementer.py:979): an empty base_path allocates under the output
+            # folder (_show_shot_task), but the fingerprint skipped the disk scan for an empty root - the key never
+            # changed and every queue was served v001 from the cache. Fingerprint the same folder it allocates in.
+            kw2 = dict(kwargs)
+            if not (kw2.get("base_path") or "").strip():
+                kw2["base_path"] = _get_output_dir()
+            return _bvm_engine().IS_CHANGED(**_bvm_kwargs(**kw2))
         # Assumption: inputs + on-disk version dirs determine the next counter.
         h = hashlib.md5(hash_kwargs(**kwargs).encode())
         label = kwargs.get("label", "default")
