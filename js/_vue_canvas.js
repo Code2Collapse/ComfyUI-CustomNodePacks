@@ -77,12 +77,24 @@ export function installCanvasWidget(node, widget, height) {
     cvs.addEventListener("wheel",       (e) => forward(e, "wheel"), { passive: true });
     cvs.addEventListener("contextmenu", (e) => e.preventDefault());
 
+    // agy review 2026-11-28: the loop measured the canvas (getBoundingClientRect = a forced layout) and redrew it 60
+    // times a second for every canvas widget, on screen or not (closed subgraph, scrolled away, collapsed node).
+    // The width now comes from a ResizeObserver and nothing is drawn while the canvas is not visible.
+    let cssW = 0;
+    let visible = true;
+    const ro = typeof ResizeObserver === "function"
+        ? new ResizeObserver((ents) => { for (const en of ents) cssW = en.contentRect.width; }) : null;
+    ro?.observe(cvs);
+    const io = typeof IntersectionObserver === "function"
+        ? new IntersectionObserver((ents) => { for (const en of ents) visible = en.isIntersecting; }) : null;
+    io?.observe(cvs);
     const tick = () => {
         // Node gone → stop.
-        if (node.graph == null) { cancelAnimationFrame(raf); return; }
-        const r = cvs.getBoundingClientRect();
+        if (node.graph == null) { cancelAnimationFrame(raf); ro?.disconnect(); io?.disconnect(); return; }
+        if (!visible || !cvs.isConnected) { raf = requestAnimationFrame(tick); return; }
+        if (!ro) cssW = cvs.getBoundingClientRect().width;
         const dpr = window.devicePixelRatio || 1;
-        const w = Math.max(1, Math.round(r.width || 320));
+        const w = Math.max(1, Math.round(cssW || 320));
         const pw = Math.round(w * dpr), ph = Math.round(height * dpr);
         if (cvs.width !== pw || cvs.height !== ph) { cvs.width = pw; cvs.height = ph; }
         ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
@@ -96,6 +108,8 @@ export function installCanvasWidget(node, widget, height) {
     const origRemoved = node.onRemoved;
     node.onRemoved = function (...a) {
         cancelAnimationFrame(raf);
+        ro?.disconnect();
+        io?.disconnect();
         try { host.remove(); } catch (_) {}
         return origRemoved?.apply(this, a);
     };
