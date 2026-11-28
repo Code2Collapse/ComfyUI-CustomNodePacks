@@ -195,16 +195,18 @@ def _try_extract_audio_from_video(path: str) -> tuple[Optional[np.ndarray], int]
             a = frame.to_ndarray()
             if a.ndim == 1:
                 a = a[None, :]
+            n_ch = len(frame.layout.channels) if getattr(frame, "layout", None) is not None else a.shape[0]
+            if getattr(frame.format, "is_packed", False) and a.shape[0] == 1 and n_ch > 1:
+                a = a.reshape(-1, n_ch).T                       # interleaved L R L R ... -> [channels, samples]
+            # audit (c2c_backend_audit _video_comparer_io.py:198-206): the chunks were cast to float32 BEFORE the
+            # integer check, so 16-bit PCM stayed at +-32767 (about +90 dB). Scale each chunk by its own int range.
+            if np.issubdtype(a.dtype, np.integer):
+                a = a.astype(np.float32) / float(np.iinfo(a.dtype).max)
             chunks.append(a.astype(np.float32))
         container.close()
         if not chunks:
             return None, sr
-        # Normalise int -> float
-        cat = np.concatenate(chunks, axis=-1)
-        if np.issubdtype(cat.dtype, np.integer):
-            info = np.iinfo(cat.dtype)
-            cat = (cat.astype(np.float32) - 0) / max(1, info.max)
-        return cat.astype(np.float32), sr
+        return np.concatenate(chunks, axis=-1).astype(np.float32), sr
     except Exception:
         return None, 0
 
