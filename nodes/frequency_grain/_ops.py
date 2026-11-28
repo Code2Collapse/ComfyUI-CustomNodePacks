@@ -299,6 +299,42 @@ def frequency_combine(
     mask: Optional[torch.Tensor] = None,
     mask_feather: float = 0.0,
 ) -> tuple[torch.Tensor, list[str]]:
+    """Recombine HF onto LF, _SEPARATE_FRAME_CHUNK frames at a time (agy review 2026-11-28: the whole clip went to
+    the GPU at once - 124 frames of 2K did not fit). Every step is per frame, so the result is identical."""
+    B = int(high_frequency.shape[0])
+    if B <= _SEPARATE_FRAME_CHUNK:
+        return _frequency_combine_frames(high_frequency, low_frequency, mode, linear, detail_strength, mask,
+                                         mask_feather)
+    outs, notes = [], None
+    for s0 in range(0, B, _SEPARATE_FRAME_CHUNK):
+        s1 = min(B, s0 + _SEPARATE_FRAME_CHUNK)
+        lf_c = low_frequency[s0:s1] if low_frequency.shape[0] == B else low_frequency
+        m_c = None
+        if mask is not None:
+            mb = mask if mask.dim() == 3 else mask.reshape(-1, *mask.shape[-2:])
+            if mb.shape[0] == 1:
+                m_c = mb
+            else:                                           # extra frames reuse the last mask, as before
+                idx = torch.arange(s0, s1).clamp(max=mb.shape[0] - 1)
+                m_c = mb[idx]
+        o, n = _frequency_combine_frames(high_frequency[s0:s1], lf_c, mode, linear, detail_strength, m_c,
+                                         mask_feather)
+        outs.append(o.cpu() if o.device != high_frequency.device else o)
+        if notes is None:
+            notes = n
+    notes.append(f"processed {B} frames, {_SEPARATE_FRAME_CHUNK} at a time")
+    return torch.cat(outs, 0).to(low_frequency.device), notes
+
+
+def _frequency_combine_frames(
+    high_frequency: torch.Tensor,
+    low_frequency: torch.Tensor,
+    mode: str,
+    linear: bool,
+    detail_strength: float,
+    mask: Optional[torch.Tensor] = None,
+    mask_feather: float = 0.0,
+) -> tuple[torch.Tensor, list[str]]:
     """Recombine HF onto LF. Preserves RGBA alpha from low_frequency."""
     notes: list[str] = []
     notes.append(f"mode {mode} linear light {'on' if linear else 'off'}")
