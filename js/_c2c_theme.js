@@ -84,6 +84,32 @@ import { reportFailure as __c2cReport } from "./_c2c_report.js";
 // from 23 to 2. Adding a palette is now 75 considered colours, not 183.
 
 const CORE = {
+    // NIGHTCALL (owner-approved 2026-11-28, docs/agy_review/PALETTE_NIGHTCALL.md sections 2-4 + 7): a cold 222-deg
+    // blue-black ground (wet asphalt, mercury streetlight, dark car cabin) and moonlight-silver text; the house
+    // accent is Glacier Steel. Every other pack accent lives in _c2c_brand.js. Only these 75 keys are authored - the
+    // other 108 are DERIVED by buildPalette (never paste them here).
+    nightcall: {
+        bg: "#10141d", bg2: "#0c0f16", bg3: "#07090d", surface0: "#1a1f2b",
+        surface1: "#232938", surface2: "#2f374a", overlay0: "#434c61", overlay1: "#5b657d",
+        overlay2: "#788299", fg: "#e6e9f0", sub: "#b0b8c7", subtext1: "#ced4e0",
+        // #8b94a8 is >= 4.77:1 on every nightcall ground up to surface1
+        dim: "#8b94a8", border: "#232938", highlightBase: "#ffffff", shadowBase: "#000000",
+        mauve: "#78aec9", blue: "#6f89c4", sky: "#7ea8bf", sapphire: "#6495ad",
+        teal: "#5da39d", green: "#79a37b", yellow: "#b5a05e", peach: "#c28352",
+        red: "#c9666c", pink: "#b87896", lavender: "#9b7eb8", rosewater: "#d9ccca",
+        flamingo: "#cca7a7", maroon: "#b06874", panelBg: "#151923", panelBgAlt: "#181d28",
+        panelTint: "#121620", panelHi: "#10141d", panelHi2: "#0e121a", scrimDark: "#080a0f",
+        scrimDark2: "#06080c", accentSoft: "#659bb6", accentSoft2: "#5285a0", accentLink: "#93c2d9",
+        accentLight: "#b8d7e8", accentLight2: "#b6c9d6", accentBright: "#dcebf2", accentText: "#d2e4ee",
+        accentNeutral: "#dde1e8", accentMuted: "#5e7d8f", accentMuted2: "#547082", ok: "#6ba888",
+        okBright: "#5db882", okSoft: "#7eb396", okSoft2: "#67ad93", okMute: "#3f7559",
+        warn: "#c9a65b", warnSoft: "#d4b777", warnBright: "#d4ad4e", warnTint: "#e3cf9f",
+        danger: "#cc6670", dangerSoft: "#d68189", dangerTint: "#e0a2a8", dangerStrong: "#c45a65",
+        violet: "#9b7eb8", violetSoft: "#ac92c7", violetTint: "#c4b2d9", white: "#ffffff",
+        black: "#000000", gray100: "#dee2ea", gray200: "#c4cad6", gray300: "#a2aab8",
+        gray400: "#818a9c", gray500: "#636c7d", gray600: "#515a6b", gray700: "#404857",
+        gray800: "#303642", gray900: "#222730", gray950: "#161a21",
+    },
     night: {
         bg: "#12132f", bg2: "#0c0d23", bg3: "#07081a", surface0: "#1d1e45",
         surface1: "#2a2a57", surface2: "#3b3a68", overlay0: "#4e4d80", overlay1: "#6664a0",
@@ -421,14 +447,14 @@ function buildPalette(core, dark) {
 }
 
 /** Which variants read as dark. Drives every sign flip above. */
-const IS_DARK = { night: true, mocha: true, oled: true, latte: false };
+const IS_DARK = { nightcall: true, night: true, mocha: true, oled: true, latte: false };
 
 const PALETTES = Object.fromEntries(
     Object.entries(CORE).map(([name, core]) => [name, buildPalette(core, IS_DARK[name])]),
 );
 
-let _variant = "night";
-export let C = { ...PALETTES.night };
+let _variant = "nightcall";
+export let C = { ...PALETTES.nightcall };
 
 // Convenience flat-exports: a subset of palette keys imported by name in
 // spline_mask_editor.js, spline_mask_tracker.js, and c2c_maskops_health.js.
@@ -571,7 +597,8 @@ export function applyThemeVars() {
     lines.push(`  --c2c-overlay-wash:  ${T.overlay.wash};`);
     lines.push(`  --c2c-overlay-hover: ${T.overlay.hover};`);
     // Focus ring derived from active palette accent so it tracks variant changes.
-    lines.push(`  --c2c-focus-ring: 0 0 0 2px ${C.blue};`);
+    // the house accent, not blue (blue is a pack colour and the info status) - PALETTE_NIGHTCALL 4.2
+    lines.push(`  --c2c-focus-ring: 0 0 0 2px ${C.mauve};`);
     // Semantic status aliases — panels should prefer these over raw palette keys.
     lines.push(`  --c2c-status-success: ${C.green};`);
     lines.push(`  --c2c-status-warning: ${C.yellow};`);
@@ -580,7 +607,9 @@ export function applyThemeVars() {
     // Universal-contrast text color for on-accent buttons. White reads on every
     // saturated mid-tone accent across mocha / latte / oled. Variants may
     // override this in the future if a palette demands different contrast.
-    lines.push(`  --c2c-onAccent: #ffffff;`);
+    // PALETTE_NIGHTCALL 4.2: white fails on the muted nightcall accents (2.4-3.8:1); a dark variant uses its
+    // recess colour (5.3-8.2:1), the light one keeps white on its dark saturated accents.
+    lines.push(`  --c2c-onAccent: ${IS_DARK[_variant] === false ? "#ffffff" : C.bg3};`);
     lines.push(`  --c2c-z-panel: ${z.panel};`);
     lines.push(`  --c2c-z-header: ${z.header};`);
     lines.push(`  --c2c-z-hud: ${z.hud};`);
@@ -786,8 +815,8 @@ textarea.comfy-multiline-input:hover {
 }
 textarea.comfy-multiline-input:focus {
     outline: none !important;
-    border-color: var(--c2c-blue, #89b4fa) !important;
-    box-shadow: 0 0 0 2px rgba(137, 180, 250, 0.35) !important;
+    border-color: var(--c2c-mauve, #78aec9) !important;
+    box-shadow: 0 0 0 1px var(--c2c-mauve, #78aec9) !important;   /* crisp ring, no halo (nightcall 4.2) */
 }
 `;
 }
@@ -844,12 +873,13 @@ if (!window.__C2C_THEME_REG__) { window.__C2C_THEME_REG__ = true; try {
                 tooltip: "Palette used across every C2C panel, HUD and widget.",
                 type: "combo",
                 options: [
-                    { value: "night", text: "Night (default) — indigo ground, violet accent" },
+                    { value: "nightcall", text: "Nightcall (default) — midnight blue-black, glacier steel" },
+                    { value: "night", text: "Night (legacy indigo)" },
                     { value: "mocha", text: "Mocha (Catppuccin dark)" },
                     { value: "oled",  text: "OLED (true black)" },
                     { value: "latte", text: "Latte (light)" },
                 ],
-                defaultValue: "night",
+                defaultValue: "nightcall",
                 onChange: (v) => setVariant(v),
             },
             {

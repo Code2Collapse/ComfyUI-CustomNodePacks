@@ -39,44 +39,50 @@ import { app } from "../../scripts/app.js";
 // Night node style. History: the first body (#17182f) was a dark fill with no
 // edge and vanished into ComfyUI's canvas; lifting it to indigo (#282a56) made
 // it visible but "full purple, no darkness". Now the body stays dark and the
-// EDGE carries the node: a rim, an outer glow, a spine and a title aurora in the
+// EDGE carries the node (since 2026-11-28 NIGHTCALL: one 1px rim + the wolf disc, no glow, spine or aurora) in the
 // pack's colour, plus the wolf badge. `title` is the flat equivalent of the
 // title gradient, used where only one colour can be given (collapsed nodes,
 // menus, the Nodes 2.0 wrapper).
 export const BRAND = Object.freeze({
-    // "Obsidian night": every shade is a step of the night ramp in
-    // _c2c_theme.js (bg3 #07081a .. surface2 #3b3a68, the swatches the user
-    // gave), with the darkness put back. The body is DARKER than ComfyUI's
-    // canvas; what separates a C2C node from it is the rim, glow and aurora in
-    // the pack's colour, not a bright fill (the old #282a56 read as "full purple").
-    title: "#12132f",           // night bg: collapsed nodes, menus, Nodes 2.0 header
-    body: "#0c0d23",            // night bg2
-    ink: "#f3f1ff",
-    ink2: "#bab7db",            // night sub
-    titleTop: "#1d1e45",        // night surface0
-    titleBottom: "#0f1030",     // the darkest swatch of the user's ramp
-    badge: "#07081a",           // night bg3: wolf badge disc
-    widgetBg: "#07081a",        // night bg3: fields sit below the body
-    widgetOutline: "#2a2a57",   // night surface1 (a pack-tinted rim replaces it on our nodes)
-    widgetText: "#e8e6f7",      // night fg
-    widgetText2: "#8280ba",     // night overlay2
+    // NIGHTCALL (owner-approved 2026-11-28, docs/agy_review/PALETTE_NIGHTCALL.md): every shade is a step of the
+    // nightcall ramp in _c2c_theme.js - a cold blue-black, darker than ComfyUI's canvas. What separates a C2C node
+    // is a crisp 1px rim in the pack's colour and the wolf disc; no glow, no aurora, no bloom.
+    title: "#10141d",           // nightcall bg: collapsed nodes, menus, Nodes 2.0 header
+    body: "#0c0f16",            // nightcall bg2
+    ink: "#e6e9f0",             // nightcall fg: moonlight silver
+    ink2: "#b0b8c7",            // nightcall sub
+    titleTop: "#10141d",        // flat header (top == bottom: no gradient)
+    titleBottom: "#10141d",
+    badge: "#07090d",           // nightcall bg3: wolf badge disc
+    widgetBg: "#07090d",        // nightcall bg3: fields sit below the body
+    widgetOutline: "#232938",   // nightcall surface1: a quiet NEUTRAL field rim (never pack-tinted)
+    widgetText: "#e6e9f0",      // nightcall fg
+    widgetText2: "#788299",     // nightcall overlay2
 });
 
 // Colours this file handed out before. A workflow saved since then stores
 // them on each node; they are ours, not a choice the user made, so they are
 // upgraded rather than preserved.
-const LEGACY_TITLES = new Set(["#26275a", "#33357c", "#11122b"]);
-const LEGACY_BODIES = new Set(["#17182f", "#282a56", "#0b0c1d"]);
+// + the night-era (indigo) colours, so a workflow saved then moves to nightcall; a colour the user picked still wins
+const LEGACY_TITLES = new Set(["#26275a", "#33357c", "#11122b", "#12132f"]);
+const LEGACY_BODIES = new Set(["#17182f", "#282a56", "#0b0c1d", "#0c0d23"]);
 
-// One accent per pack: a thin line across the top of the title bar.
+// One restrained accent per pack (NIGHTCALL, a night drive): the 1px rim, the wolf disc ring, focus and active
+// controls inside the node. Dark-theme values; PACK_STRIPE_LIGHT is the same hue for a light ground (>= 5.16:1).
 const PACK_STRIPE = [
-    ["nukemax", "#f1aa7b"], ["nukenode", "#f1aa7b"],
-    ["minimax", "#76dccb"],
-    ["wannodeexperiments", "#7fd4f2"],
-    ["wananimatepreprocess", "#eba2de"],
-    ["wananimalpreprocess", "#f3d288"],
-    ["glm", "#8ee09d"],
+    ["nukemax", "#c28352"], ["nukenode", "#c28352"],              // sodium streetlamp
+    ["ltxenhanced", "#c9666c"], ["ltxe", "#c9666c"],              // distant tail-light
+    ["minimax", "#5da39d"],                                       // dashboard petrol
+    ["wannodeexperiments", "#6f89c4"],                            // mercury cobalt
+    ["wananimatepreprocess", "#9b7eb8"],                          // dusk amethyst
+    ["wananimalpreprocess", "#79a37b"],                           // canyon pine
+    ["glm", "#b5a05e"],                                           // halogen brass
+    ["omniscale", "#b87896"], ["magnific", "#b87896"],            // side-mirror rose
 ];
+export const PACK_STRIPE_LIGHT = Object.freeze({
+    "#78aec9": "#285e78", "#c28352": "#8c4e1f", "#c9666c": "#9c2d35", "#5da39d": "#1f6b65", "#6f89c4": "#325299",
+    "#9b7eb8": "#65458a", "#79a37b": "#356938", "#b5a05e": "#735e19", "#b87896": "#8a3d62",
+});
 /** "#rrggbb" + alpha -> "rgba(r,g,b,a)" (canvas cannot take var(), and the
  *  pack colour is needed at several strengths). */
 export function rgba(hex, a) {
@@ -88,7 +94,7 @@ export function rgba(hex, a) {
 export function stripeFor(folder) {
     const f = String(folder || "").toLowerCase().replace(/[^a-z0-9]/g, "");
     for (const [key, hue] of PACK_STRIPE) if (f.includes(key)) return hue;
-    return "#b494ff";   // CustomNodePacks and anything unknown: the house violet
+    return "#78aec9";   // CustomNodePacks and anything unknown: Glacier Steel, the house accent
 }
 
 // The wolf mark (same outline as c2c_ui/wolf.js), in a 48-unit box.
@@ -218,13 +224,7 @@ function drawTitleBar(node, ctx, th, size, scale, stripe) {
             const title = ctx.createLinearGradient(0, -th, 0, 0);
             title.addColorStop(0, BRAND.titleTop);
             title.addColorStop(1, BRAND.titleBottom);
-            const aurora = ctx.createLinearGradient(0, 0, Math.max(w * 0.7, 120), 0);
-            aurora.addColorStop(0, rgba(stripe, 0.34));
-            aurora.addColorStop(1, rgba(stripe, 0));
-            const hairline = ctx.createLinearGradient(0, 0, w * 0.8, 0);
-            hairline.addColorStop(0, rgba(stripe, 0.95));
-            hairline.addColorStop(1, rgba(stripe, 0));
-            return { title, aurora, hairline };
+            return { title };
         })
         : null;
     ctx.save();
@@ -237,25 +237,13 @@ function drawTitleBar(node, ctx, th, size, scale, stripe) {
     ctx.fill();
     if (s >= 0.5) {
         ctx.clip();
-        if (ours) {
-            if (lite) {
-                ctx.fillStyle = rgba(stripe, 0.34);
-                ctx.fillRect(0, -th, Math.min(w * 0.45, 120), th);
-            } else {
-                ctx.fillStyle = grads.aurora;
-                ctx.fillRect(0, -th, w, th);
-            }
-        }
-        ctx.fillStyle = "rgba(255,255,255,0.07)";
+        // NIGHTCALL restraint (PALETTE_NIGHTCALL 4.3 / 7.6): a flat header - no aurora wash - and one crisp 1px
+        // divider in the pack's colour under it.
+        ctx.fillStyle = "rgba(255,255,255,0.05)";
         ctx.fillRect(0, -th, w, 1);
         if (!collapsed && ours) {
-            if (lite) {
-                ctx.fillStyle = rgba(stripe, 0.95);
-                ctx.fillRect(0, -1, Math.min(w * 0.35, 80), 1);
-            } else {
-                ctx.fillStyle = grads.hairline;
-                ctx.fillRect(0, -1, w, 1);
-            }
+            ctx.fillStyle = rgba(stripe, 0.55);
+            ctx.fillRect(0, -1, w, 1);
         }
     }
     ctx.restore();
@@ -301,70 +289,18 @@ function _nodePath(ctx, node, th, inset = 0) {
     }
 }
 
-/** Under the widgets: a soft glow outside the node in the pack's colour and a
- *  glowing spine down the body's left edge. The glow is two widening strokes,
- *  not canvas shadowBlur - blur on every node every frame costs real CPU. */
-function drawUnderlay(node, ctx, th, scale, stripe) {
-    if (scale < 0.5 || !wearsBrand(node)) return;
-    const lite = _isLiteChrome();
-    const key = _gradKey(node, th, scale, stripe) + ":under";
-    ctx.save();
-    ctx.lineWidth = 3;
-    ctx.strokeStyle = rgba(stripe, 0.10);
-    _nodePath(ctx, node, th, 2.5);
-    ctx.stroke();
-    ctx.lineWidth = 2;
-    ctx.strokeStyle = rgba(stripe, 0.20);
-    _nodePath(ctx, node, th, 1);
-    ctx.stroke();
-    if (!node.flags?.collapsed) {
-        _nodePath(ctx, node, th);
-        ctx.clip();
-        const h = node.size[1];
-        const r = Math.max(node.size[0], 200) * 0.85;
-        if (lite) {
-            ctx.fillStyle = rgba(stripe, 0.10);
-            ctx.fillRect(0, 0, Math.min(r, node.size[0]), Math.min(r * 0.5, h));
-            ctx.fillStyle = rgba(stripe, 0.95);
-            ctx.fillRect(0, 0, 3, h);
-        } else {
-            const grads = _cacheGrads(node, key, () => {
-                const glow = ctx.createRadialGradient(0, 0, 0, 0, 0, r);
-                glow.addColorStop(0, rgba(stripe, 0.10));
-                glow.addColorStop(1, rgba(stripe, 0));
-                const spine = ctx.createLinearGradient(0, 0, 0, h);
-                spine.addColorStop(0, rgba(stripe, 0.95));
-                spine.addColorStop(1, rgba(stripe, 0.08));
-                return { glow, spine };
-            });
-            ctx.fillStyle = grads.glow;
-            ctx.fillRect(0, 0, Math.min(r, node.size[0]), Math.min(r, h));
-            ctx.fillStyle = grads.spine;
-            ctx.fillRect(0, 0, 3, h);
-        }
-    }
-    ctx.restore();
+/** Under the widgets: nothing any more. NIGHTCALL (owner-approved 2026-11-28) dropped the outer glow, the body bloom
+ *  and the left spine; the node is told apart by its 1px rim and wolf disc. Kept as a function so callers and other
+ *  packs' copies keep working. */
+function drawUnderlay(node, ctx, th, scale, stripe) {   // eslint-disable-line no-unused-vars
 }
 
-/** On top: a crisp rim, bright at the top and fading down, in the pack's
- *  colour. LiteGraph draws its own selection outline over it. */
-function drawOutline(node, ctx, th, scale, stripe = "#b494ff") {
+/** On top: a crisp, flat 1px rim in the pack's colour at 0.75 (>= 3.3:1 on the body for every pack, WCAG 1.4.11);
+ *  LiteGraph draws its own selection outline over it. */
+function drawOutline(node, ctx, th, scale, stripe = "#78aec9") {
     if (scale < 0.5 || !wearsBrand(node)) return;
-    const h = (node.flags?.collapsed ? 0 : node.size[1]) + th;
-    const lite = _isLiteChrome();
-    const key = _gradKey(node, th, scale, stripe) + ":outline";
     ctx.save();
-    if (lite) {
-        ctx.strokeStyle = rgba(stripe, 0.85);
-    } else {
-        const grads = _cacheGrads(node, key, () => {
-            const rim = ctx.createLinearGradient(0, -th, 0, h - th);
-            rim.addColorStop(0, rgba(stripe, 0.85));
-            rim.addColorStop(1, rgba(stripe, 0.28));
-            return { rim };
-        });
-        ctx.strokeStyle = grads.rim;
-    }
+    ctx.strokeStyle = rgba(stripe, node.is_selected ? 0.95 : 0.75);
     ctx.lineWidth = 1;
     _nodePath(ctx, node, th, -0.5);
     ctx.stroke();
@@ -387,7 +323,7 @@ export function withNightWidgets(draw, stripe, ctx) {
     if (!L) return draw();
     const saved = WIDGET_KEYS.map((k) => L[k]);
     L.WIDGET_BGCOLOR = BRAND.widgetBg;
-    L.WIDGET_OUTLINE_COLOR = stripe ? rgba(stripe, 0.30) : BRAND.widgetOutline;
+    L.WIDGET_OUTLINE_COLOR = BRAND.widgetOutline;   // neutral fields; the pack colour is for focus / edge only
     L.WIDGET_TEXT_COLOR = BRAND.widgetText;
     L.WIDGET_SECONDARY_TEXT_COLOR = BRAND.widgetText2;
     const rr = typeof ctx?.roundRect === "function" ? ctx.roundRect : null;
@@ -421,24 +357,26 @@ function enabled() {
 // node's own colours (background = node.color, --component-node-background =
 // node.bgcolor), so the night palette arrives on its own. What CSS adds is the
 // part that makes our nodes stand out, the same language as the classic
-// canvas: a rim and glow in the pack's colour, the aurora in the header, a
-// glowing spine, pack-tinted fields and the wolf badge in the header.
+// canvas: a 1px rim in the pack's colour, a flat header with a 1px divider and the wolf badge (NIGHTCALL); a
+// crisp divider and neutral fields; the pack colour is for the edge, focus and active controls only.
 //
 // Vue rewrites `class` on every render, so a class we added would vanish; it
 // never binds `data-c2c-pack`, so that attribute survives. Every layer is
 // translucent on purpose: a colour the user picked still shows through.
 // Nothing is inserted into Vue's markup; the spine and badge are pseudo-elements.
-const PACK_KEYS = ["nukemax", "minimax", "wannodeexperiments", "wananimatepreprocess",
-    "wananimalpreprocess", "glm"];
+const PACK_KEYS = ["nukemax", "ltxenhanced", "minimax", "wannodeexperiments", "wananimatepreprocess",
+    "wananimalpreprocess", "glm", "omniscale"];
 export function packKey(folder) {
     const f = String(folder || "").toLowerCase().replace(/[^a-z0-9]/g, "");
     if (f.includes("nukenode")) return "nukemax";
+    if (f.includes("ltxe")) return "ltxenhanced";
+    if (f.includes("magnific")) return "omniscale";
     return PACK_KEYS.find((k) => f.includes(k)) || "core";
 }
 
-const VUE_STRIPES = [["core", "#b494ff"], ["nukemax", "#f1aa7b"], ["minimax", "#76dccb"],
-    ["wannodeexperiments", "#7fd4f2"], ["wananimatepreprocess", "#eba2de"],
-    ["wananimalpreprocess", "#f3d288"], ["glm", "#8ee09d"]];
+const VUE_STRIPES = [["core", "#78aec9"], ["nukemax", "#c28352"], ["ltxenhanced", "#c9666c"],
+    ["minimax", "#5da39d"], ["wannodeexperiments", "#6f89c4"], ["wananimatepreprocess", "#9b7eb8"],
+    ["wananimalpreprocess", "#79a37b"], ["glm", "#b5a05e"], ["omniscale", "#b87896"]];
 
 export function vueChromeCss() {
     const wolfFor = (hex) => "data:image/svg+xml," + encodeURIComponent(
@@ -450,13 +388,11 @@ export function vueChromeCss() {
     const mix = (pct) => `color-mix(in srgb, ${S} ${pct}%, transparent)`;
     return `
 ${VUE_STRIPES.map(([k, c]) => `.lg-node[data-c2c-pack="${k}"] { --c2c-node-stripe: ${c}; --c2c-node-wolf: url("${wolfFor(c)}"); }`).join("\n")}
-/* Obsidian: dark body, rim + glow in the pack's colour, glowing spine, wolf
-   badge in the header. The node's own colours still come from Vue's inline
-   style (node.color / node.bgcolor), so a colour the user picks still shows;
-   everything here is layered on top of it. */
+/* NIGHTCALL (owner-approved 2026-11-28): dark body, one crisp 1px rim in the pack's colour, a flat header with a 1px
+   divider, the wolf disc - no glow, no spine, no aurora, no bloom. The node's own colours still come from Vue's
+   inline style (node.color / node.bgcolor), so a colour the user picks still shows. */
 ${N} {
-  /* core paints number-slider fills, toggles and progress in azure; ours
-     take the pack's colour instead */
+  /* core paints number-slider fills, toggles and progress in azure; ours take the pack's colour instead */
   --primary-background: ${S};
   --primary-background-hover: ${S};
   --node-component-header-icon: ${BRAND.ink2};
@@ -464,38 +400,19 @@ ${N} {
 ${W} {
   border-radius: 10px !important;
   box-shadow:
-    0 0 0 1px ${mix(62)},
-    0 0 22px -4px ${mix(42)},
-    0 18px 36px -12px rgba(0,0,0,0.78);
+    0 0 0 1px ${mix(75)},
+    0 10px 24px -10px rgba(0,0,0,0.65);
 }
-${N}::before {
-  content: "";
-  position: absolute; left: 0; top: 40px; bottom: 12px; width: 3px; z-index: 3;
-  border-radius: 0 3px 3px 0;
-  background: linear-gradient(180deg, ${S}, ${mix(8)});
-  box-shadow: 0 0 10px ${mix(55)};
-  pointer-events: none;
+${N}.selected > [data-testid="node-inner-wrapper"], ${N}[data-selected] > [data-testid="node-inner-wrapper"] {
+  box-shadow: 0 0 0 1px ${mix(95)}, 0 10px 24px -10px rgba(0,0,0,0.65);
 }
-${N}[data-collapsed]::before { display: none; }
 ${N} .lg-node-header {
   position: relative;
   color: ${BRAND.ink};
   font-weight: 600;
   letter-spacing: 0.01em;
   padding-right: 36px !important;
-  border-bottom: 1px solid transparent;
-  border-image: linear-gradient(90deg, ${S}, transparent 80%) 1;
-  /* the aurora: the pack's colour rising from the left edge, over a faint
-     top sheen - both translucent, so a colour the user picked shows through */
-  background-image:
-    linear-gradient(90deg, ${mix(32)}, transparent 70%),
-    linear-gradient(180deg, rgba(255,255,255,0.06), rgba(255,255,255,0));
-}
-${N} [data-testid^="node-body"] {
-  background-image: radial-gradient(90% 60% at 0% 0%, ${mix(11)}, transparent 70%);
-}
-${N} .bg-component-node-widget-background {
-  box-shadow: inset 0 0 0 1px ${mix(26)};
+  border-bottom: 1px solid ${mix(55)};
 }
 ${N} [data-testid="decrement"], ${N} [data-testid="increment"] {
   color: ${BRAND.widgetText2};
@@ -506,17 +423,19 @@ ${N} .lg-node-header::after {
   width: 22px; height: 22px; transform: translateY(-50%);
   border-radius: 50%;
   background: ${BRAND.badge} var(--c2c-node-wolf) center / 14px no-repeat;
-  box-shadow: 0 0 0 1.5px ${S}, 0 0 12px -2px ${S};
+  box-shadow: 0 0 0 1px ${mix(80)};
   pointer-events: none;
 }
 ${N} input:focus-visible, ${N} textarea:focus-visible, ${N} select:focus-visible {
   outline: 1px solid ${S};
   outline-offset: 0;
 }
+/* in-node C2C controls take this pack's accent; standalone panels keep the house accent */
+${N} .c2c-ui { --cu-accent: ${S}; }
 .dark-theme ${N} {
   --component-node-widget-background: ${BRAND.widgetBg};
-  --component-node-widget-background-hovered: #0e0f2b;
-  --component-node-widget-background-selected: #17183f;
+  --component-node-widget-background-hovered: #10141d;
+  --component-node-widget-background-selected: #1a1f2b;
   --component-node-border: ${BRAND.widgetOutline};
   --component-node-foreground: ${BRAND.widgetText};
   --component-node-foreground-secondary: ${BRAND.widgetText2};
