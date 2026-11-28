@@ -29,10 +29,20 @@ const MAX_DIFFS              = 15;
 const PRESET_STORAGE_KEY     = "MEC.ParamPresets";
 
 // ── Tooltip styling ──────────────────────────────────────────────────
-const TT = {
-  bg: "var(--c2c-bg)", fg: "var(--c2c-fg)", accent: "var(--c2c-blue)", warn: "var(--c2c-yellow)",
-  dim: "var(--c2c-overlay0)", radius: 6, pad: 8, maxW: 280,
-};
+// agy review 2026-11-28: Canvas 2D does not read CSS var() strings (fillStyle ignores them and keeps black), so the
+// Alt-hover history tooltip painted black on black. The colours are resolved from the live theme when drawn.
+const _TT_VARS = { bg: ["--c2c-bg", "#16161e"], fg: ["--c2c-fg", "#cdd6f4"], accent: ["--c2c-blue", "#89b4fa"],
+                   warn: ["--c2c-yellow", "#f9e2af"], dim: ["--c2c-overlay0", "#6c7086"] };
+const TT = { radius: 6, pad: 8, maxW: 280 };
+function _resolveTT() {
+  let cs = null;
+  try { cs = getComputedStyle(document.documentElement); } catch { /* no DOM */ }
+  for (const [k, [v, fb]] of Object.entries(_TT_VARS)) {
+    const got = cs ? cs.getPropertyValue(v).trim() : "";
+    TT[k] = got || fb;
+  }
+}
+_resolveTT();
 
 let _runCounter = 0;
 let _preQueueSnapshots = new Map();
@@ -219,6 +229,7 @@ function _drawTooltip(ctx, lines, x, y) {
   const tx = x - w / 2, ty = y - h - 10;
 
   ctx.save();
+  _resolveTT();                                    // follow a theme switch
   ctx.fillStyle = TT.bg;
   _rr(ctx, tx, ty, w, h, TT.radius); ctx.fill();
   ctx.strokeStyle = C.surface1; ctx.lineWidth = 1;
