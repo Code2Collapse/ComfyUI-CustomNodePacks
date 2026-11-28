@@ -290,6 +290,17 @@ def _typed_input_names(class_type: str, kind: str) -> list:
     return typed + wild
 
 
+def _follow_names(class_type: str, kind: str) -> list:
+    """The inputs a trace follows: those of `kind` (and wildcards); for IMAGE, a node without any (VAE Decode, a
+    sampler) is followed through its LATENT inputs - audit (c2c_backend_audit handles_io.py:269-411): a vid2vid chain
+    Load Video -> VAE Encode -> sampler -> VAE Decode -> Save stopped at VAE Decode, so the handle trim and the colour
+    inverse were skipped."""
+    names = _typed_input_names(class_type, kind)
+    if not names and kind == "IMAGE":
+        names = _typed_input_names(class_type, "LATENT")
+    return names
+
+
 def trace_loader(prompt: dict, start_id: Any, input_name: str, kind: str = "IMAGE") -> tuple[str | None, str]:
     """(Load Video id, "") reached from `start_id`'s `input_name` through each node's FIRST linked input of `kind`,
     or (None, why). The API prompt is flat (subgraph nodes are "outer:inner" ids), so subgraphs need nothing extra."""
@@ -313,7 +324,7 @@ def trace_loader(prompt: dict, start_id: Any, input_name: str, kind: str = "IMAG
             return (src, "") if slot in FRAME_SLOTS else (None, f"Load Video #{src} output {slot} is not its frames")
         ins = n.get("inputs") or {}
         nxt = None
-        for name in _typed_input_names(cls, kind):
+        for name in _follow_names(cls, kind):
             if _is_link(ins.get(name)):
                 nxt = ins[name]
                 break
@@ -350,7 +361,7 @@ def upstream_loads(prompt: dict, start_id: Any, input_name: str, kind: str = "IM
                 found.append(src)
             continue
         ins = n.get("inputs") or {}
-        links = [ins[name] for name in _typed_input_names(cls, kind) if _is_link(ins.get(name))]
+        links = [ins[name] for name in _follow_names(cls, kind) if _is_link(ins.get(name))]
         stack.extend(reversed(links))                       # the first input is explored first
     return found
 
