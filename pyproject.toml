@@ -4,7 +4,7 @@
 # git clone lands in custom_nodes/ComfyUI-CustomNodePacks (README "Folder name"). Do not change it.
 name = "comfyui-customnodepacks"
 description = "Code2Collapse's core ComfyUI pack: mask editing and segmentation (MaskEditControl, Image Mask Editor, SAM 1/2/3, matting, mask placement), C2C Vault protected subgraphs, Folder Incrementer versioned output, C2C video load/save, render farm and multi-GPU split, Magnific API nodes, frequency/grain, tiled refinement, layer effects and model analysis."
-version = "2.4.1"
+version = "2.4.2"
 license = { file = "LICENSE" }
 requires-python = ">=3.10"
 readme = "README.md"
