@@ -107,7 +107,7 @@ class ComfyUINativeAdapter(BackendAdapter):
         self._ensure_ws_tap()
         return remote_id
 
-    def get_status(self, job_id: str) -> dict:
+    def get_status(self, job_id: str, _recheck: bool = True) -> dict:
         hist = self._history(job_id)
         if hist is not None:
             status = hist.get("status", {})
@@ -125,6 +125,10 @@ class ComfyUINativeAdapter(BackendAdapter):
             return {"status": "running", "progress_pct": pct, "error": None}
         if job_id in pending:
             return {"status": "queued", "progress_pct": None, "error": None}
+        if _recheck:
+            # agy review: the job can finish between the /history read and the /queue read - it is then in neither
+            # and was reported "unknown" (a finished render could be abandoned). Read the history once more.
+            return self.get_status(job_id, _recheck=False)
         return {"status": "unknown", "progress_pct": None, "error": None}
 
     def get_result(self, job_id: str) -> list[str]:
