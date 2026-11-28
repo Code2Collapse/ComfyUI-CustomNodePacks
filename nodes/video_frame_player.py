@@ -81,6 +81,14 @@ LOOP_MODES = ["once", "loop", "ping-pong"]
 #  Resize helper
 # ----------------------------------------------------------------------
 
+def _keep_range(out: torch.Tensor, src: torch.Tensor) -> torch.Tensor:
+    """Clamp to 0..1 only when the source was SDR; HDR / scene-linear values outside 0..1 are kept (agy review:
+    every resize clipped them)."""
+    if bool(src.min() >= 0.0) and bool(src.max() <= 1.0):
+        return out.clamp(0.0, 1.0)
+    return out
+
+
 def _resize_lanczos_bhwc(image: torch.Tensor, target_h: int, target_w: int) -> torch.Tensor:
     """Lanczos resize for (B,H,W,C). GPU antialiased bicubic for B>4
     (much faster than CPU PIL Lanczos, visually identical at moderate
@@ -100,19 +108,17 @@ def _resize_lanczos_bhwc(image: torch.Tensor, target_h: int, target_w: int) -> t
                 img_bchw, size=(target_h, target_w),
                 mode="bicubic", align_corners=False,
             )
-        return resized.permute(0, 2, 3, 1).clamp(0.0, 1.0)
+        return _keep_range(resized.permute(0, 2, 3, 1), image)
     out = []
     for i in range(B):
         _IC.check()
-        arr = (image[i].cpu().numpy() * 255.0).clip(0, 255).astype("uint8")
-        if C == 1:
-            arr = arr[:, :, 0]
-        pil = Image.fromarray(arr).resize((target_w, target_h), Image.LANCZOS)
-        t = torch.from_numpy(np.array(pil).astype("float32") / 255.0)
-        if C == 1:
-            t = t.unsqueeze(-1)
-        out.append(t)
-    return torch.stack(out).to(image.device)
+        # agy review: each channel as a 32-bit float image (PIL mode "F" supports Lanczos) - the old 8-bit round
+        # trip banded gradients and clipped HDR
+        arr = image[i].detach().float().cpu().numpy()
+        chans = [np.asarray(Image.fromarray(arr[:, :, c], mode="F").resize((target_w, target_h), Image.LANCZOS))
+                 for c in range(C)]
+        out.append(torch.from_numpy(np.stack(chans, -1).astype("float32")))
+    return _keep_range(torch.stack(out).to(image.device), image)
 
 
 _TORCH_INTERP = {
@@ -135,7 +141,7 @@ def _resize_bhwc(image: torch.Tensor, target_h: int, target_w: int, method: str)
     kwargs = {"size": (target_h, target_w), "mode": mode}
     if mode in ("bilinear", "bicubic"):
         kwargs["align_corners"] = False
-    return F.interpolate(img_bchw, **kwargs).permute(0, 2, 3, 1).clamp(0.0, 1.0)
+    return _keep_range(F.interpolate(img_bchw, **kwargs).permute(0, 2, 3, 1), image)
 
 
 def _aspect_for(preset: str, src_w: int, src_h: int,
@@ -150,11 +156,14 @@ def _aspect_for(preset: str, src_w: int, src_h: int,
 
 
 def _snap_crop_to_aspect(cx: float, cy: float, cw: float, ch: float,
-                         aspect) -> Tuple[float, float, float, float]:
-    """Adjust normalized crop (cx,cy,cw,ch) to the target aspect, keeping
-    the centre fixed and shrinking the longer dimension. All values in [0,1]."""
+                         aspect, src_w: int = 1, src_h: int = 1) -> Tuple[float, float, float, float]:
+    """Adjust normalized crop (cx,cy,cw,ch) to the target PIXEL aspect, keeping
+    the centre fixed and shrinking the longer dimension. All values in [0,1].
+    agy review / c2c_backend_audit: the ratio was taken on the normalised rect, so a 16:9 lock on a 1920x1080 frame
+    gave a 1:1-shaped pixel crop; the target is converted to normalised units with the frame size."""
     if aspect is None or aspect <= 0:
         return (cx, cy, cw, ch)
+    aspect = float(aspect) * float(src_h) / float(max(src_w, 1))
     cur_ar = cw / max(ch, 1e-6)
     centre_x = cx + cw / 2.0
     centre_y = cy + ch / 2.0
@@ -799,7 +808,7 @@ class VideoFramePlayerMEC:
             cx, cy, cw, ch = 0.0, 0.0, 1.0, 1.0
         else:
             aspect = _aspect_for(aspect_ratio, W, H, custom_aspect_w, custom_aspect_h)
-            cx, cy, cw, ch = _snap_crop_to_aspect(cx, cy, cw, ch, aspect)
+            cx, cy, cw, ch = _snap_crop_to_aspect(cx, cy, cw, ch, aspect, W, H)
             # clamp
             cx = max(0.0, min(1.0, cx))
             cy = max(0.0, min(1.0, cy))
