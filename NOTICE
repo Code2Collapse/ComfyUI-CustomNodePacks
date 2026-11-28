@@ -202,3 +202,21 @@ Vendored third-party packages (under third_party/):
       Source:   https://github.com/ausboss/ComfyUI-AusBoss (nodes/_mask_helpers.py grow_shrink_mask, matting_refine)
       License:  MIT, Copyright (c) 2026 ausboss
       Usage:    Mask Refiner (MaskRefineMEC) uncertain-band refinement, L9.172 (A25 AusBoss parity).
+
+  * DepthCrafter inference code (nodes/depthcrafter/)
+      Author:   Tencent
+      Source:   https://github.com/Tencent/DepthCrafter
+      License:  DepthCrafter licence (nodes/depthcrafter/LICENSE): academic, research and education use ONLY - no
+                commercial or production use. NOT covered by this pack's Apache-2.0 licence.
+      Usage:    optional video depth backend of Control AOV. Kept by the owner's decision (2026-11-28) for
+                non-commercial use; anyone using this pack commercially must not use the DepthCrafter backend.
+
+  * Magnific nodes (nodes/magnific/, js/magnific/)
+      Author:   Code2Collapse (the pack owner)
+      License:  Apache-2.0, as the rest of this pack (owner's own code; confirmed by the owner 2026-11-28). The
+                Magnific service itself is used through its own account and terms.
+
+  * Prompt Relay (nodes/prompt_relay/)
+      Algorithm: Gordon Chen and contributors, https://github.com/GordonChen19/Prompt-Relay (no licence published
+                upstream, checked 2026-11-28).
+      License:  Apache-2.0 for this re-implementation, by the owner's decision; see nodes/prompt_relay/NOTICE.md.

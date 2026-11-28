@@ -35,10 +35,13 @@
 > (`briaai/RMBG-2.0`) are subject to the **BRIA AI RMBG License**, which
 > restricts commercial use. If you use Mask + Matting's `remove background` backend with
 > `bg_model` = `rmbg_2.0` for commercial purposes you **must obtain a commercial
-> licence from Bria AI** at <https://bria.ai>. All other models used in this
-> pack (SAM, SAM2, BiRefNet, ViTMatte, SeC, etc.) are Apache-2.0 or MIT
-> licensed and may be used commercially. See [NOTICE.md](NOTICE.md) for
-> full attribution and license details.
+> licence from Bria AI** at <https://bria.ai>. Several other optional models are
+> **non-commercial** too: RMBG-1.4 (the `dis` backend, Bria licence), MatAnyone /
+> MatAnyone 2, ProPainter (S-Lab licence), DepthCrafter (research only, code and
+> weights), the larger Depth Anything 3 models, and Facepoints' landmark weights
+> (CC BY-NC 4.0). SAM 3 uses Meta's SAM licence. For commercial work use the
+> Apache-2.0 / MIT paths (SAM 2.1, BiRefNet, ViTMatte, SeC, guided filter) and
+> check each model card. See [NOTICE](NOTICE) for attribution and licences.
 
 ---
 

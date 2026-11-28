@@ -62,3 +62,12 @@ Per the upstream author's stated intent (open / free for use), this port is
 distributed under the same Apache-2.0 license that covers the rest of
 `ComfyUI-CustomNodePacks`. If the upstream maintainers add a specific license
 that conflicts, this module will be relicensed to match.
+
+## Licence (checked 2026-11-28)
+
+- Upstream `GordonChen19/Prompt-Relay` publishes **no licence file** (GitHub API `license: null`; repository root:
+  `.gitignore, .nojekyll, README.md, evaluation_prompts*.json, index.html, src, static`). Without a licence the upstream
+  code is all-rights-reserved by default.
+- By the owner's decision (2026-11-28) this module is distributed under the pack's **Apache-2.0** licence, as the
+  owner's own re-implementation of the published algorithm. Credit for the algorithm stays with the upstream authors
+  (above). If upstream later adds a licence, re-check that it is compatible and update this note.

@@ -4,7 +4,7 @@ These were previously listed in ``stubs.py`` as ``NotImplementedError``
 placeholders. Promoted 2026-05-12:
 
   * ``dis``           – DIS / IS-Net high-res salient via ``briaai/RMBG-1.4``
-                         (Bria's open IS-Net weights, ApacheL2 ✓).
+                         (Bria's IS-Net weights; bria-rmbg-1.4 licence = NON-COMMERCIAL, checked 2026-11-28).
   * ``person-mask``   – Ultralytics YOLOv8-seg person-only mask.
   * ``grounding-dino``– IDEA-Research/grounding-dino-tiny text→bbox; the
                          bbox is rasterised into a binary MASK so downstream
