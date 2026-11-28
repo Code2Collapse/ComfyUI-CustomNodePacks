@@ -732,7 +732,12 @@ def probe_sequence(pattern_or_dir: str, *, files: tuple[str, ...] | None = None,
     """A lazy handle on an image sequence (or one still). ``layer`` None = the reader's old behaviour (the first three
     channels of the first part, plus alpha); a key or "auto" = that EXR layer by name (exr.pick_layer). The frame
     numbers of the files are kept (``source.numbers``); the rate is 24 here - the loader sets it."""
-    import OpenImageIO as oiio  # type: ignore[import-not-found]
+    try:
+        import OpenImageIO as oiio  # type: ignore[import-not-found]
+    except ImportError as exc:
+        raise RuntimeError("Reading an image sequence needs OpenImageIO, which is not installed. Install it into "
+                           "ComfyUI's Python: pip install OpenImageIO (it is in this pack's requirements.txt), then "
+                           "restart ComfyUI.") from exc
 
     files = tuple(files) if files is not None else resolve_sequence(pattern_or_dir)
     if not files:

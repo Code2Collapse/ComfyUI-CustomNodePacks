@@ -61,6 +61,9 @@ opencolorio>=2.6.0
 # L9.63: the same OCIO transforms on the GPU (OCIO's own GPU processor through a headless OpenGL 4.0 context), used
 # only after this machine's GPU matched the exact CPU and was measured faster. Without it the exact CPU path runs.
 moderngl>=5.10
-# Image sequences (EXR / DPX / PNG / TIFF read + write) use OpenImageIO: pip install OpenImageIO
+# Image sequences (EXR / DPX / PNG / TIFF read + write) need OpenImageIO: Load Video (C2C) probes EVERY sequence
+# with it (c2c_core/video/probe.py probe_sequence) and Save Video writes EXR with it (audit 2026-11-28: it was
+# commented out, so a fresh install failed on the first image sequence). Pillow / av / psutil come with ComfyUI.
+OpenImageIO
 # Not listed on purpose: mediapy, decord - used only by the upstream DepthCrafter / NormalCrafter command-line
 # helpers (nodes/*crafter/utils.py, depthcrafter/inference.py), which no node imports.
