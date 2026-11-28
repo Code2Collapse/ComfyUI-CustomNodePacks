@@ -74,24 +74,18 @@ class MaskTransformXY:
         if amount == 0:
             return mask
         abs_amount = abs(amount)
-        # Build 1-D structuring element
-        if axis == "x":
-            kernel = torch.ones(1, 1, 1, 2 * abs_amount + 1, device=mask.device)
-        else:
-            kernel = torch.ones(1, 1, 2 * abs_amount + 1, 1, device=mask.device)
-        pad_h = abs_amount if axis == "y" else 0
-        pad_w = abs_amount if axis == "x" else 0
+        # agy review 2026-11-28: a box convolution thresholded at 0.5 turned every soft edge into 0 / 1. Grey
+        # morphology instead: dilation = max over the window, erosion = min (as Nuke's Dilate / FilterErode do), so a
+        # soft edge moves and stays soft. A hard mask gives the same result as before.
+        k = 2 * abs_amount + 1
+        ks = (1, k) if axis == "x" else (k, 1)
+        pad = (abs_amount, abs_amount, 0, 0) if axis == "x" else (0, 0, abs_amount, abs_amount)
         m = mask.unsqueeze(0).unsqueeze(0) if mask.dim() == 2 else mask.unsqueeze(1)
-        m_pad = F.pad(m, (pad_w, pad_w, pad_h, pad_h), mode="constant",
-                       value=0.0 if amount > 0 else 1.0)
+        m = m.float()
         if amount > 0:
-            # max-pool style dilation via convolution then threshold
-            out = F.conv2d(m_pad, kernel, padding=0)
-            out = (out > 0.5).float()
+            out = F.max_pool2d(F.pad(m, pad, mode="constant", value=0.0), ks, stride=1)
         else:
-            # erosion = invert → dilate → invert
-            out = F.conv2d(1.0 - m_pad, kernel, padding=0)
-            out = 1.0 - (out > 0.5).float()
+            out = -F.max_pool2d(F.pad(-m, pad, mode="constant", value=-1.0), ks, stride=1)
         if mask.dim() == 2:
             out = out.squeeze(0).squeeze(0)
         else:
