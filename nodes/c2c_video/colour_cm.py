@@ -765,6 +765,11 @@ def save_plan(record: dict | None, colorspace_in: str | None, colorspace_out: st
         notes.append("PyOpenColorIO is not available: written without a colour conversion")
         return SavePlan(cs_in, cs_in, None, notes)
     src, work = (rec.get("source"), rec.get("working") or rec.get("source")) if rec else (None, None)
+    # audit (c2c_backend_audit colour_cm.py:775-778): the Load Video record names its spaces as ITS config spelled
+    # them; under a custom $OCIO config those names were looked up literally, missed, and the save was written with
+    # no conversion. They are resolved into the current config (name, alias, interop ID, then a numeric match).
+    src = (resolve(cfg, src) or src) if src else src
+    work = (resolve(cfg, work) or work) if work else work
     cs_in = (work or default_in) if auto_in else (resolve(cfg, colorspace_in) or str(colorspace_in or default_in))
     if auto_out:
         cs_out = src or cs_in
