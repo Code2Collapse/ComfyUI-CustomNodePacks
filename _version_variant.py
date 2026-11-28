@@ -117,8 +117,11 @@ def apply_variant(filename_prefix: str, *, prefix: str = "", suffix: str = "",
                 "There is no folder to tag - the prefix has no directory part. "
                 "Use mode 'filename' for a bare name.")
         out_dirs = list(dirs)
-        # The TOP folder, which is the one the incrementer treats as the shot.
-        out_dirs[0] = out_dirs[0] + folder_tag
+        # The folder that HOLDS the versions: label/v001 -> the label (as before); show/shot/task/v001 -> the task.
+        # audit (c2c_backend_audit _version_variant.py:121): the top folder was tagged, which in the show / shot /
+        # task layout renamed the SHOW for every variant.
+        at = out_dirs.index(version_string) - 1 if version_string and version_string in out_dirs[1:] else 0
+        out_dirs[at] = out_dirs[at] + folder_tag
         out_base = base
 
     subfolder_path = sep.join(out_dirs)
