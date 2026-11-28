@@ -348,13 +348,14 @@ def _motion_pass(image_bhwc):
     grays = [cv2.cvtColor(_to_u8(image_bhwc[i]), cv2.COLOR_RGB2GRAY) for i in range(image_bhwc.shape[0])]
     H, W = grays[0].shape
     frames = [torch.zeros(H, W, 3)]
-    for i in range(1, len(grays)):
-        flow = cv2.calcOpticalFlowFarneback(grays[i - 1], grays[i], None,
-                                            0.5, 3, 15, 3, 5, 1.2, 0)
+    flows = [cv2.calcOpticalFlowFarneback(grays[i - 1], grays[i], None, 0.5, 3, 15, 3, 5, 1.2, 0)
+             for i in range(1, len(grays))]
+    # normalise to 0..1 around 0.5 for direction, mag scaled by the 95th pct - ONE scale for the whole clip
+    # (audit 2026-11-27: a per-frame scale encoded the same motion differently on every frame = flicker)
+    scale = max(1e-3, float(np.percentile(np.abs(np.stack(flows)), 95)))
+    for flow in flows:
         fx, fy = flow[..., 0], flow[..., 1]
         mag = np.sqrt(fx * fx + fy * fy)
-        # normalise to 0..1 around 0.5 for direction, mag scaled by 95th pct
-        scale = max(1e-3, float(np.percentile(np.abs(np.stack([fx, fy])), 95)))
         r = np.clip(fx / (2 * scale) + 0.5, 0, 1)
         g = np.clip(fy / (2 * scale) + 0.5, 0, 1)
         b = np.clip(mag / (scale * 2), 0, 1)

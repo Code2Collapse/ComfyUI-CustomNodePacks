@@ -856,6 +856,13 @@ def parse_bbox_input(bbox_json, bbox_input=None):
         try:
             bdata = json.loads(bbox_json)
             if isinstance(bdata, list) and len(bdata) == 4:
+                x0, y0, x1, y1 = (float(v) for v in bdata)
+                # Audit M-09: bbox_json is CORNERS [x1, y1, x2, y2]; the BBOX socket is [x, y, w, h]. A list whose
+                # corners are impossible (x2 <= x1 or y2 <= y1) with a positive size is read as [x, y, w, h].
+                if (x1 <= x0 or y1 <= y0) and x1 > 0 and y1 > 0:
+                    logger.warning("bbox_json %s is not [x1, y1, x2, y2] (x2 <= x1 or y2 <= y1): read as "
+                                   "[x, y, width, height].", bdata)
+                    return np.array([x0, y0, x0 + x1, y0 + y1], dtype=np.float32)
                 return np.array(bdata, dtype=np.float32)
             elif isinstance(bdata, dict):
                 bx = float(bdata.get("x", 0))

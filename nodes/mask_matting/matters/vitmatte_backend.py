@@ -477,6 +477,9 @@ class ViTMatteMatter(BaseMatter):
             with np.errstate(invalid="ignore", divide="ignore"):
                 alpha = np.where(wgt > 1e-8, alpha_acc[i] / wgt, 0.0).astype(np.float32)
             alpha *= (trimaps[i] > 0).astype(np.float32)
+            # Audit M-16: the trimap's definite foreground is opaque whatever the model predicts there (ONYX already
+            # did this in refine_frame_tiled; the cascade path left e.g. 0.93 inside a solid subject).
+            alpha[trimaps[i] >= 255] = 1.0
             if N > 1:
                 # Instance ownership: object i's dilated band reaches into touching neighbours,
                 # and the model cannot tell one object's foreground from another's, so zero i

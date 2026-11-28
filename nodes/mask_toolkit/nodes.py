@@ -592,15 +592,23 @@ def _directional_ext(m, a: dict, extra: dict):
     from .._mask_directional import extend
     out, notes = [], []
     pose = extra.get("face_pose")
+    sx = sy = 1.0
+    if extra["grow_units"] == GROW_UNITS[1]:
+        # Audit 2026-11-27 (c2c_backend_audit "% of matte size grow recomputes the bbox per frame -> pumping"): one
+        # size for the whole clip - the median of the per-frame matte boxes - so an arm swinging out does not change
+        # how far the body grows from one frame to the next. A single frame is unchanged (its own box).
+        ws, hs = [], []
+        for i in range(m.shape[0]):
+            ys, xs = np.nonzero(m[i].detach().float().cpu().numpy() > 0.5)
+            if len(xs):
+                ws.append(xs.max() - xs.min() + 1)
+                hs.append(ys.max() - ys.min() + 1)
+        sx, sy = (float(np.median(ws)) / 100.0, float(np.median(hs)) / 100.0) if ws else (0.0, 0.0)
+        if len(ws) > 1 and (max(ws) > 1.25 * min(ws) or max(hs) > 1.25 * min(hs)):
+            notes.append(f"% units: the matte size changes over the clip; the median box ({sx * 100:.0f} x "
+                         f"{sy * 100:.0f} px) is used on every frame so the grow does not pump")
     for i in range(m.shape[0]):
         f = m[i].detach().float().cpu().numpy()
-        sx = sy = 1.0
-        if extra["grow_units"] == GROW_UNITS[1]:
-            ys, xs = np.nonzero(f > 0.5)
-            if len(xs):
-                sx, sy = (xs.max() - xs.min() + 1) / 100.0, (ys.max() - ys.min() + 1) / 100.0
-            else:
-                sx = sy = 0.0
         ang = float(extra["grow_angle"])
         if pose is not None and extra["grow_follow_face"]:
             pa = _pose_angle(pose, i)
@@ -751,8 +759,10 @@ class MaskToolsMEC:
         with torch.no_grad():
             out_mask, out_image, report = self._run(key, mode, args, image, mask, mask_b, plate, size_as)
         if out_image is None and out_mask is not None:
+            # Audit 2026-11-27 (c2c_backend_audit nodes.py:753-755): a view of the matte, like core Convert Mask to
+            # Image - cloning it held a second 3-channel copy (3.07 GiB at 124 x 2048 x 1080) even when unwired.
             m = out_mask if out_mask.dim() == 3 else out_mask.unsqueeze(0)
-            out_image = clone_output(m.unsqueeze(-1).expand(*m.shape, 3))
+            out_image = m.unsqueeze(-1).expand(*m.shape, 3)
         return out_mask, out_image, report
 
     def _run(self, key, mode, a, image, mask, mask_b, plate, size_as):

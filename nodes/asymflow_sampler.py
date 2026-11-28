@@ -8,16 +8,23 @@ flow-matching ``ModelSamplingDiscreteFlow`` family. AsymFlow defines
     signal_ratio(sigma, shift) = alpha^2 / (alpha^2 + (shift * sigma)^2),
     where alpha = 1 - sigma.
 
-Inverting ``signal_ratio = 1 - t`` for ``sigma`` given a uniform timestep
-``t in [0, 1]`` yields::
+A pretrained flow model's sigma keeps its own meaning (x = (1 - sigma) * x0 + sigma * noise), so the
+patch maps a uniform timestep ``t`` to the sigma whose UNSHIFTED signal ratio equals the shifted signal
+ratio of ``t``::
 
-    r     = sqrt(t / (1 - t))
-    sigma = r / (shift + r)
+    signal_ratio(sigma, 1) = signal_ratio(t, shift)
+    =>  sigma / (1 - sigma) = shift * t / (1 - t)
+    =>  sigma = shift * t / (1 + (shift - 1) * t)
 
-That mapping is plugged into a custom ``ModelSamplingDiscreteFlow`` so the
-sampler steps are re-distributed without retraining: low-rank / high-frequency
-detail gets more attention at high noise when ``shift > 1`` (AsymFlow's
-asymmetric velocity regime), and vice-versa for ``shift < 1``.
+(the same SNR shift ComfyUI's ``time_snr_shift`` / ModelSamplingSD3 use: AsymFlow's signal ratio is
+SNR / (SNR + shift^2), an SNR scaled by 1/shift^2). shift = 1 is the linear flow schedule, and
+shift > 1 spends more steps at high noise (shift = 3: 75 % of the schedule above sigma 0.5).
+
+Audit 2026-11-27 (L-aimodels): the earlier code solved ``signal_ratio(sigma, shift) = 1 - t``
+(sigma = r / (shift + r), r = sqrt(t / (1 - t))). That is not linear at shift = 1 and runs the OTHER
+way: shift = 3 put 90 % of the steps below sigma 0.5 and shift = 12 put 99 % there, the opposite of
+this node's own tooltip. It also dropped the CONST prediction class, the MiniMax H3 audio_scale and a
+Flux model's timestep convention; all three are now kept from the patched model.
 
 The node is intentionally a thin model patch — no sampling loop changes, no
 inference-time backprop. It produces a new ``MODEL`` whose model_sampling is
@@ -27,7 +34,6 @@ that already uses ``ModelSamplingDiscreteFlow`` (SD3, Flux dev/schnell, etc.).
 
 from __future__ import annotations
 
-import math
 from typing import Any
 
 import torch
@@ -42,18 +48,16 @@ except Exception:  # pragma: no cover - allow import-only static analysis
 
 
 def asymflow_time_shift(shift: float, t: torch.Tensor | float) -> torch.Tensor | float:
-    """Map a uniform timestep ``t`` to a sigma under the AsymFlow schedule.
+    """Map a uniform timestep ``t`` to a sigma under the AsymFlow signal-shift schedule.
 
-    sigma(t; shift) = r / (shift + r), with r = sqrt(t / (1 - t)).
-    Returns the input type (tensor or python float).
+    sigma(t; shift) = shift * t / (1 + (shift - 1) * t), i.e. the sigma whose unshifted signal ratio
+    equals AsymFlow's shifted signal ratio of ``t`` (see the module docstring). Returns the input type.
     """
+    shift = float(shift)
     if isinstance(t, torch.Tensor):
-        t_c = t.clamp(min=1e-7, max=1.0 - 1e-7)
-        r = (t_c / (1.0 - t_c)).sqrt()
-        return r / (shift + r)
-    t_f = max(min(float(t), 1.0 - 1e-7), 1e-7)
-    r = math.sqrt(t_f / (1.0 - t_f))
-    return r / (shift + r)
+        return shift * t / (1.0 + (shift - 1.0) * t)
+    t_f = float(t)
+    return shift * t_f / (1.0 + (shift - 1.0) * t_f)
 
 
 def _make_asymflow_sampling_cls():
@@ -81,6 +85,16 @@ def _make_asymflow_sampling_cls():
         def sigma(self, timestep):  # type: ignore[override]
             return asymflow_time_shift(self.shift, timestep / self.multiplier)
 
+        # Packed audio-video flow models (MiniMax H3, core ModelSamplingAV) carry the audio stream at
+        # shift / audio_shift; the patch copies audio_shift from the replaced sampling (None = no audio).
+        audio_shift = None
+
+        @property
+        def audio_scale(self):
+            if self.audio_shift is None:
+                return 1.0
+            return self.shift / self.audio_shift
+
         def percent_to_sigma(self, percent: float):  # type: ignore[override]
             if percent <= 0.0:
                 return 1.0
@@ -97,7 +111,7 @@ class AsymFlowSamplerPatch:
     CATEGORY = "Code2Collapse/Sampling"
     DESCRIPTION = (
         "Replace the model's flow-matching schedule with AsymFlow's "
-        "shifted-signal-ratio mapping (sigma = r/(shift+r), r=sqrt(t/(1-t))). "
+        "shifted-signal-ratio mapping (sigma = shift*t/(1+(shift-1)*t)). "
         "Inference-only; no retraining required. Best on flow models "
         "(SD3, Flux, AsymFlow-trained checkpoints)."
     )
@@ -121,7 +135,8 @@ class AsymFlowSamplerPatch:
                         "tooltip": (
                             "AsymFlow signal-shift. shift=1 -> linear flow. "
                             ">1 spends more steps at high noise (recommended "
-                            "for high-resolution / Flux-like models)."
+                            "for high-resolution / Flux-like models). It replaces "
+                            "any earlier shift node (e.g. MiniMax H3 Sigma Shift): use one or the other."
                         ),
                     },
                 ),
@@ -158,6 +173,29 @@ class AsymFlowSamplerPatch:
                 f"models). This model predicts with {type(existing0).__name__}, which this schedule would get wrong. "
                 "Remove the node for this model.")
         asym_cls = _make_asymflow_sampling_cls()
+        # Keep the model's prediction class (CONST, IMG_TO_IMG_FLOW, COSMOS_RFLOW ...): the k-diffusion samplers
+        # test isinstance(model_sampling, CONST), so a copied method alone is not enough (audit 2026-11-27).
+        mixin = None
+        if existing0 is not None and flow_types:
+            for klass in type(existing0).__mro__:
+                if issubclass(klass, flow_types) and not issubclass(klass, torch.nn.Module):
+                    mixin = klass
+                    break
+        if mixin is not None and not issubclass(asym_cls, mixin):
+            asym_cls = type("ModelSamplingAsymFlow", (asym_cls, mixin), {})
+
+        # The model's own timestep convention wins over the widget: Flux feeds sigma itself (x1), Wan / H3 / SD3
+        # feed sigma * 1000. A different multiplier would give a pretrained model timesteps it never saw.
+        mult = int(multiplier)
+        model_mult = getattr(existing0, "multiplier", None)
+        if model_mult is None and existing0 is not None and callable(getattr(existing0, "timestep", None)):
+            try:
+                model_mult = float(existing0.timestep(torch.tensor(1.0)))
+            except Exception:
+                model_mult = None
+        if model_mult is not None and float(model_mult) > 0 and abs(float(model_mult) - mult) > 1e-6:
+            print(f"[AsymFlow] multiplier {mult} ignored: this model uses timestep = sigma x {float(model_mult):g}.")
+            mult = int(round(float(model_mult))) or 1
 
         patched = model.clone()
         # Build a fresh model_sampling instance using the current model_config
@@ -165,13 +203,13 @@ class AsymFlowSamplerPatch:
         # propagate sensibly.
         mc = getattr(patched.model, "model_config", None)
         ms_inst = asym_cls(model_config=mc) if mc is not None else asym_cls()
-        ms_inst.set_parameters(shift=float(shift), multiplier=int(multiplier))
+        ms_inst.set_parameters(shift=float(shift), multiplier=mult)
+        if getattr(existing0, "audio_shift", None) is not None:
+            ms_inst.audio_shift = existing0.audio_shift
 
-        # Preserve prediction-type mixin behaviour (EPS / CONST / etc.) by
-        # copying it from the existing model_sampling, mirroring how
-        # ModelSamplingFlux/SD3 nodes do their patch.
+        # No known prediction class found: fall back to borrowing the existing methods.
         existing = getattr(patched.model, "model_sampling", None)
-        if existing is not None:
+        if existing is not None and mixin is None:
             for attr in ("calculate_denoised", "calculate_input", "noise_scaling", "inverse_noise_scaling"):
                 fn = getattr(existing, attr, None)
                 if fn is not None and not hasattr(ms_inst, attr + "_overridden"):

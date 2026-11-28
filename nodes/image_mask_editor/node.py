@@ -495,8 +495,14 @@ class ImageMaskEditorC2C:
         if notes:
             info_parts.extend(notes)
         info = "; ".join(dict.fromkeys(info_parts))
+        ui = {"c2c_ime_frames": [frame_payload] if frame_payload else []}
+        if not frame_payload and frame_notes:
+            # audit 2026-11-27 (c2c_backend_audit frames.py:22): over the recording budget (e.g. 124 frames of 2048x1080
+            # = 274 M px > 268 M) the editor fell back to an upstream preview that said "run once" - after a run. The
+            # reason now reaches the editor's banner too, not only the info output.
+            ui["c2c_ime_frames_note"] = ["; ".join(frame_notes)]
         return {
-            "ui": {"c2c_ime_frames": [frame_payload] if frame_payload else []},
+            "ui": ui,
             "result": (blurred, preview, info),
         }
 

@@ -697,7 +697,13 @@ def _matte_crop(matter, frame_u8, tri_u8, crop_h: int, crop_w: int, coarse_crop=
     img_t = torch.from_numpy(frame_u8).float().div(255.0).unsqueeze(0)
     tri_t = torch.from_numpy(tri_u8).float().div(255.0).unsqueeze(0)
     coarse_t = (coarse_crop.float().unsqueeze(0) if coarse_crop is not None else torch.zeros_like(tri_t))
-    out = matter.matte(img_t, coarse_t, trimap=tri_t)
+    kw = {}
+    if "matte_tile" in (getattr(matter, "PARAMS", None) or ()):
+        # ONYX already tiled the frame at matte_tile: the matter runs this crop as ONE tile. Its own default (512 px
+        # for ViTMatte) used to re-tile every 1024 px ONYX tile into 4+ smaller ones, so matte_tile never set the
+        # model's context size (audit 2026-11-27).
+        kw = {"tile_size": max(int(crop_h), int(crop_w))}
+    out = matter.matte(img_t, coarse_t, trimap=tri_t, **kw)
     alpha = out["alpha"][0]
     if alpha.shape[-2:] != (crop_h, crop_w):
         import torch.nn.functional as F

@@ -77,8 +77,16 @@ def run_spline(a: dict, image: Optional[torch.Tensor], node_id: Any):
 
 def run_roto(a: dict):
     from ..roto import VectorRotoMEC
-    mask, info = VectorRotoMEC().rasterize(a["roto_json"], a["roto_frame_count"], a["roto_width"], a["roto_height"],
-                                           a["roto_samples_per_seg"], a["roto_feather_px"], a["roto_frame"])
+    try:
+        mask, info = VectorRotoMEC().rasterize(a["roto_json"], a["roto_frame_count"], a["roto_width"],
+                                               a["roto_height"], a["roto_samples_per_seg"], a["roto_feather_px"],
+                                               a["roto_frame"])
+    except (IndexError, KeyError, TypeError) as exc:
+        # audit 2026-11-27: a shape whose later keyframe has FEWER points than its first one raised a bare
+        # "IndexError: list index out of range" (nodes/roto.py tweens point by point from the first key's count)
+        raise ValueError("Image Mask Editor (roto): a shape's keyframes do not match - every keyframe of a shape must "
+                         "have the same number of points with x, y, in and out. Re-key the shape with the same "
+                         f"points on every keyframe. ({type(exc).__name__}: {exc})") from exc
     return _as_bhw(mask), False, _outputs(), {}, info
 
 

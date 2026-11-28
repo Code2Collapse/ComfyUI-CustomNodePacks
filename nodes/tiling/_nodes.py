@@ -56,6 +56,7 @@ from ._identity import (
     drift_map,
     drift_report,
     identity_lock,
+    low_pass_cache,
     multiband_lock,
     parse_bands,
     track_protect_mask,
@@ -558,6 +559,15 @@ class TilePlanMEC:
                     f"Memory: about {estimate(plan):.0f} MB per tile run ({t0.width}x{t0.height} x {frames} "
                     f"frame(s) x {float(mb_per_megapixel):g} MB/MP) within the {budget:.0f} MB budget"
                     + (" (auto)" if budget_int == -1 else "") + f"; {len(plan.tiles)} tiles.")
+            t0 = plan.tiles[0]
+            if t0.width % 16 or t0.height % 16:
+                # audit 2026-11-27: equal tiles that cover the frame exactly can come out at any size (588, 747...).
+                extra.append(
+                    f"NOTE: the tiles are {t0.width}x{t0.height}, not a multiple of 16"
+                    + (" (nor of 8)" if t0.width % 8 or t0.height % 8 else "") + ". A VAE / video model crops or pads "
+                    "such tiles (8x VAEs need /8, Wan / H3-class video VAEs /16, LTX /32), and tiles that come back "
+                    "a different size cannot be merged. Pick a tile_size / rows / cols / overlap that lands on a "
+                    "multiple, or resize the tiles to one before the refiner and back after it.")
             info = describe_plan(plan)
             if lines or extra:
                 info = "\n".join([info, *lines, *extra])
@@ -670,6 +680,13 @@ class TileSplitMEC:
                 f"WARNING: {batch.shape[0]} images is a large batch. Most "
                 "samplers will try to do it in one go and run out of memory - "
                 "consider fewer tiles, or a node that batches internally.")
+        if frames > 1 and len(tile_plan.tiles) > 1:
+            info.append(
+                f"VIDEO MODELS: this is ONE flat batch of {len(tile_plan.tiles)} x {frames} frames. A video VAE / "
+                "video model reading it as one clip would see every tile's frames end to end (a cut at each tile "
+                "boundary, and a frame count off the model's grid, e.g. 4n+1 / 17n+5). Run each tile's range on its "
+                "own (tile_coords batch_start / batch_end, e.g. with Image Batch Slice), then concatenate in the same "
+                "order for Tile Merge.")
         if halo > 0:
             info.append(
                 f"Halo: every tile carries {halo}px of context on each side (frame edges repeat the border). Wire "
@@ -949,33 +966,34 @@ class IdentityLockMEC:
                     notes.append("track_protect: the protect mask already has a frame for every frame; used as "
                                  "given.")
 
-        if bands is None:
-            out = identity_lock(original, refined, radius=float(radius),
-                                strength=float(strength), protect=protect,
-                                corrections=int(corrections))
-        else:
+        with low_pass_cache():                  # audit 2026-11-27: each blur of the clip once per run
+            if bands is None:
+                out = identity_lock(original, refined, radius=float(radius),
+                                    strength=float(strength), protect=protect,
+                                    corrections=int(corrections))
+            else:
+                with torch.no_grad():
+                    out = multiband_lock(original, refined, radii=bands[0], strengths=bands[1],
+                                         strength=float(strength), protect=protect)
+            moved = drift(original, out, radius=float(radius))
+            info = describe_lock(original, out, radius=float(radius),
+                                 strength=float(strength),
+                                 protected=protect is not None,
+                                 corrections=int(corrections))
+            if bands is not None:
+                info = info + "\n" + describe_bands(*bands)
+            if notes:
+                info = "\n".join([info, *notes])
             with torch.no_grad():
-                out = multiband_lock(original, refined, radii=bands[0], strengths=bands[1],
-                                     strength=float(strength), protect=protect)
-        moved = drift(original, out, radius=float(radius))
-        info = describe_lock(original, out, radius=float(radius),
-                             strength=float(strength),
-                             protected=protect is not None,
-                             corrections=int(corrections))
-        if bands is not None:
-            info = info + "\n" + describe_bands(*bands)
-        if notes:
-            info = "\n".join([info, *notes])
-        with torch.no_grad():
-            report = drift_report(original, out, radius=float(radius), protect=protect, tracked_offsets=tracked)
+                report = drift_report(original, out, radius=float(radius), protect=protect, tracked_offsets=tracked)
 
-        if want_drift_map:
-            dmap = drift_map(original, out, radius=float(radius))
-        else:
-            # An all-zero map rather than None: a MASK output that is sometimes
-            # absent breaks any graph that wires it.
-            dmap = torch.zeros(original.shape[0], original.shape[1],
-                               original.shape[2], dtype=torch.float32)
+            if want_drift_map:
+                dmap = drift_map(original, out, radius=float(radius))
+            else:
+                # An all-zero map rather than None: a MASK output that is sometimes
+                # absent breaks any graph that wires it.
+                dmap = torch.zeros(original.shape[0], original.shape[1],
+                                   original.shape[2], dtype=torch.float32)
         return (out, dmap, float(moved), info, json.dumps(report))
 
 

@@ -253,10 +253,17 @@ def _edge_snap(m: np.ndarray, rgb: np.ndarray, strength: float,
         band = _ndi.binary_dilation(mg > 0.05, iterations=int(band_radius)).astype(np.float32)
     else:
         band = (mg > 0.05).astype(np.float32)
-    # Inside the band, blend mask towards (mask * (alpha + (1-alpha)*image_grad)).
-    blend = (1.0 - strength) + strength * g
-    new = m.copy()
-    new = m * (1.0 - band) + (m * blend) * band
+    # Audit 2026-11-27 + agy review: the original blend m * ((1-strength) + strength*g) only ever DARKENED the band
+    # (a ~0.45x dark halo inside every mask at the auto_edge_lock defaults); the first fix pulled soft alpha toward
+    # 0/1 wherever the image had gradient, which hardened hair and motion blur. Now the band is replaced by an
+    # edge-aware guided filter of the mask with the image as guide (He et al.): the transition follows image edges,
+    # soft values stay soft, and solid interior / exterior outside the band never moves.
+    I = torch.from_numpy(np.ascontiguousarray(gray, dtype=np.float32))[None, None]
+    p = torch.from_numpy(np.ascontiguousarray(m, dtype=np.float32))[None, None]
+    gf = _guided_filter_torch(I, p, max(2, int(band_radius)), 1e-3)[0, 0].numpy().clip(0.0, 1.0)
+    soft = ((m > 0.0) & (m < 1.0)).astype(np.float32)          # solid 0 / 1 never moves (no halo)
+    w = float(np.clip(strength, 0.0, 1.0)) * band * soft
+    new = m * (1.0 - w) + gf * w
     return new.clip(0.0, 1.0)
 
 
@@ -421,14 +428,29 @@ def _temporal_smooth(stack: torch.Tensor, alpha_ema: float = 0.7,
     if stack.shape[0] < 2 or alpha_ema <= 0:
         return stack
     a = float(np.clip(alpha_ema, 0.0, 0.99))
+
+    # Audit 2026-11-27 + agy review: the plain EMA had no motion compensation, so a moving limb left a ghost behind
+    # it. A frame-to-frame change is FLICKER when the frames on both sides of t agree with each other (a pop that
+    # comes back) and MOTION when they differ (the edge really moved on). Flicker is smoothed as before; at moving
+    # pixels the blend weight is 0, so they are never trailed.
+    T = stack.shape[0]
+    prev = torch.cat([stack[:1], stack[:-1]], 0)
+    nxt = torch.cat([stack[1:], stack[-1:]], 0)
+    agree = (prev - nxt).abs()
+    weight = a * ((0.3 - agree) / 0.2).clamp(0.0, 1.0)                    # neighbours differ > 0.3 -> motion, no blend
+
+    def _gate(t0, t1):                                                    # judged at the frame being written
+        return weight[t1]
     fwd = stack.clone()
     for t in range(1, stack.shape[0]):
-        fwd[t] = a * fwd[t - 1] + (1.0 - a) * stack[t]
+        g = _gate(t - 1, t)
+        fwd[t] = g * fwd[t - 1] + (1.0 - g) * stack[t]
     if not bidirectional:
         return fwd.clamp(0.0, 1.0)
     bwd = stack.clone()
     for t in range(stack.shape[0] - 2, -1, -1):
-        bwd[t] = a * bwd[t + 1] + (1.0 - a) * stack[t]
+        g = _gate(t + 1, t)
+        bwd[t] = g * bwd[t + 1] + (1.0 - g) * stack[t]
     return ((fwd + bwd) * 0.5).clamp(0.0, 1.0)
 
 

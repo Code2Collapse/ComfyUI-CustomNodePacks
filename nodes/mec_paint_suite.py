@@ -416,6 +416,35 @@ def _label_regions(mask_2d: np.ndarray) -> Tuple[np.ndarray, int]:
     return binary.astype(np.int32), 1 if binary.any() else 0
 
 
+_D65 = np.array([0.95047, 1.0, 1.08883], dtype=np.float64)
+_RGB2XYZ = np.array([[0.4124564, 0.3575761, 0.1804375],
+                     [0.2126729, 0.7151522, 0.0721750],
+                     [0.0193339, 0.1191920, 0.9503041]], dtype=np.float64)
+_XYZ2RGB = np.linalg.inv(_RGB2XYZ)
+
+
+def _srgb_to_lab_np(rgb: np.ndarray) -> np.ndarray:
+    """sRGB 0..1 [...,3] -> CIE Lab (D65), exact float math (L 0..100)."""
+    c = np.clip(rgb[..., :3].astype(np.float64), 0.0, 1.0)
+    lin = np.where(c <= 0.04045, c / 12.92, ((c + 0.055) / 1.055) ** 2.4)
+    t = (lin @ _RGB2XYZ.T) / _D65
+    d = 6.0 / 29.0
+    f = np.where(t > d ** 3, np.cbrt(t), t / (3 * d * d) + 4.0 / 29.0)
+    return np.stack((116.0 * f[..., 1] - 16.0, 500.0 * (f[..., 0] - f[..., 1]), 200.0 * (f[..., 1] - f[..., 2])), -1)
+
+
+def _lab_to_srgb_np(lab: np.ndarray) -> np.ndarray:
+    """Inverse of _srgb_to_lab_np (unclipped)."""
+    fy = (lab[..., 0] + 16.0) / 116.0
+    fx, fz = fy + lab[..., 1] / 500.0, fy - lab[..., 2] / 200.0
+    f = np.stack((fx, fy, fz), -1)
+    d = 6.0 / 29.0
+    t = np.where(f > d, f ** 3, 3 * d * d * (f - 4.0 / 29.0)) * _D65
+    lin = t @ _XYZ2RGB.T
+    lin = np.clip(lin, 0.0, None)
+    return np.where(lin <= 0.0031308, lin * 12.92, 1.055 * lin ** (1.0 / 2.4) - 0.055)
+
+
 class MECContextInpainter:
     """Smart-blend inpainted output back over the original image.
 
@@ -534,7 +563,8 @@ class MECContextInpainter:
     @staticmethod
     def _lightness_rescue(orig: np.ndarray, fake: np.ndarray, m: np.ndarray, ref: Optional[np.ndarray] = None
                           ) -> np.ndarray:
-        """Lift L channel of ``fake`` toward ``orig`` (measured in `ref`, default the mask) if it is >5% darker."""
+        """Lift L channel of ``fake`` toward ``orig`` (measured in `ref`, default the mask) when it is darker: no lift up to
+        5 %, the full difference from 10 %, a linear ramp between (continuous, so video does not pop)."""
         rsel = (m > 0.05) if ref is None else ref > 0.05
         if not _HAS_CV2:
             # luminance-only fallback (BT.709)
@@ -544,21 +574,26 @@ class MECContextInpainter:
             if not sel.any() or not rsel.any():
                 return fake
             d = float(lo[rsel].mean() - lf[sel].mean())
-            if d <= 0.05:
+            knee = min(1.0, max(0.0, (d - 0.05) / 0.05))
+            if knee <= 0.0:
                 return fake
-            return np.clip(fake + d * m[..., None], 0.0, 1.0)
-        lab_o = cv2.cvtColor((orig * 255).astype(np.uint8), cv2.COLOR_RGB2LAB).astype(np.float32)
-        lab_f = cv2.cvtColor((fake * 255).astype(np.uint8), cv2.COLOR_RGB2LAB).astype(np.float32)
+            return np.clip(fake + d * knee * m[..., None], 0.0, 1.0)
+        # audit 2026-11-27: exact float CIE Lab (L 0..100; cv2's float Lab path is itself table-quantised to ~155
+        # levels on a 0.2-0.5 ramp, measured) instead of an 8-bit round trip that quantised the WHOLE frame to
+        # 256 levels, and a soft knee instead of a hard 5 % switch (darker by 4.9 % = nothing, 5.1 % = the full lift:
+        # a frame hovering at the threshold popped on video). Lift = d x ramp from 0 at 5 % to 1 at 10 %.
+        lab_o = _srgb_to_lab_np(orig)
+        lab_f = _srgb_to_lab_np(fake)
         sel = m > 0.05
         if not sel.any() or not rsel.any():
             return fake
-        # L is in 0..255 in OpenCV's 8-bit LAB; 5 % is ~12.75
         lo, lf = lab_o[..., 0], lab_f[..., 0]
         d = float(lo[rsel].mean() - lf[sel].mean())
-        if d <= 12.75:
+        knee = min(1.0, max(0.0, (d - 5.0) / 5.0))
+        if knee <= 0.0:
             return fake
-        lab_f[..., 0] = np.clip(lab_f[..., 0] + d * m, 0.0, 255.0)
-        out = cv2.cvtColor(lab_f.astype(np.uint8), cv2.COLOR_LAB2RGB).astype(np.float32) / 255.0
+        lab_f[..., 0] = np.clip(lab_f[..., 0] + d * knee * m, 0.0, 100.0)
+        out = np.clip(_lab_to_srgb_np(lab_f), 0.0, 1.0).astype(np.float32)
         return out
 
     @staticmethod

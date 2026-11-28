@@ -174,9 +174,15 @@ def _mode_prompt(prompt: str, mode: str, n_refs: int) -> str:
 # ──────────────────────────────────────────────────────────────────────
 
 def _tensor_to_png_b64(img: torch.Tensor) -> str:
-    """[H,W,3] float 0-1 → base64 PNG (longest side capped)."""
+    """[H,W,C] float 0-1 → base64 RGB PNG (longest side capped). Alpha / extra channels are dropped (audit
+    2026-11-27: an RGBA reference was read by PIL as RGB bytes and arrived scrambled); a 1-channel image is grey."""
     from PIL import Image
-    arr = (img.detach().cpu().numpy().clip(0, 1) * 255).astype(np.uint8)
+    t = img.detach()
+    if t.ndim == 2:
+        t = t.unsqueeze(-1)
+    if t.shape[-1] == 1:
+        t = t.expand(*t.shape[:-1], 3)
+    arr = np.ascontiguousarray((t[..., :3].cpu().numpy().clip(0, 1) * 255).astype(np.uint8))
     pil = Image.fromarray(arr, "RGB")
     if max(pil.size) > _REF_MAX_SIDE:
         r = _REF_MAX_SIDE / max(pil.size)

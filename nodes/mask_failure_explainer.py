@@ -52,6 +52,8 @@ _LAPLACIAN_KERNEL = torch.tensor(
      [0.0, 1.0, 0.0]], dtype=torch.float32
 ).unsqueeze(0).unsqueeze(0)  # (1,1,3,3)
 
+_LAP_SCALE = 255.0 * 255.0   # 0-1 luma -> the 8-bit Laplacian-variance scale the blur threshold is written in
+
 # ── Sobel kernels ────────────────────────────────────────────────────
 
 _SOBEL_X = torch.tensor(
@@ -85,24 +87,29 @@ def _compute_brightness(image: torch.Tensor) -> torch.Tensor:
 def _compute_blur_score_torch(gray: torch.Tensor) -> torch.Tensor:
     """Laplacian variance per frame via conv2d. gray: (B,H,W) → (B,) scores.
 
-    Convention: higher = sharper. Multiply by 1000 so threshold ~50 is meaningful.
+    Convention: higher = sharper, on the usual 8-bit scale (the variance of the Laplacian of a 0-255 image).
+    Audit 2026-11-27 (c2c_backend_audit "65x blur scale bug"): the 0-1 variance was multiplied by 1000 instead of
+    255^2 = 65025, so every score was 65x too small and an ordinary sharp frame (8-bit variance 1604) scored 24.6 -
+    under the default blur_threshold 50, i.e. "blurry".
     """
     device = _get_device(gray)
     B, H, W = gray.shape
     kernel = _LAPLACIAN_KERNEL.to(device=device, dtype=gray.dtype)
     # (B,1,H,W) for conv2d
     inp = gray.unsqueeze(1)
-    lap = F.conv2d(inp, kernel, padding=1)  # (B,1,H,W)
+    # reflect, not zero padding: zeros drew a hard edge round every frame (a flat grey image scored 984 on the
+    # 8-bit scale instead of 0); cv2.Laplacian also reflects at the border
+    lap = F.conv2d(F.pad(inp, (1, 1, 1, 1), mode="reflect"), kernel)  # (B,1,H,W)
     lap = lap.squeeze(1)  # (B,H,W)
     # Variance of Laplacian per frame
     var_per_frame = lap.var(dim=(-2, -1))  # (B,)
-    return var_per_frame * 1000.0
+    return var_per_frame * _LAP_SCALE
 
 
 def _compute_blur_score_cv2(gray_np):
     """Laplacian variance via cv2 for a single HxW numpy array. Returns float."""
     lap = cv2.Laplacian(gray_np, cv2.CV_64F)
-    return float(lap.var()) * 1000.0
+    return float(lap.var()) * _LAP_SCALE
 
 
 def _compute_blur_score(image: torch.Tensor) -> torch.Tensor:
@@ -392,10 +399,13 @@ def _holes_fraction(binary_np) -> float:
         # frame or wraps every edge; there is no exterior to flood from, so
         # the concept of "interior holes" is undefined here.
         return 0.0
-    ff = inv.copy()
-    mask_pad = np.zeros((h + 2, w + 2), dtype="uint8")
-    cv2.floodFill(ff, mask_pad, seed, 2)
-    holes = (ff == 1)
+    # Audit 2026-11-27 (c2c_backend_audit "split-bg hole bug", :473 area): one flood from ONE border pixel left every
+    # other border-touching background region (a bar from top to bottom splits the background in two) counted as a
+    # "hole" (holes_frac 1.0 for a plain vertical bar). Flood from a background frame around the image instead, which
+    # reaches every exterior region at once.
+    ff = np.pad(inv, 1, constant_values=1)
+    cv2.floodFill(ff, np.zeros((h + 4, w + 4), dtype="uint8"), (0, 0), 2)
+    holes = (ff[1:-1, 1:-1] == 1)
     mask_area = float(binary_np.sum())
     if mask_area < 1.0:
         return 0.0
@@ -470,19 +480,22 @@ def _compute_mask_quality(image: torch.Tensor, mask: torch.Tensor) -> dict:
         soft = ((m > 0.05) & (m < 0.95)).float().mean().item()
         bimodality[i] = soft
 
-        # 6. edge-alignment IoU between mask ring and top-30% gradient pixels
+        # 6. edge alignment: the share of the mask's boundary lying within 2 px of a strong image edge (0..1).
+        # Audit 2026-11-27 (c2c_backend_audit "impossible edge_iou cap ~0.02", :473): this was the IoU of the
+        # boundary ring with the top 30 % of ALL pixels by gradient, which cannot exceed ring area / 30 % of the frame:
+        # a mask lying exactly on the image's only edges scored 0.0046 at 1080p and "edge_misalignment" fired on every
+        # mask. A strong edge = gradient above a quarter of the frame's 99th-percentile gradient.
         ring = mask_ring[i] > 0.5
-        if ring.sum() > 1:
+        if int(ring.sum()) > 1:
             g = grad_mag[i]
-            # threshold at 70th percentile of gradient
-            try:
-                thr = torch.quantile(g.flatten(), 0.7).item()
-            except Exception:
-                thr = float(g.mean().item())
-            high_grad = g >= thr
-            inter = (ring & high_grad).sum().item()
-            union = (ring | high_grad).sum().item()
-            edge_iou[i] = (inter / union) if union > 0 else 0.0
+            flat = g.flatten()
+            p99 = float(flat.kthvalue(max(1, int(0.99 * flat.numel()))).values.item())
+            strong = g > max(0.25 * p99, 1e-6)
+            near_edge = F.max_pool2d(strong.float()[None, None], 5, stride=1, padding=2)[0, 0] > 0.5
+            mb = m > 0.5
+            boundary = mb & ~(-F.max_pool2d(F.pad(-mb.float()[None, None], (1, 1, 1, 1), mode="replicate"), 3, stride=1)[0, 0] > 0.5)   # frame edge is no boundary
+            nb = int(boundary.sum())
+            edge_iou[i] = ((boundary & near_edge).sum().item() / nb) if nb > 0 else 0.0
 
         # 7. truncation — fraction of mask *perimeter* lying on the frame border.
         # Dividing by mask area (the v1 formulation) made thin shapes score
@@ -559,7 +572,7 @@ def _mask_quality_findings(mq: dict) -> list[tuple[str, str]]:
     if eiou < _THR_EDGE_IOU:
         out.append((
             "edge_misalignment",
-            f"Mask boundary aligns poorly with image edges (IoU "
+            f"Mask boundary aligns poorly with image edges (alignment "
             f"{eiou:.2f}). The mask is bleeding into the background — enable "
             "auto_edge_lock in Mask Refiner with the correct subject_class "
             "(face/garment/object).",
@@ -726,7 +739,7 @@ def _build_explanation(
         lines.append(f"  Interior holes:     {mq['holes_frac'].mean().item()*100:.2f}% of mask area")
         lines.append(f"  Boundary jagged:    {mq['jaggedness'].mean().item():.2f} (round=1.00)")
         lines.append(f"  Soft-alpha pixels:  {mq['bimodality'].mean().item()*100:.2f}%")
-        lines.append(f"  Edge-grad IoU:      {mq['edge_iou'].mean().item():.2f}")
+        lines.append(f"  Edge alignment:     {mq['edge_iou'].mean().item():.2f}")
         lines.append(f"  Frame-border share: {mq['truncation'].mean().item()*100:.2f}% of mask")
         lines.append("")
         mq_findings = _mask_quality_findings(mq)

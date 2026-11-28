@@ -26,6 +26,13 @@ MASK_SELECTED_THRESHOLD = 0.5
 
 
 def _first_frame_pil(image: torch.Tensor) -> Image.Image:
+    # Magnific takes ONE picture per request. A batch used to lose frames 1..B-1 without a word (audit 2026-11-27):
+    # say so, so a clip is not mistaken for processed. (Process a clip frame by frame upstream if you need all.)
+    if image.dim() == 4 and int(image.shape[0]) > 1:
+        print(  # console-ok
+            f"[Magnific] The IMAGE input holds {int(image.shape[0])} frames, but Magnific takes one picture: only "
+            f"frame 0 is sent, frames 1..{int(image.shape[0]) - 1} are ignored."
+        )
     frame = image[0] if image.dim() == 4 else image
     array = (frame.cpu().numpy().clip(0.0, 1.0) * 255.0).round().astype(np.uint8)
     return Image.fromarray(array)

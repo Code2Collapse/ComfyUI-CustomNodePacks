@@ -706,6 +706,9 @@ def run_ranks(world: int, backend: str, kind: str, timeout_s: float = 15.0, wall
                 ranks.append(json.load(fh))
         except Exception:  # noqa: BLE001
             ranks.append({"rank": r, "ok": {}, "errors": {"process": errs[r] or "no result"}})
+    # Audit 2026-11-27: every qualification left a c2c_qual_* folder (store + rank results) in the temp dir
+    import shutil
+    shutil.rmtree(d, ignore_errors=True)
     return {"world": world, "backend": backend, "device_kind": kind, "ranks": ranks}
 
 

@@ -2114,37 +2114,33 @@ class MaskOpsMEC:
                         hm = hm.expand_as(alpha_t)
                     alpha_t = (alpha_t * (1.0 - hm.to(alpha_t.device))).clamp(0, 1)
             if object_alphas_out is not None and object_alphas_out.numel() > 0:
+                # Same order as the main alpha: core first (max), then the exclusions (multiply), so the holdout wins
+                # where they overlap and the core still applies everywhere else (agy review: core was skipped on the
+                # object planes whenever a holdout was also connected).
                 n_planes = object_alphas_out.shape[0]
+                oh, ow = int(object_alphas_out.shape[-2]), int(object_alphas_out.shape[-1])
+
+                def _planes(m):
+                    m = to_mask(m).float()
+                    if tuple(m.shape[-2:]) != (oh, ow):
+                        m = torch.nn.functional.interpolate(m.unsqueeze(1), size=(oh, ow), mode="bilinear",
+                                                            align_corners=False).squeeze(1).clamp(0, 1)
+                    if m.shape[0] == n_planes:
+                        return m.to(object_alphas_out.device)
+                    if m.shape[0] == B and n_planes % B == 0:
+                        m = m.repeat(n_planes // B, 1, 1)
+                    else:
+                        m = m[:1].expand(n_planes, oh, ow)
+                    return m.contiguous().to(object_alphas_out.device)
+
+                if core_mask is not None:
+                    object_alphas_out = torch.maximum(object_alphas_out, _planes(core_mask)).clamp(0, 1)
+                if _nb is not None:
+                    _ex = _neg_bbox_exclusion(_nb, alpha_t, locals().get("mask_t"))
+                    if _ex is not None:
+                        object_alphas_out = (object_alphas_out * (1.0 - _planes(_ex))).clamp(0, 1)
                 if holdout_mask is not None:
-                    hm = to_mask(holdout_mask)
-                    if hm.shape[-2:] != object_alphas_out.shape[-2:]:
-                        hm = torch.nn.functional.interpolate(hm.float().unsqueeze(1), size=tuple(
-                            object_alphas_out.shape[-2:]), mode="bilinear", align_corners=False).squeeze(1).clamp(0, 1)
-                    if hm.shape[-2:] == object_alphas_out.shape[-2:]:
-                        if hm.shape[0] == 1:
-                            hm = hm.expand(n_planes, *hm.shape[-2:])
-                        elif hm.shape[0] == B and n_planes != B and n_planes % B == 0:
-                            hm = hm.repeat(n_planes // B, 1, 1)
-                        elif hm.shape[0] != n_planes:
-                            hm = hm.expand(n_planes, *hm.shape[-2:])
-                        object_alphas_out = (
-                            object_alphas_out * (1.0 - hm.to(object_alphas_out.device))
-                        ).clamp(0, 1)
-                if core_mask is not None and holdout_mask is None:     # the exclusion wins (M-06)
-                    cm = to_mask(core_mask)
-                    if cm.shape[-2:] != object_alphas_out.shape[-2:]:
-                        cm = torch.nn.functional.interpolate(cm.float().unsqueeze(1), size=tuple(
-                            object_alphas_out.shape[-2:]), mode="bilinear", align_corners=False).squeeze(1).clamp(0, 1)
-                    if cm.shape[-2:] == object_alphas_out.shape[-2:]:
-                        if cm.shape[0] == 1:
-                            cm = cm.expand(n_planes, *cm.shape[-2:])
-                        elif cm.shape[0] == B and n_planes != B and n_planes % B == 0:
-                            cm = cm.repeat(n_planes // B, 1, 1)
-                        elif cm.shape[0] != n_planes:
-                            cm = cm.expand(n_planes, *cm.shape[-2:])
-                        object_alphas_out = torch.maximum(
-                            object_alphas_out, cm.to(object_alphas_out.device),
-                        ).clamp(0, 1)
+                    object_alphas_out = (object_alphas_out * (1.0 - _planes(holdout_mask))).clamp(0, 1)
             # 3. Despill on the source image (using the FINAL alpha as mask).
             if despill != "off" and float(despill_strength) > 0:
                 despilled = _vfx.despill(

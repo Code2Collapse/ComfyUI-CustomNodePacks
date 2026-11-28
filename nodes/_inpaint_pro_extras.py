@@ -370,9 +370,12 @@ def seam_qc(out: torch.Tensor, orig: torch.Tensor, blend: torch.Tensor, threshol
     frame (regenerate = 1). The ring is seam_ring() (soft transition + 2 px around the 0.5
     contour). Seam error = mean |luma(out) - luma(orig)| on the ring.
     A frame is flagged when its error differs from the clip's median by more than ``threshold`` (image units; 0 =
-    report only). A flagged frame is repaired on its ring: those pixels become the mean of the nearest unflagged
-    frame before and after (weighted by how deep in the ring a pixel is), so a seam that pops for one frame follows
-    its neighbours. Nothing outside the ring is touched."""
+    report only). A flagged frame is repaired on its ring with a per-channel OFFSET: the frame's mean seam residual
+    (stitched - plate, on the ring) is replaced by the mean residual of the nearest unflagged frame before and after
+    (weighted by how deep in the ring a pixel is), so a seam that pops for one frame follows its neighbours' level.
+    Only this frame's own pixels are kept - the neighbours' PIXELS are never copied in (audit 2026-11-27: copying
+    them left the neighbours' moving content as a double exposure on the ring). Nothing outside the ring is
+    touched."""
     B = int(out.shape[0])
     ring, wgt_all = seam_ring(blend)
     lo, lp = _luma(out.float()), _luma(orig.float())
@@ -403,9 +406,21 @@ def seam_qc(out: torch.Tensor, orig: torch.Tensor, blend: torch.Tensor, threshol
         prev = [g for g in good if g < i]
         nxt = [g for g in good if g > i]
         refs = ([prev[-1]] if prev else []) + ([nxt[0]] if nxt else [])
-        ref = torch.stack([out[g].float() for g in refs]).mean(0)
-        wgt = wgt_all[i].unsqueeze(-1)
-        res[i] = (out[i].float() * (1 - wgt) + ref * wgt).to(out.dtype)
+        r = ring[i]
+
+        bw = blend[i].float().clamp(0, 1)
+
+        def _level(f):
+            # the stitched-minus-plate residual on the ring grows with the blend weight (0 outside, full inside), so
+            # it is fitted as blend * level per channel (least squares), not as one flat offset
+            d = out[f].float() - orig[f].float()
+            if not bool(r.any()):
+                return torch.zeros(d.shape[-1])
+            w = blend[f].float().clamp(0, 1)[r].unsqueeze(-1)
+            return (d[r] * w).sum(0) / (w * w).sum(0).clamp(min=1e-6)
+        shift = torch.stack([_level(g) for g in refs]).mean(0) - _level(i)       # [C]
+        wgt = (bw * r.float()).unsqueeze(-1)
+        res[i] = (out[i].float() + wgt * shift.view(1, 1, -1)).to(out.dtype)
         frames[i]["repaired"] = True
         frames[i]["repaired_from"] = refs
         frames[i]["seam_error_after"] = round(float((_luma(res[i].float()) - lp[i]).abs()[ring[i]].mean()), 6)

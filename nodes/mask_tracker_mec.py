@@ -435,7 +435,10 @@ class MaskTrackerMEC:
                 video, mask, a.get("stabilize_temporal_mode", "none"), a.get("stabilize_blend", 0.5),
                 a.get("stabilize_sigma", 1.0), a.get("stabilize_device", "cuda"),
                 a.get("stabilize_drop_threshold", 0.40), a.get("stabilize_jump_threshold", 0.15))
-        return (out, video, 0.0, integrity, f"stabilize:{a.get('stabilize_temporal_mode', 'none')}", warning)
+        label = f"stabilize:{a.get('stabilize_temporal_mode', 'none')}"
+        if "[raft_flow] not applied" in (warning or ""):     # audit 2026-11-27: never label a passthrough as raft_flow
+            label += " (NOT applied - mask passed through, see warning)"
+        return (out, video, 0.0, integrity, label, warning)
 
     def _execute_impl(self, mode,
                 camera_compensation, stabilization_method, detection_mode,

@@ -163,10 +163,12 @@ def _blend_rgb(base: torch.Tensor, blend: torch.Tensor, mode: str) -> torch.Tens
     elif mode == "divide":
         out = _safe_div(a, b)
     elif mode == "vivid light":
+        # Photoshop / W3C: colour burn with 2b below 0.5, colour dodge with 2(b - 0.5) above (audit 2026-11-27: the
+        # two halves were swapped and the dodge denominator was wrong, so a = 0.5, b = 0.25 gave 1 instead of 0).
         out = torch.where(
             b <= 0.5,
-            _safe_div(a, 1.0 - 2.0 * b),
-            1.0 - _safe_div(1.0 - a, 2.0 * b - 0.5),
+            1.0 - _safe_div(1.0 - a, 2.0 * b),
+            _safe_div(a, 2.0 - 2.0 * b),
         )
     elif mode == "pin light":
         out = torch.where(

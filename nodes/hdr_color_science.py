@@ -257,7 +257,7 @@ class C2CVAEQualityDecode:
                 tile_mode="auto"):
         from contextlib import nullcontext
 
-        from ._vae_tiled import fp32_vae_copy, unclamped_output, vae_compute_dtype
+        from ._vae_tiled import fp32_vae_copy, is_core_vae, unclamped_output, vae_compute_dtype
 
         with torch.no_grad():
             latent = samples["samples"]
@@ -277,6 +277,12 @@ class C2CVAEQualityDecode:
                     copy = None if self._is_vae_dynamic(vae) else fp32_vae_copy(vae)
                     if copy is not None:
                         target = copy
+                    elif not self._is_vae_dynamic(vae) and is_core_vae(vae):
+                        # audit 2026-11-27: no faithful fp32 copy of this core VAE (it needs config / metadata
+                        # core does not keep). Casting its pinned weights in place crashes core 0.36+ on a GPU
+                        # (L7.59), so decode at its own precision instead (measured gain of fp32: <= 0.17 dB).
+                        log.warning("VAE Decode (C2C): force_fp32 skipped for this VAE (no faithful fp32 copy); "
+                                    "decoding at its own precision.")
                     else:
                         dtype_ctx = vae_compute_dtype(vae, torch.float32)
                 unclamp_ctx = unclamped_output(target) if not clamp_output else nullcontext()

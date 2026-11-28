@@ -18,7 +18,12 @@ def _update_value(h: hashlib._Hash, v: Any) -> None:
             if t.numel() > 65536:
                 # Downsample large tensors for stable, cheap fingerprints.
                 step = max(1, int((t.numel() / 8192) ** 0.5))
-                t = t[..., ::step, ::step] if t.ndim >= 2 else t
+                if t.ndim >= 3 and t.shape[-1] <= 4:
+                    # Channels-last IMAGE [B,H,W,C]: stride H and W, keep every channel
+                    # (striding the last dim would hash the red channel only).
+                    t = t[..., ::step, ::step, :]
+                elif t.ndim >= 2:
+                    t = t[..., ::step, ::step]
             h.update(t.cpu().numpy().tobytes())
         except Exception:
             h.update(str(getattr(v, "shape", v)).encode())

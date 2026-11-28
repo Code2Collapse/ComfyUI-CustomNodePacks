@@ -554,7 +554,8 @@ class VAEMergeMEC:
                 "alpha": ("FLOAT", {"default": 0.30, "min": 0.0, "max": 1.0, "step": 0.01,
                     "tooltip": "Primary blend weight. weighted_sum: 0=A, 1=B."}),
                 "beta": ("FLOAT", {"default": 0.70, "min": 0.0, "max": 1.0, "step": 0.01,
-                    "tooltip": "Secondary blend weight (used by add_difference / 3-VAE modes)."}),
+                    "tooltip": "Not used by any merge mode (kept so saved workflows and recipes load). "
+                               "add_difference and the 3-VAE modes use alpha."}),
                 "brightness": ("FLOAT", {"default": 0.0, "min": -1.0, "max": 1.0, "step": 0.01,
                     "tooltip": "Post-merge brightness: an offset added to decoder.conv_out's bias (0.1 x this value in "
                                "the decoder's output units)."}),
@@ -844,6 +845,13 @@ class VAEMergeMEC:
                 ov = _override_for(key, overrides) if overrides else None
                 return ov if ov is not None else _per_key_alpha(key, alpha, _ub, _bw)
             weight_map, _group_alpha = _weight_map(list(sd_a.keys()), _alpha_of, overrides, similarity)
+            if use_blocks and not any(_classify_key(k) for k in sd_a):
+                # audit 2026-11-27: the block sliders / auto_alpha know SD 1.5 / SDXL key names only. On other VAEs
+                # (Wan, HunyuanVideo, LTX, H3 video VAEs...) no key matches, so every key used 'alpha' - say so.
+                info.setdefault("warnings", []).append(
+                    "use_blocks / auto_alpha had no effect: none of this VAE's weight names match the SD 1.5 / SDXL "
+                    f"blocks the sliders address (architecture '{arch}'), so every weight was merged at alpha. Use "
+                    "block_weights_json patterns to weight this VAE's own blocks.")
             recipe_str = json.dumps(recipe, indent=2)
 
             # ── Dry-run (feature C) ──

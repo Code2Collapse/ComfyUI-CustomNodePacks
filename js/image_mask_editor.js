@@ -352,6 +352,7 @@ if (!(app.extensions || []).some((e) => e?.name === EXT_NAME)) {
             nodeType.prototype.onExecuted = function (output) {
                 const r = origExecuted?.apply(this, arguments);
                 this._imeRun = output?.c2c_ime_frames?.[0] ?? null;
+                this._imeRunNote = output?.c2c_ime_frames_note?.[0] ?? null;   // why the run recorded no frames
                 this._imeThumb?.refresh();
                 return r;
             };

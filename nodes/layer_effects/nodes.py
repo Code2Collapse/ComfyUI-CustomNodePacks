@@ -267,7 +267,9 @@ class LayerEffectInnerShadowMEC(LayerEffectDropShadowMEC):
         for i in range(b):
             n: list[str] = []
             m = masks[i : i + 1]
-            shifted = shift_mask(m, int(distance_x), int(distance_y))
+            # audit 2026-11-27: shift the INVERTED matte (LayerStyle / Photoshop) - shifting the matte itself shaded
+            # almost the whole interior instead of the edge band facing the light.
+            shifted = shift_mask(1.0 - m, int(distance_x), int(distance_y))
             shadow_m = expand_mask(shifted, grow, blur, n)
             inner_m = (m * shadow_m).clamp(0, 1)
             notes.extend(n)
@@ -677,31 +679,19 @@ class LayerEffectGradientMapMEC:
             sr, sg, sb = parse_hex_color(start_color)
             mr, mg, mb = parse_hex_color(mid_color)
             er, eg, eb = parse_hex_color(end_color)
-            mid_idx = int(255 * float(mid_point))
-            lut_len = 256
-            t1 = torch.linspace(0, 1, max(mid_idx + 1, 1), device=image.device, dtype=image.dtype)
-            t2 = torch.linspace(0, 1, max(lut_len - mid_idx, 1), device=image.device, dtype=image.dtype)
-            g1 = torch.stack([
-                sr + (mr - sr) * t1, sg + (mg - sg) * t1, sb + (mb - sb) * t1,
-            ], dim=-1)
-            g2 = torch.stack([
-                mr + (er - mr) * t2, mg + (eg - mg) * t2, mb + (eb - mb) * t2,
-            ], dim=-1)
-            if g1.shape[0] > 0 and g2.shape[0] > 0:
-                lut = torch.cat([g1[:-1] if g1.shape[0] > 1 else g1, g2], dim=0)
-            else:
-                lut = g2
-            if lut.shape[0] < lut_len:
-                pad = lut[-1:].expand(lut_len - lut.shape[0], -1)
-                lut = torch.cat([lut, pad], dim=0)
-            lut = lut[:lut_len]
+            # audit 2026-11-27: a gradient map REPLACES the colour with the ramp colour of the pixel's luma. It used to
+            # blend mapped x luma + image x (1 - luma) (dark pixels kept their own colour) through a 256-step LUT.
             luma = (
                 image[..., 0] * 0.299 + image[..., 1] * 0.587 + image[..., 2] * 0.114
-            ).clamp(0, 1)
-            idx = (luma * 255).long().clamp(0, lut_len - 1)
-            mapped = lut[idx]
-            orig_luma = luma.unsqueeze(-1)
-            mixed = mapped * orig_luma + image[..., :3] * (1.0 - orig_luma)
+            ).clamp(0, 1).unsqueeze(-1)
+            mp = float(mid_point)
+            c0 = torch.tensor([sr, sg, sb], device=image.device, dtype=image.dtype)
+            c1 = torch.tensor([mr, mg, mb], device=image.device, dtype=image.dtype)
+            c2 = torch.tensor([er, eg, eb], device=image.device, dtype=image.dtype)
+            t_lo = (luma / mp).clamp(0, 1) if mp > 0 else torch.ones_like(luma)
+            t_hi = ((luma - mp) / (1.0 - mp)).clamp(0, 1) if mp < 1 else torch.zeros_like(luma)
+            mapped = torch.where(luma <= mp, c0 + (c1 - c0) * t_lo, c1 + (c2 - c1) * t_hi)
+            mixed = mapped
             op = float(opacity) / 100.0
             out_rgb = image[..., :3] * (1.0 - op) + mixed * op
             out_rgb = out_rgb * mask.unsqueeze(-1) + image[..., :3] * (1.0 - mask.unsqueeze(-1))

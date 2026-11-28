@@ -27,6 +27,7 @@ from ._core import (
 )
 from ._parser import parse_smart_prompt
 from ._patches import (
+    cross_attention_count,
     detect_native_arch,
     patch_generic,
     patch_kijai,
@@ -97,6 +98,14 @@ def _encode_native(
         arch_info = (arch, patch_size, temporal_stride)
     except ValueError:
         pass
+    if arch_info is None and cross_attention_count(model) == 0:
+        # Refuse before touching the text encoder (audit 2026-11-27: MiniMax H3 crashed deep in the patcher).
+        dm = getattr(getattr(model, "model", None), "diffusion_model", None)
+        raise ValueError(
+            f"Prompt Relay does not support this model ({type(dm).__name__ if dm is not None else 'unknown'}): it "
+            "works by masking the text cross-attention of Wan or LTX video models, and this model has no "
+            "cross-attention to mask (MiniMax H3, for example, uses joint self-attention over text and video). "
+            "Remove the Prompt Relay node for this model, or use a Wan / LTX model.")
 
     samples = latent["samples"]
     latent_frames = samples.shape[2]

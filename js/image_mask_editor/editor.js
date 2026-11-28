@@ -701,7 +701,7 @@ export class IMEEditor {
     async loadFrames() {
         const source = await resolveEditorSource(this.node);
         if (!source.count) {
-            return { ok: false, message: "Connect an image source and queue once, or wire a C2C/VHS loader directly." };
+            return { ok: false, message: (this.node?._imeRunNote && source.note) || "Connect an image source and queue once, or wire a C2C/VHS loader directly." };
         }
         this.frameSource = source;
         this.frameCount = source.count;

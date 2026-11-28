@@ -462,8 +462,23 @@ class SAMMaskGeneratorMEC:
             )
         if objects:                        # objects_json path: already (..., object_masks, quality)
             return r
+        info_s = r[4]
+        B = int(image.shape[0])
+        if B > 1:
+            # Audit 2026-11-27 (masking.md M-13): only frame 0 is segmented; the outputs stay one frame, but say so.
+            note = (f"Only frame 0 of the {B} input frames was segmented (this node works on one still). For a clip, "
+                    "track the mask with Mask + Matting (MaskOpsMEC) or Segment (C2C).")
+            logging.getLogger("MEC").warning("SAM Mask Generator: %s", note)
+            try:
+                info_d = json.loads(info_s) if info_s else {}
+                if isinstance(info_d, dict):
+                    info_d["frames_used"] = f"0 of {B}"
+                    info_d["frames_note"] = note
+                    info_s = json.dumps(info_d, indent=2)
+            except (TypeError, ValueError):
+                pass
         # objects_json empty: object_masks = a copy of mask, behaviour unchanged
-        return (r[0], r[1], r[2], r[3], r[4], r[0].clone(), r[5])
+        return (r[0], r[1], r[2], r[3], info_s, r[0].clone(), r[5])
 
     def _generate_impl(self, sam_model, image, points_json, bbox_json,
                        text_prompt, negative_text_prompt, grounding_model,
@@ -522,17 +537,16 @@ class SAMMaskGeneratorMEC:
                     bbox_json = json.dumps(text_bbox.tolist())
 
         # ── Negative text prompt → negative points via GroundingDINO ───
+        # Audit 2026-11-27 (masking.md M-03): this used to put 5 NEGATIVE points on a lattice inside the detected box
+        # - points that land on the subject (a necklace box lies on the chest), telling SAM the skin is background.
+        # Now the detected object is segmented in its own SAM pass and subtracted from the result (below).
         negative_points_from_text = []
+        neg_bbox = None
         if negative_text_prompt and negative_text_prompt.strip() and grounding_model != "none":
             neg_bbox = self._text_to_bbox(
                 image, negative_text_prompt.strip(), grounding_model,
                 text_threshold, text_box_threshold, target_device, strict=strict_text,
             )
-            if neg_bbox is not None:
-                # Sample negative points from detected negative region
-                negative_points_from_text = self._sample_points_in_bbox(
-                    neg_bbox, num_points=5
-                )
 
         # ── SPLINE prompt → positive points + bbox ─────────────────────
         # Outline the target with a spline; its polygon vertices become positive
@@ -643,6 +657,9 @@ class SAMMaskGeneratorMEC:
                     refine_iterations, auto_negative_points, existing_mask,
                     negative_points_from_text, edge_refine, edge_radius, candidate_select,
                 )
+            if neg_bbox is not None:
+                result = self._subtract_negative(result, model, model_type, model_info, image, neg_bbox,
+                                                 target_device, model_dtype, edge_refine, edge_radius)
         finally:
             # ── Offload back to CPU ────────────────────────────────────
             if offload and hasattr(model, "to"):
@@ -977,6 +994,32 @@ class SAMMaskGeneratorMEC:
             import logging
             logging.getLogger("MEC").warning("[MEC] GroundingDINO predict error: %s", e)
             return None
+
+    def _subtract_negative(self, result, model, model_type, model_info, image, neg_bbox, device, dtype,
+                           edge_refine, edge_radius):
+        """negative_text_prompt: segment the detected object in its own SAM pass (its box as the prompt) and remove
+        it from the mask and every candidate: out = mask * (1 - N)."""
+        nr = self._run_inference(
+            model, model_type, model_info, image, "", json.dumps([float(v) for v in neg_bbox]), None,
+            False, 0, 0.0, False, device, dtype, 1, False, None, None, edge_refine, edge_radius,
+            CANDIDATE_MODES[0],
+        )
+        neg = nr[0].to(result[0].device, result[0].dtype).clamp(0.0, 1.0)
+        mask = (result[0] * (1.0 - neg)).clamp(0.0, 1.0)
+        cands = result[1]
+        if isinstance(cands, torch.Tensor) and cands.shape[-2:] == neg.shape[-2:]:
+            cands = (cands * (1.0 - neg[:1])).clamp(0.0, 1.0)
+        info_s = result[4]
+        try:
+            info_d = json.loads(info_s) if info_s else {}
+            if isinstance(info_d, dict):
+                info_d["negative_text"] = {"box_xyxy": [round(float(v), 1) for v in neg_bbox],
+                                           "removed_px": int(((result[0] > 0.5) & (neg > 0.5)).sum()),
+                                           "method": "own SAM pass, subtracted"}
+                info_s = json.dumps(info_d, indent=2)
+        except (TypeError, ValueError):
+            pass
+        return (mask, cands, result[2], result[3], info_s) + tuple(result[5:])
 
     @staticmethod
     def _sample_points_in_bbox(bbox_np, num_points: int = 5) -> list:

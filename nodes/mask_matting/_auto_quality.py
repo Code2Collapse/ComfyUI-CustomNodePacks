@@ -44,6 +44,8 @@ except Exception:
     cv2 = None  # type: ignore
     _CV2 = False
 
+#: Above this many pixels per frame the segmenter-only denoise uses the bilateral filter, not CPU non-local means.
+_NLM_MAX_PIXELS = 1_000_000
 
 # ──────────────────────────────────────────────────────────────────────
 # 1. ANALYSE
@@ -184,7 +186,17 @@ def preprocess_for_segmentation(
             modified = True
 
         # 3. SPECKLE NOISE → non-local-means denoise (slow but excellent)
-        if issues["speckle_score"] > 0.40 and quality_mode != "fast":
+        big = rgb.shape[0] * rgb.shape[1] > _NLM_MAX_PIXELS
+        if issues["speckle_score"] > 0.40 and quality_mode != "fast" and big:
+            # Audit 2026-11-27: CPU non-local means costs ~1 min per 2K frame (2+ hours on a 124-frame grain plate,
+            # measured at 1024x576 and extrapolated). This copy only feeds the segmenter, so large frames get the
+            # edge-preserving bilateral filter instead (0.03 s at 2K, measured).
+            rgb = cv2.bilateralFilter(rgb, 9, 35, 7)
+            if b == 0:
+                steps.append(f"bilateral(nlmeans skipped: {rgb.shape[1]}x{rgb.shape[0]} is above "
+                             f"{_NLM_MAX_PIXELS // 1000000} MP)")
+            modified = True
+        elif issues["speckle_score"] > 0.40 and quality_mode != "fast":
             h = float(np.clip(5.0 + 15.0 * issues["speckle_score"],
                                5.0, 25.0) * strength)
             rgb = cv2.fastNlMeansDenoisingColored(rgb, None, h, h, 7, 21)

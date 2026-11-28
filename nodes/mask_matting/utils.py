@@ -424,7 +424,12 @@ def parse_points(points_json: str) -> Tuple[List[Tuple[float, float]], List[Tupl
 
 
 def parse_bbox(bbox: Any) -> Optional[Tuple[int, int, int, int]]:
-    """Return (x0,y0,x1,y1) or None. Accepts BBOX list, JSON string, dict."""
+    """Return (x0,y0,x1,y1) or None. Accepts BBOX list, JSON string, dict.
+
+    Convention: a flat list / JSON list is CORNERS [x0, y0, x1, y1]; dicts may say {"x","y","w","h"} or
+    {"x0","y0","x1","y1"}. Several C2C producers (SAM Mask Generator detected_bbox, Image Mask Editor primary_bbox,
+    BBox From Mask) output [x, y, w, h] on the same socket type: a list whose corners are impossible (x1 <= x0 or
+    y1 <= y0, with a positive 3rd and 4th value) is read as [x, y, w, h] and a warning says so (audit M-09)."""
     if bbox is None:
         return None
     try:
@@ -444,7 +449,14 @@ def parse_bbox(bbox: Any) -> Optional[Tuple[int, int, int, int]]:
         try:
             if isinstance(a, (list, tuple)):  # nested list of bboxes
                 a, b, c, d = a[0], a[1], a[2], a[3]
-            return int(a), int(b), int(c), int(d)
+            a, b, c, d = int(a), int(b), int(c), int(d)
+            if (c <= a or d <= b) and c > 0 and d > 0:
+                logging.getLogger("MEC.MaskMatting").warning(
+                    "Box %s is not [x0, y0, x1, y1] (x1 <= x0 or y1 <= y0): read as [x, y, width, height] = "
+                    "corners %s. Box sockets take corners; [x, y, w, h] producers are read this way only when the "
+                    "corners would be impossible.", [a, b, c, d], [a, b, a + c, b + d])
+                return a, b, a + c, b + d
+            return a, b, c, d
         except (TypeError, ValueError):
             return None
     return None
@@ -522,6 +534,12 @@ def mask_to_trimap(mask: torch.Tensor, dilate: int = 8, erode: int = 8) -> torch
     fg = _morph_pool(b, int(erode), "min")       # eroded core
     outer = _morph_pool(b, int(dilate), "max")   # dilated outer
     unknown = (outer - fg).clamp(0, 1)
+    # Audit M-14: an already-soft input lost every value below 0.5 (an all-0.45 matte gave an all-background
+    # trimap). Soft pixels (strictly between 0 and 1) are unknown too; a binary mask gives the same trimap as before.
+    soft = ((m > 0.01) & (m < 0.99)).float().unsqueeze(1)
+    if bool(soft.any()):
+        fg = fg * (1.0 - soft)
+        unknown = torch.maximum(unknown, soft) * (1.0 - fg)
     trimap = fg + unknown * 0.5
     return trimap.squeeze(1).clamp(0, 1)
 

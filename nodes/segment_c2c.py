@@ -3,7 +3,7 @@ L7.123_segment_node_design.md in the C2C workspace.
 
 Slice 1 (2026-11-19): target "objects" on ComfyUI's own SAM 3 / 3.1 (the same cached detector as the Mask + Matting
 viewer's Find, nodes/c2c_viewer/detect.py, so one model is in memory for both): words through SAM 3's detector
-("person", "person:3, dog" - several objects of one word need "word:N", a plain word returns the strongest match),
+("person", "person:3, dog" - "word:N" keeps at most N matches of that word, a plain word keeps every match up to max_objects),
 else clicks and boxes through the SAM decoder.
 
 Slice 2 (2026-11-19): a clip is tracked - the objects found on `seed_frame` are followed forward to the end and
@@ -18,8 +18,9 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 import time
-from typing import Any, Dict, List, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
 import numpy as np
 import torch
@@ -171,6 +172,33 @@ def _refine(core, frame_hwc: np.ndarray, mask: np.ndarray):
     return (out > 0.5).astype(np.float32), log
 
 
+_WORD_N = re.compile(r"^(.+?)\s*:\s*([\d.]+)\s*$")
+_EDGE_QC_SIDE = 640
+
+
+def _word_count(term: str) -> Tuple[str, Optional[int]]:
+    """'person:3' -> ('person', 3); a plain word -> (word, None) = every match (up to max_objects), as before. The
+    same syntax ComfyUI core's SAM 3 tokenizer reads (comfy/text_encoders/sam3_clip.py _parse_prompts)."""
+    m = _WORD_N.match(term)
+    if not m:
+        return term, None
+    return m.group(1).strip(), max(1, round(float(m.group(2))))
+
+
+def _qc_scaled(union: np.ndarray, frames: np.ndarray):
+    """(masks, frames, side) scaled so the long side is at most _EDGE_QC_SIDE; side None = full size."""
+    B, H, W = union.shape
+    if max(H, W) <= _EDGE_QC_SIDE:
+        return union, frames, None
+    import cv2
+    k = _EDGE_QC_SIDE / float(max(H, W))
+    size = (max(1, int(round(W * k))), max(1, int(round(H * k))))
+    u = np.stack([cv2.resize(union[b].astype(np.float32), size, interpolation=cv2.INTER_AREA) for b in range(B)])
+    f = np.stack([cv2.resize(np.ascontiguousarray(frames[b], dtype=np.float32), size, interpolation=cv2.INTER_AREA)
+                  for b in range(B)])
+    return u, f, f"{size[0]}x{size[1]}"
+
+
 def _bbox_of(m: np.ndarray) -> List[int]:
     ys, xs = np.nonzero(m > 0.5)
     if not len(xs):
@@ -180,7 +208,7 @@ def _bbox_of(m: np.ndarray) -> List[int]:
 
 class SegmentC2C:
     DESCRIPTION = ("Segment (C2C): find objects by words, clicks or boxes with ComfyUI's own SAM 3 / 3.1 and get one "
-                   "mask per object plus their union and boxes. Words: 'person', 'person:3, dog' (word:N for several "
+                   "mask per object plus their union and boxes. Words: 'person', 'person:3, dog' (word:N = at most N "
                    "of one kind). Slice 1 of the unified segmentation node (more targets follow). "
                    "picks may carry per-frame clicks / boxes ({\"frames\": {\"12\": {...}}}): per frame they replace "
                    "the top-level picks on that frame; when tracking, frames after seed_frame are corrections the "
@@ -303,7 +331,12 @@ class SegmentC2C:
             if fp is not None:                                  # L9.172: this frame's own clicks / boxes
                 objs = [{**o, "label": "picked"} for o in det.detect(frames[b], "", fp[0], fp[1], fp[2])]
             elif terms:
-                objs = [{**o, "label": t} for t in terms for o in det.detect(frames[b], t, [], [], [])]
+                # Audit 2026-11-27: "word:N" keeps at most N detections of that word (the count was read by nobody)
+                objs = []
+                for t in terms:
+                    word, n = _word_count(t)
+                    found = sorted(det.detect(frames[b], word, [], [], []), key=lambda o: -float(o.get("score", 0.0)))
+                    objs += [{**o, "label": t} for o in (found[:n] if n else found)]
             elif not pos and not boxes:                         # only per-frame picks, none for this frame
                 return []
             else:
@@ -413,9 +446,14 @@ class SegmentC2C:
         if B > 1 and union.any():
             try:                                                # L7.127: how steady the matte edge is
                 from .temporal_consistency_checker import _edge_stability
-                vals = [_edge_stability(union[b], union[b + 1], frames[b], frames[b + 1], 0.5)[0]
+                # Audit 2026-11-27: full-resolution Farneback per frame pair cost ~1.8 s per 2K pair (minutes per
+                # clip) for an info number. It is measured on copies at most _EDGE_QC_SIDE px on the long side.
+                u_s, f_s, side = _qc_scaled(union, frames)
+                vals = [_edge_stability(u_s[b], u_s[b + 1], f_s[b], f_s[b + 1], 0.5)[0]
                         for b in range(B - 1)]
                 edge = {"mean": round(float(np.mean(vals)), 4), "max": round(float(np.max(vals)), 4)}
+                if side is not None:
+                    edge["measured_at"] = side
             except Exception as exc:  # noqa: BLE001 - a missing OpenCV only drops the number
                 log.debug("[Segment] edge stability skipped: %s", exc)
         masks = (torch.from_numpy(np.stack([o["mask"] for o in first])) if first
@@ -455,7 +493,7 @@ class SegmentC2C:
                         ref_t = next((s for s in range(t + 1, B) if s not in bad), None)
                     if ref_t is None:
                         continue
-                    cands = [_to_hw(d["mask"], H, W) for d in det.detect(frames[t], label, [], [], [])]
+                    cands = [_to_hw(d["mask"], H, W) for d in det.detect(frames[t], _word_count(label)[0], [], [], [])]
                     pick = _best_redetection(obj[ref_t, n], cands)
                     if pick is not None:
                         obj[t, n] = pick

@@ -278,9 +278,16 @@ def _dilate_colors(
     color: torch.Tensor,
     weight: torch.Tensor,
 ) -> tuple[torch.Tensor, torch.Tensor]:
-    """color BCHW, weight B1HW — spread known colours to neighbours."""
-    c_nb = F.max_pool2d(color, kernel_size=3, stride=1, padding=1)
+    """color BCHW, weight B1HW — spread known colours to neighbours.
+
+    The colour a pixel takes is the weight-averaged colour of its known 3x3 neighbours - a mix of real plate colours.
+    Audit 2026-11-27 (c2c_backend_audit "edge spread RGB max_pool2d rainbow fringes"): it was a per-channel max_pool2d,
+    which takes red from one neighbour and green from another and invents colours that are in neither (a red | green
+    interior gave 40 yellow fringe pixels on a 32 px test)."""
     w_nb = F.max_pool2d(weight, kernel_size=3, stride=1, padding=1)
+    num = F.avg_pool2d(color * weight, kernel_size=3, stride=1, padding=1, count_include_pad=False)
+    den = F.avg_pool2d(weight, kernel_size=3, stride=1, padding=1, count_include_pad=False)
+    c_nb = num / den.clamp(min=1e-12)
     new_w = torch.clamp(weight + (w_nb - weight).clamp(min=0), 0.0, 1.0)
     fill = w_nb > weight
     new_c = torch.where(fill, c_nb, color)
@@ -304,7 +311,7 @@ def edge_spread_image(
     else:
         zone = interior.clone()
     img = image.permute(0, 3, 1, 2)
-    color = img * interior.unsqueeze(1)
+    color = img * (interior.unsqueeze(1) > 0)        # the plate colour where known (not darkened by soft interior)
     weight = interior.unsqueeze(1)
     for _ in range(steps):
         color, weight = _dilate_colors(color, weight)

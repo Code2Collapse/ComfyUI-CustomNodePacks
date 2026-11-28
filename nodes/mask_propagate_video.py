@@ -7,6 +7,8 @@ propagation (optical flow), and SAM2 video-propagation mode.
 from . import _interrupt_check as _IC
 from ._is_changed_util import hash_args_and_kwargs
 
+import contextlib
+import inspect
 import json
 import logging
 import torch
@@ -323,12 +325,24 @@ class MaskPropagateVideo:
             model.add_all_frames_to_correct_as_cond = False
         predictor = model
 
-        device = next(predictor.parameters()).device
+        _p0 = next(predictor.parameters())
+        device, pdtype = _p0.device, _p0.dtype
+        # Audit 2026-11-27 (c2c_backend_audit, mask_propagate_video.py:317-337): the SAM Model Loader builds the model
+        # with the official Meta sam2 package and loads it as float16 by default. (1) Meta's init_state takes a
+        # video_path (a JPEG folder / mp4), not the (images, H, W, device=) of the kijai fork this call was written
+        # for -> TypeError on every run; (2) its image encoder gets float32 frames -> a float/half dtype error.
+        # Both APIs are handled now, and half / bfloat16 weights run under CUDA autocast as the fork's own node does.
+        if pdtype != torch.float32 and device.type != "cuda":
+            raise ValueError(
+                f"mode='sam2_video': the SAM2 model is loaded as {str(pdtype).replace('torch.', '')} on {device}, and "
+                "half precision runs only on a CUDA GPU. Set dtype to float32 on the SAM Model Loader, or load the "
+                "model on cuda.")
+        amp = torch.autocast("cuda", dtype=pdtype) if pdtype != torch.float32 else contextlib.nullcontext()
         sz = predictor.image_size
         # Same preparation the SAM2 pack's own video node uses: square-resize
         # to the model's input size, keep the ORIGINAL H/W for output scaling.
         frames = common_upscale(
-            images.movedim(-1, 1), sz, sz, "bilinear", "disabled",
+            images[..., :3].movedim(-1, 1), sz, sz, "bilinear", "disabled",
         ).contiguous().to(device)
 
         if getattr(self, "_sam2_state", None) is not None:
@@ -336,7 +350,23 @@ class MaskPropagateVideo:
                 predictor.reset_state(self._sam2_state)
             except Exception:      # noqa: BLE001 - a stale state must not block a new run
                 pass
-        state = predictor.init_state(frames, H, W, device=device)
+        with amp:
+            if "images" in inspect.signature(predictor.init_state).parameters:      # kijai fork: frames in memory
+                state = predictor.init_state(frames, H, W, device=device)
+            else:
+                # Meta sam2: init_state(video_path) reads frames through the module's load_video_frames (resize to
+                # image_size, ImageNet mean / std). Hand it the in-memory frames prepared the same way - no lossy
+                # JPEG round trip - for the duration of this one call.
+                import sam2.sam2_video_predictor as _vp
+                mean = torch.tensor((0.485, 0.456, 0.406), device=frames.device)[:, None, None]
+                std = torch.tensor((0.229, 0.224, 0.225), device=frames.device)[:, None, None]
+                norm = (frames.float() - mean) / std
+                _orig_loader = _vp.load_video_frames
+                _vp.load_video_frames = lambda *a, **k: (norm, H, W)
+                try:
+                    state = predictor.init_state(video_path="<in-memory frames>")
+                finally:
+                    _vp.load_video_frames = _orig_loader
         self._sam2_state = state
 
         seed = int(max(0, min(B - 1, source_frame)))
@@ -353,19 +383,21 @@ class MaskPropagateVideo:
                 f"for SAM2 to track. Check source_frame points at a frame where "
                 f"the subject is actually masked."
             )
-        predictor.add_new_mask(inference_state=state, frame_idx=seed,
-                               obj_id=1, mask=(m > 0.5))
+        with amp:
+            predictor.add_new_mask(inference_state=state, frame_idx=seed,
+                                   obj_id=1, mask=(m > 0.5))
 
         # Extra clicks stay supported and are additive to the mask seed.
         if points_json and points_json.strip():
             try:
                 pts = json.loads(points_json)
                 if pts:
-                    predictor.add_new_points_or_box(
-                        inference_state=state, frame_idx=seed, obj_id=1,
-                        points=np.array([[p["x"], p["y"]] for p in pts], np.float32),
-                        labels=np.array([p.get("label", 1) for p in pts], np.int32),
-                    )
+                    with amp:
+                        predictor.add_new_points_or_box(
+                            inference_state=state, frame_idx=seed, obj_id=1,
+                            points=np.array([[p["x"], p["y"]] for p in pts], np.float32),
+                            labels=np.array([p.get("label", 1) for p in pts], np.int32),
+                        )
             except Exception as exc:      # noqa: BLE001 - bad JSON must not kill the track
                 _log.warning("MaskPropagateVideo: ignoring points_json (%s)", exc)
 
@@ -374,21 +406,22 @@ class MaskPropagateVideo:
         # Both directions: forward from the seed, then backward, so a seed in
         # the middle of the clip fills the whole clip instead of half of it.
         for reverse in (False, True):
-            for f_idx, _obj_ids, logits in predictor.propagate_in_video(
-                state, start_frame_idx=seed, reverse=reverse,
-            ):
-                _IC.check()
-                if logits.shape[0] == 0:
-                    continue
-                # Soft alpha, not a hard threshold: the logit carries
-                # sub-pixel boundary information and binarising here is what
-                # makes SAM output look stair-stepped.
-                a = torch.sigmoid(logits[0, 0].float()).cpu()
-                if a.shape != (H, W):
-                    a = F.interpolate(a[None, None], size=(H, W), mode="bilinear",
-                                      align_corners=False)[0, 0]
-                masks[f_idx] = a.clamp(0, 1)
-                covered[f_idx] = True
+            with amp:          # the generator runs the model lazily: iterate inside the autocast context
+                for f_idx, _obj_ids, logits in predictor.propagate_in_video(
+                    state, start_frame_idx=seed, reverse=reverse,
+                ):
+                    _IC.check()
+                    if logits.shape[0] == 0:
+                        continue
+                    # Soft alpha, not a hard threshold: the logit carries
+                    # sub-pixel boundary information and binarising here is what
+                    # makes SAM output look stair-stepped.
+                    a = torch.sigmoid(logits[0, 0].float()).cpu()
+                    if a.shape != (H, W):
+                        a = F.interpolate(a[None, None], size=(H, W), mode="bilinear",
+                                          align_corners=False)[0, 0]
+                    masks[f_idx] = a.clamp(0, 1)
+                    covered[f_idx] = True
 
         n_cov = int(covered.sum())
         if n_cov < B:

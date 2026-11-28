@@ -159,9 +159,13 @@ def _store_snapshot(data: dict):
     try:
         conn = _get_db()
         rows = []
+        # One POST = one queued run. The browser's run counter restarts at 0 on every page reload, so its run_id
+        # would collide with (and be pruned below) older runs; the server assigns a monotonic id instead.
+        _mx = conn.execute("SELECT MAX(run_id) FROM param_diffs").fetchone()
+        server_run_id = int((_mx[0] if _mx else 0) or 0) + 1
         for node_id, info in data.items():
             ts = info.get("ts", datetime.now().isoformat(sep=" ", timespec="seconds"))
-            run_id = info.get("run_id", 0)
+            run_id = server_run_id
             title = info.get("title", "")
             cls = info.get("class", "")
             # v2: accept "delta" field; fall back to "values" for backward compat

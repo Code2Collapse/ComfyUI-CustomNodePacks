@@ -367,6 +367,11 @@ class MaskTemporalMEC:
             out = m
 
         report = compute_integrity(out, float(drop_threshold), float(jump_threshold))
+        if temporal_mode == "raft_flow" and B > 1:
+            # audit 2026-11-27: the passthrough was said only on the warning output; the JSON says it too now
+            report["raft_flow_applied"] = not raft_note
+            if raft_note:
+                report["raft_flow_error"] = raft_note
         warning = ""
         if report["flagged_count"] > 0:
             flagged_str = ", ".join(str(i) for i in report["flagged_frames"][:32])

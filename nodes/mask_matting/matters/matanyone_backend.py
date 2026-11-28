@@ -88,7 +88,7 @@ class MatAnyoneMatter(BaseMatter):
             try:
                 from matanyone import InferenceCore                              # type: ignore
                 processor = InferenceCore(ckpt) if os.path.isfile(ckpt) \
-                            else InferenceCore("PeterL1n/MatAnyone")
+                            else InferenceCore("PeiqingYang/MatAnyone")   # agy review: the HF model id (PeterL1n/MatAnyone does not exist)
             except Exception as exc:
                 raise RuntimeError(
                     f"Installed MatAnyone build does not expose a known entry "

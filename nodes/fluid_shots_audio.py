@@ -33,6 +33,10 @@ logger = logging.getLogger(__name__)
 _MAX_INSERTS_PER_PAIR = 16   # safety cap so one cut can't explode the batch
 _MAX_OUT_FACTOR = 4          # L9.264: the whole clip may grow to at most 4x its frames (+16), or RAM runs out
 _FLOW_PROC_LONG_SIDE = 384   # downscale for Farneback speed; magnitudes rescaled
+# Frame grids (audit 2026-11-27): the encoder's output count is B + the in-betweens, which is generally NOT on a
+# model's frame grid (Wan 4n+1, MiniMax H3 17n+5). A model that trims or pads the batch to its grid makes the
+# decoder fall back to its proportional, approximate mapping (its info output says by how much). For exact timing,
+# keep the frame count unchanged between encoder and decoder.
 
 
 def _to_gray_u8(frame_t, scale):
@@ -150,7 +154,8 @@ def integrity_report(images, selected, count_mismatch, missing):
 
 
 def _warp_mid(a_u8, b_u8, flow, t):
-    """Flow-warp intermediate at fraction t between full-res RGB uint8 frames.
+    """Flow-warp intermediate at fraction t between full-res RGB frames (uint8 or float32; the result is float32
+    in the same value range).
 
     Backward-warp approximation: A sampled at p - t*F, B at p + (1-t)*F,
     cross-faded. flow is at processing scale; rescaled to full res here.
@@ -268,12 +273,15 @@ class FluidShotEncoderMEC:
                     f"Fluid Shot Encoder would make more than {max_out} frames from {B} (pair {i}: {n_insert} "
                     f"in-betweens). Raise max_px_per_frame (now {max_px:g}) or split the clip at the fast cut.")
             if n_insert > 0:
-                a_u8 = (a_t.detach().cpu().numpy() * 255.0).clip(0, 255).astype(np.uint8)
-                b_u8 = (b_t.detach().cpu().numpy() * 255.0).clip(0, 255).astype(np.uint8)
+                # Audit 2026-11-27: the in-betweens are warped in float32 at the plate's own values. They used to
+                # be made from 8-bit copies (clipped to 0..1 and quantised to 1/255: HDR highlights flattened to
+                # 1.0, shadows below 1/255 went black, banding next to the untouched float source frames).
+                a_f = a_t.detach().cpu().float().numpy()
+                b_f = b_t.detach().cpu().float().numpy()
                 for k in range(1, n_insert + 1):
                     t = k / float(n_insert + 1)
                     try:
-                        mid = _warp_mid(a_u8, b_u8, flow, t) / 255.0
+                        mid = _warp_mid(a_f, b_f, flow, t)
                         mid_t = torch.from_numpy(mid.astype(np.float32))
                     except Exception:  # noqa: BLE001 — warp failed: linear blend
                         try:

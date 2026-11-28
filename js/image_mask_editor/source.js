@@ -62,6 +62,9 @@ export async function resolveEditorSource(node) {
     if (run) return _runSource(run);
 
     const src = await findUpstreamFrameSource(node);
-    if (src.count > 0 && !src.note) src.note = UPSTREAM_NOTE;
+    if (node?._imeRunNote) {
+        // the last run could not record its frames (e.g. over the size budget): say why, not "run once"
+        src.note = `Last run recorded no frames: ${node._imeRunNote}.` + (src.count > 0 ? " Showing the nearest upstream preview instead." : "");
+    } else if (src.count > 0 && !src.note) src.note = UPSTREAM_NOTE;
     return src;
 }

@@ -545,7 +545,14 @@ class SamMultiMaskPickerMEC:
             # L9.172: only when the feature is on (a default run keeps the old keys exactly)
             **({"fusion": fusion_info} if fusion_info is not None else {}),
             **({"temporal": temporal_info} if temporal_info is not None else {}),
+            # Audit 2026-11-27 (masking.md M-13): the masks come from frame 0 only; say so when a clip came in
+            **({"frames_used": f"0 of {B}",
+                "frames_note": f"Only frame 0 of the {B} input frames was segmented (temporal_frames only scores "
+                               "candidates). Track the mask with Mask + Matting (MaskOpsMEC) or Segment (C2C)."}
+               if B > 1 else {}),
         }, indent=2)
+        if B > 1:
+            logger.warning("[MEC] SamMultiMaskPicker: only frame 0 of %d input frames was segmented.", B)
 
         # ── Render mask thumbnails for the JS picker ──────────────
         # Without this, the JS widget falls back to a flat red overlay on every
@@ -600,7 +607,9 @@ class SamMultiMaskPickerMEC:
             return "sam3"
         if "hq" in name_lower:
             return "sam_hq"
-        return "sam_vit_h"
+        # Audit 2026-11-27: this returned "sam_vit_h", a type get_sam_predictor does not know, so every SAM 1 model
+        # (vit_h / vit_l / vit_b) stopped with "no predictor fits this model".
+        return "sam1"
 
     @staticmethod
     def _empty_result(H: int, W: int, reason: str):

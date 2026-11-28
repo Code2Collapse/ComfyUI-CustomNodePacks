@@ -211,11 +211,14 @@ def _inpaint_window(model, frames_in: torch.Tensor, masks_in: torch.Tensor,
             if pos <= src_idx < end and i < sub_out.shape[1]:
                 out[:, src_idx] = sub_out[:, i]
 
-        pos += max(neighbor_stride, 1) * subvideo_length // max(neighbor_stride, 1)
-        # Advance by exactly subvideo_length minus a neighbor overlap to avoid drift.
-        pos = end - (neighbor_stride if end < T else 0)
         if end >= T:
             break
+        # Advance by subvideo_length minus a neighbour overlap. The overlap must stay below the window length:
+        # neighbor_stride >= subvideo_length (the 'fast' remove preset: 10 vs 8) used to step BACKWARDS into
+        # negative frame indices and crash ("INDICES element is out of DATA bounds", audit 2026-11-27). A stride
+        # that is not shorter than the window now means "no overlap" (larger stride = less overlap, as documented).
+        overlap = int(neighbor_stride) if 0 < int(neighbor_stride) < end - pos else 0
+        pos = end - overlap
 
     # Composite: keep original outside mask, ProPainter result inside.
     return frames_in * (1.0 - masks_in) + out * masks_in
@@ -254,47 +257,71 @@ def _lab_to_rgb(lab: torch.Tensor) -> torch.Tensor:
     return torch.stack((r, g, bb), dim=-1).clamp(0.0, 1.0)
 
 
+def _match_bands(mask: torch.Tensor):
+    """Weights for colour statistics: (inner, outer), each (B, H, W, 1).
+
+    inner = the fill just inside the hole edge, outer = the original plate just outside it. Matching the
+    fill's inner band to the plate's outer band removes a colour step at the seam. (Before the audit fix of
+    2026-11-27 both statistics were taken OUTSIDE the hole, where the composite equals the original, so
+    the transfer was the identity and colour_match_mode did nothing.)
+    """
+    hole = (mask > 0.5).float().unsqueeze(1)  # (B,1,H,W)
+    H, W = hole.shape[-2:]
+    r = max(2, min(H, W) // 64)
+    k = 2 * r + 1
+    dil = F.max_pool2d(hole, k, stride=1, padding=r)
+    ero = 1.0 - F.max_pool2d(1.0 - hole, k, stride=1, padding=r)
+    outer = (dil - hole).clamp(0.0, 1.0)
+    inner = (hole - ero).clamp(0.0, 1.0)
+    # a hole thinner than the band: use the whole hole
+    thin = inner.sum(dim=(1, 2, 3), keepdim=True) < 1
+    inner = torch.where(thin, hole, inner)
+    return inner.permute(0, 2, 3, 1), outer.permute(0, 2, 3, 1)
+
+
+def _transfer(tgt: torch.Tensor, ref: torch.Tensor, w_tgt: torch.Tensor, w_ref: torch.Tensor):
+    """Reinhard mean/std transfer of tgt (H,W,3) toward ref; None when either region is empty."""
+    dt, dr = w_tgt.sum(), w_ref.sum()
+    if float(dt) < 1 or float(dr) < 1:
+        return None
+    r_mean = (ref * w_ref).sum(dim=(0, 1)) / dr
+    r_std = (((ref - r_mean) ** 2 * w_ref).sum(dim=(0, 1)) / dr).sqrt() + 1e-6
+    t_mean = (tgt * w_tgt).sum(dim=(0, 1)) / dt
+    t_std = (((tgt - t_mean) ** 2 * w_tgt).sum(dim=(0, 1)) / dt).sqrt() + 1e-6
+    gain = (r_std / t_std).clamp(0.5, 2.0)  # a near-flat band must not blow the fill up
+    return (tgt - t_mean) * gain + r_mean
+
+
 def _color_match(filled: torch.Tensor, original: torch.Tensor,
                  mask: torch.Tensor, mode: str) -> torch.Tensor:
     """
     filled / original: (B, H, W, 3) float [0,1]
     mask:              (B, H, W)    float [0,1] (1 = inpaint region)
+
+    Per frame, the fill's inner edge band is mean/std matched to the original's outer edge band
+    (RGB for 'reinhard', LAB for 'lab_transfer'); only pixels inside the mask change.
     """
-    if mode == "none":
+    if mode not in ("reinhard", "lab_transfer"):
         return filled
     out = filled.clone()
-    # Region statistics computed OUTSIDE the inpaint region (where original is trusted).
-    ref_mask = (1.0 - mask).unsqueeze(-1).clamp(0.0, 1.0)
+    inner, outer = _match_bands(mask)
     if mode == "reinhard":
         for f in range(out.shape[0]):
-            ref = original[f]
-            tgt = out[f]
-            w = ref_mask[f]
-            denom = w.sum() + 1e-6
-            ref_mean = (ref * w).sum(dim=(0, 1)) / denom
-            ref_std = (((ref - ref_mean) ** 2 * w).sum(dim=(0, 1)) / denom).sqrt() + 1e-6
-            tgt_mean = (tgt * w).sum(dim=(0, 1)) / denom
-            tgt_std = (((tgt - tgt_mean) ** 2 * w).sum(dim=(0, 1)) / denom).sqrt() + 1e-6
-            shifted = (tgt - tgt_mean) * (ref_std / tgt_std) + ref_mean
+            shifted = _transfer(out[f], original[f], inner[f], outer[f])
+            if shifted is None:
+                continue
             inside = mask[f].unsqueeze(-1)
-            out[f] = tgt * (1.0 - inside) + shifted.clamp(0.0, 1.0) * inside
+            out[f] = out[f] * (1.0 - inside) + shifted.clamp(0.0, 1.0) * inside
         return out
-    if mode == "lab_transfer":
-        ref_lab = _rgb_to_lab(original)
-        tgt_lab = _rgb_to_lab(out)
-        for f in range(out.shape[0]):
-            w = ref_mask[f]
-            denom = w.sum() + 1e-6
-            r_mean = (ref_lab[f] * w).sum(dim=(0, 1)) / denom
-            r_std = (((ref_lab[f] - r_mean) ** 2 * w).sum(dim=(0, 1)) / denom).sqrt() + 1e-6
-            t_mean = (tgt_lab[f] * w).sum(dim=(0, 1)) / denom
-            t_std = (((tgt_lab[f] - t_mean) ** 2 * w).sum(dim=(0, 1)) / denom).sqrt() + 1e-6
-            shifted_lab = (tgt_lab[f] - t_mean) * (r_std / t_std) + r_mean
-            shifted = _lab_to_rgb(shifted_lab)
-            inside = mask[f].unsqueeze(-1)
-            out[f] = out[f] * (1.0 - inside) + shifted * inside
-        return out
-    return filled
+    ref_lab = _rgb_to_lab(original)
+    tgt_lab = _rgb_to_lab(out)
+    for f in range(out.shape[0]):
+        shifted_lab = _transfer(tgt_lab[f], ref_lab[f], inner[f], outer[f])
+        if shifted_lab is None:
+            continue
+        inside = mask[f].unsqueeze(-1)
+        out[f] = out[f] * (1.0 - inside) + _lab_to_rgb(shifted_lab) * inside
+    return out
 
 
 # =====================================================================

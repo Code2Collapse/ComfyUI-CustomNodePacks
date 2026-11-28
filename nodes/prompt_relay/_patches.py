@@ -134,11 +134,12 @@ def detect_native_arch(model) -> Tuple[str, Tuple[int, int, int], int]:
     """
     diff_model = model.model.diffusion_model
 
-    # Native Wan: has patch_size attr, no patchifier.
+    # Native Wan: has patch_size attr, no patchifier, and lives in comfy.ldm.wan. Audit 2026-11-27: any comfy.ldm
+    # model with a patch_size used to count as Wan (MiniMax H3 among them), and patching then crashed with
+    # "'DiTBlock' object has no attribute 'cross_attn'". Kijai's WanModel lives outside comfy.ldm and is rejected too.
     if hasattr(diff_model, "patch_size") and not hasattr(diff_model, "patchifier"):
-        # Reject Kijai's WanModel — its module path lives outside comfy.ldm.
         mod_path = getattr(type(diff_model), "__module__", "") or ""
-        if "comfy.ldm" in mod_path or mod_path.startswith("comfy"):
+        if mod_path.startswith("comfy.ldm.wan"):
             return "wan", tuple(diff_model.patch_size), 4
 
     # Native LTX: has patchifier + vae_scale_factors.
@@ -392,6 +393,21 @@ def restore_kijai_checked(patcher, on_foreign: str = "restore anyway") -> dict:
 # ────────────────────────────────────────────────────────────────────────
 # Backend 3: generic introspective fallback
 # ────────────────────────────────────────────────────────────────────────
+
+def cross_attention_count(model) -> int:
+    """How many blocks of ``model``'s diffusion model carry a cross-attention module (cross_attn / attn2) that the
+    generic patcher could use. 0 for models without text cross-attention (e.g. MiniMax H3's joint self-attention)."""
+    try:
+        diffusion_model = model.get_model_object("diffusion_model")
+    except Exception:
+        diffusion_model = getattr(getattr(model, "model", None), "diffusion_model", None)
+    if diffusion_model is None:
+        return 0
+    blocks = getattr(diffusion_model, "blocks", None) or getattr(diffusion_model, "transformer_blocks", None)
+    if blocks is None:
+        return 0
+    return sum(1 for b in blocks for a in ("cross_attn", "attn2") if getattr(b, a, None) is not None)
+
 
 def patch_generic(model_clone, mask_fn: Callable) -> int:
     """Best-effort patcher for unknown architectures.

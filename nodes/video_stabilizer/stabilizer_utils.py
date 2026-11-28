@@ -1,5 +1,5 @@
 # PORTED FROM: ComfyUI-Video-Stabilizer by nomadoor and contributors (MIT) - https://github.com/nomadoor/ComfyUI-Video-Stabilizer
-# nodes/stabilizer_utils.py at d516bf0 (2026-07-04), code unchanged. Licence: ./LICENSE. Loaded by nodes/video_stabilizer_mec.py (L7.90:
+# nodes/stabilizer_utils.py at d516bf0 (2026-07-04), modified (see "Modified by Code2Collapse" notes). Licence: ./LICENSE. Loaded by nodes/video_stabilizer_mec.py (L7.90:
 # it used to load from the gitignored third_party/ folder, so the four Video Stabilizer nodes failed on every fresh install).
 
 from __future__ import annotations
@@ -128,11 +128,9 @@ def _to_numpy_frame(frame: Any) -> Tuple[np.ndarray, FrameAdapter]:
         arr = arr.astype(np.float32)
         arr /= 255.0
         value_range = "0_255"
-    elif bool(arr.size) and float(arr.max()) > 1.5:
-        # Float data in 0..255 range: own the buffer before scaling in place.
-        arr = arr.astype(np.float32)
-        arr /= 255.0
-        value_range = "0_255"
+    # Modified by Code2Collapse (agy review 2026-11-28): float frames are never rescaled. The old "max > 1.5 means
+    # 0..255" guess divided a whole HDR/EXR frame by 255 when one specular highlight went above 1.5 (a black frame
+    # in the clip). ComfyUI IMAGE tensors are float 0..1 with unbounded HDR; only uint8 is 0..255.
     else:
         value_range = "0_1"
         if dtype != np.float32 or not arr.flags["C_CONTIGUOUS"]:

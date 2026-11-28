@@ -47,11 +47,11 @@ _REGISTRY: List[GGUFModel] = [
     GGUFModel(
         model_id="qwen3-4b-instruct",
         display_name="Qwen3 4B Instruct",
-        hf_repo="bartowski/Qwen3-4B-Instruct-GGUF",
+        hf_repo="Qwen/Qwen3-4B-GGUF",
         quant_files={
-            "Q4_K_M": "Qwen3-4B-Instruct-Q4_K_M.gguf",
-            "Q5_K_M": "Qwen3-4B-Instruct-Q5_K_M.gguf",
-            "Q8_0":   "Qwen3-4B-Instruct-Q8_0.gguf",
+            "Q4_K_M": "Qwen3-4B-Q4_K_M.gguf",
+            "Q5_K_M": "Qwen3-4B-Q5_K_M.gguf",
+            "Q8_0":   "Qwen3-4B-Q8_0.gguf",
         },
         default_quant="Q4_K_M",
         chat_format="chatml",
@@ -63,11 +63,11 @@ _REGISTRY: List[GGUFModel] = [
     GGUFModel(
         model_id="qwen3-8b-instruct",
         display_name="Qwen3 8B Instruct",
-        hf_repo="bartowski/Qwen3-8B-Instruct-GGUF",
+        hf_repo="Qwen/Qwen3-8B-GGUF",
         quant_files={
-            "Q4_K_M": "Qwen3-8B-Instruct-Q4_K_M.gguf",
-            "Q5_K_M": "Qwen3-8B-Instruct-Q5_K_M.gguf",
-            "Q8_0":   "Qwen3-8B-Instruct-Q8_0.gguf",
+            "Q4_K_M": "Qwen3-8B-Q4_K_M.gguf",
+            "Q5_K_M": "Qwen3-8B-Q5_K_M.gguf",
+            "Q8_0":   "Qwen3-8B-Q8_0.gguf",
         },
         default_quant="Q4_K_M",
         chat_format="chatml",

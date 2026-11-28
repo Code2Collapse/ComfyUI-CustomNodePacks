@@ -51,7 +51,14 @@ def _to_np_image(t) -> np.ndarray:
         arr = arr[None]
     if arr.ndim != 4 or arr.shape[-1] != 3:
         raise ValueError(f"expected (B,H,W,3) image, got {arr.shape}")
-    return np.clip(arr.astype(np.float32), 0.0, 1.0)
+    return np.clip(arr, 0.0, 1.0, dtype=np.float32)          # one new array (astype + clip made two, audit 2026-11-27)
+
+
+def _np_to_tensor(arr: np.ndarray) -> torch.Tensor:
+    """float32 tensor; a read-only broadcast view (the static placement) becomes an expanded tensor of its one frame."""
+    if not arr.flags.writeable and arr.ndim >= 1 and arr.strides[0] == 0:
+        return torch.from_numpy(np.array(arr[0])).float().unsqueeze(0).expand(arr.shape[0], *arr.shape[1:])
+    return torch.from_numpy(arr).float()
 
 
 def _to_np_mask(m) -> np.ndarray:
@@ -706,9 +713,11 @@ class MaskPlacementMEC:
                              if rgb_crop is not None else 0.0)
                 quads.append(cv2.perspectiveTransform(src_rect3[None], Ht)[0])
         else:
-            # same placement on every frame
-            masks = np.repeat(warped_alpha[None], B, axis=0)
-            placed = np.repeat(warped_rgb[None], B, axis=0)
+            # same placement on every frame: read-only views of the one placed frame (audit 2026-11-27: np.repeat
+            # held B full copies of each - 4.4 GiB at 124 x 2048 x 1080 - for one picture); returned as expanded
+            # tensors, like core's Convert Mask to Image
+            masks = np.broadcast_to(warped_alpha[None], (B, H, W))
+            placed = np.broadcast_to(warped_rgb[None], (B, H, W, 3))
             quads = [corners] * B
 
         # L9.172: occlusion - things in front of the placement cut it out of `masks` (placed_rgb unchanged).
@@ -734,8 +743,12 @@ class MaskPlacementMEC:
             if occ_notes:
                 occ_info["notes"] = occ_notes
 
-        # Overlay preview: original frames + green tint + quad outline.
-        overlay = images_np.copy()
+        # Overlay preview: original frames + green tint + quad outline. images_np is this node's own copy (made by
+        # _to_np_image), so the overlay is drawn into it in place - no second full copy (audit 2026-11-27); the
+        # editor backdrop frame is taken first.
+        _bk = min(int(anchor_frame), B - 1)
+        backdrop = images_np[_bk].copy()
+        overlay = images_np
         tint = np.zeros_like(overlay[0])
         tint[..., 1] = 1.0
         for i in range(B):
@@ -762,6 +775,12 @@ class MaskPlacementMEC:
             "frame_status": frame_status,
             "note": note,
         }
+        n_src = int(source_mask.shape[0]) if (source_mask is not None and getattr(source_mask, "ndim", 0) == 3) else 1
+        if source_mode == "byo_mask" and n_src > 1:
+            # audit 2026-11-27 (c2c_backend_audit mask_placement.py:603 "static frame-0 cutout"): say it, never silently
+            info_d["source_note"] = (f"source_mask has {n_src} frames; the cutout is one still taken from its frame 0 "
+                                     "(frames 1.. are not used); track_mode moves that still with the video.")
+            log.warning("MaskPlacementMEC: %s", info_d["source_note"])
         if mesh is not None:                          # L9.172: new keys only when the feature is on
             info_d["mesh"] = {"rows": mesh["rows"], "cols": mesh["cols"], "keys": len(mesh["keys"]),
                               "interp": mesh["interp"],
@@ -775,8 +794,8 @@ class MaskPlacementMEC:
         ui_payload: Dict[str, Any] = {}
         try:
             import base64
-            idx = min(int(anchor_frame), B - 1)
-            frame_u8 = (images_np[idx] * 255).astype(np.uint8)
+            idx = _bk
+            frame_u8 = (backdrop * 255).astype(np.uint8)
             scale = min(1.0, 640.0 / max(H, W))
             if scale < 1.0:
                 frame_u8 = cv2.resize(frame_u8, (int(W * scale), int(H * scale)),
@@ -795,8 +814,8 @@ class MaskPlacementMEC:
         return {
             "ui": ui_payload,
             "result": (
-                torch.from_numpy(masks).float(),
-                torch.from_numpy(placed).float(),
+                _np_to_tensor(masks),
+                _np_to_tensor(placed),
                 torch.from_numpy(overlay).float(),
                 info,
                 torch.from_numpy(occ).float(),

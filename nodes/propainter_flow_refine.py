@@ -19,12 +19,16 @@ from ._is_changed_util import hash_args_and_kwargs
 
 from .propainter_bridge import (
     HAS_PROPAINTER,
+    ProPainterMissingError,
     get_device,
-    load_models,
+    load_models,  # noqa: F401 - kept importable (tests and older callers patch it)
+    load_raft,
     require_propainter,
 )
 
 log = logging.getLogger("MEC.flow_refine")
+
+_RAFT_CHUNK = 8  # frame pairs per RAFT forward pass
 
 
 def _to_raft(images: torch.Tensor, device: torch.device) -> torch.Tensor:
@@ -80,8 +84,13 @@ def _lk_pyramid_flow(a: torch.Tensor, b: torch.Tensor, levels: int = 3,
                            device=a.device, dtype=a.dtype)
     for lvl in reversed(range(levels)):
         if lvl != levels - 1:
-            flow_lvl = F.interpolate(flow_lvl, scale_factor=2,
-                                     mode="bilinear", align_corners=False) * 2.0
+            # Upsample to the exact size of this level (odd sizes: avg_pool floors, so x2 can be 1 px short;
+            # that crashed every frame whose side is not a multiple of 4, audit 2026-11-27) and rescale each
+            # component by its own size ratio.
+            h0, w0 = flow_lvl.shape[-2:]
+            h1, w1 = pyr_a[lvl].shape[-2:]
+            flow_lvl = F.interpolate(flow_lvl, size=(h1, w1), mode="bilinear", align_corners=False)
+            flow_lvl = flow_lvl * torch.tensor([w1 / w0, h1 / h0], device=a.device, dtype=a.dtype).view(1, 2, 1, 1)
         ai, bi = pyr_a[lvl], pyr_b[lvl]
         # Spatial gradients (Sobel)
         sx = torch.tensor([[-1, 0, 1], [-2, 0, 2], [-1, 0, 1]],
@@ -135,19 +144,25 @@ def compute_flow(frame_a: torch.Tensor, frame_b: torch.Tensor,
     if a.shape != b.shape:
         raise ValueError(f"frame_a/b shape mismatch: {a.shape} vs {b.shape}")
 
-    models = None
+    raft = None
     if HAS_PROPAINTER:
         # The RAFT code can be present while its weights are not (offline machine, failed download): fall back to
         # LK then too, as the node's description promises, instead of failing the run (found by L2.37).
+        # RAFT only: flow never needs the flow-completion / inpaint networks (audit 2026-11-27).
         try:
-            models = load_models(half=False)
-        except FileNotFoundError as exc:
+            raft = load_raft()
+        except (FileNotFoundError, ProPainterMissingError) as exc:
             log.warning("[FlowRefineMEC] RAFT weights unavailable (%s) — using LK fallback", exc)
-    if models is not None:
-        a_pp = _to_raft(a, models.device)
-        b_pp = _to_raft(b, models.device)
-        fwd = _raft_pair(models.raft, a_pp, b_pp, iters=iters)
-        bwd = _raft_pair(models.raft, b_pp, a_pp, iters=iters)
+    if raft is not None:
+        rdev = next(raft.parameters()).device
+        a_pp = _to_raft(a, rdev)
+        b_pp = _to_raft(b, rdev)
+        # RAFT keeps a correlation volume per pair: run the batch in chunks instead of all frames at once.
+        n = int(a_pp.shape[0])
+        fwd = torch.cat([_raft_pair(raft, a_pp[i:i + _RAFT_CHUNK], b_pp[i:i + _RAFT_CHUNK], iters=iters)
+                         for i in range(0, n, _RAFT_CHUNK)], dim=0)
+        bwd = torch.cat([_raft_pair(raft, b_pp[i:i + _RAFT_CHUNK], a_pp[i:i + _RAFT_CHUNK], iters=iters)
+                         for i in range(0, n, _RAFT_CHUNK)], dim=0)
     else:
         if not HAS_PROPAINTER:
             log.warning("[FlowRefineMEC] ProPainter unavailable — using LK fallback")

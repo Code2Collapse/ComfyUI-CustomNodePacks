@@ -12,6 +12,7 @@ Clamping is core's process_output; callers choose clamp_output on the node.
 from __future__ import annotations
 
 import logging
+import weakref
 from contextlib import contextmanager
 from typing import Iterator
 
@@ -30,7 +31,35 @@ def _is_vae_dynamic(vae) -> bool:
     return False
 
 
-_FP32_COPY: dict = {}          # id(vae) -> (vae, fp32 copy); one at a time (a second VAE replaces the first)
+# id(vae) -> (weakref to vae, fp32 copy); one at a time (a second VAE replaces the first). A WEAK reference
+# (audit 2026-11-27): the cache held the source VAE itself, so a VAE the graph had dropped stayed in RAM together
+# with its fp32 copy until another VAE came through. Now the copy is freed when its source VAE is.
+_FP32_COPY: dict = {}
+
+
+def _same_model(src, copy) -> bool:
+    """The copy rebuilt the same network: same first_stage_model class, latent layout and identical weight keys and
+    shapes. core's VAE() takes `config` / `metadata` that the VAE object does not keep (LTX, TAE...), so a rebuild
+    from the state dict alone can pick a different architecture - that copy must not be used."""
+    try:
+        if type(getattr(src, "first_stage_model", None)) is not type(getattr(copy, "first_stage_model", None)):
+            return False
+        for attr in ("latent_channels", "latent_dim", "downscale_ratio", "upscale_ratio"):
+            if repr(getattr(src, attr, None)) != repr(getattr(copy, attr, None)):
+                return False
+        a, b = src.get_sd(), copy.get_sd()
+        return set(a) == set(b) and all(tuple(a[k].shape) == tuple(b[k].shape) for k in a)
+    except Exception:  # noqa: BLE001 - cannot prove it is the same network: do not use it
+        return False
+
+
+def is_core_vae(vae) -> bool:
+    """True for a core comfy.sd.VAE (its weights may be pinned: never cast them in place)."""
+    try:
+        import importlib
+        return isinstance(vae, importlib.import_module("comfy.sd").VAE)
+    except Exception:  # noqa: BLE001
+        return False
 
 
 def fp32_vae_copy(vae):
@@ -48,12 +77,22 @@ def fp32_vae_copy(vae):
     if not isinstance(vae, core_sd.VAE) or not hasattr(vae, "get_sd"):
         return None
     hit = _FP32_COPY.get(id(vae))
-    if hit is not None and hit[0] is vae:
+    if hit is not None and hit[0]() is vae:
         return hit[1]
     sd = {k: v.detach().to("cpu", torch.float32) for k, v in vae.get_sd().items()}
     copy = core_sd.VAE(sd=sd, dtype=torch.float32)
+    del sd
+    if not _same_model(vae, copy):
+        log.warning("fp32 VAE copy rebuilt a different network (this VAE needs config/metadata core does not keep); "
+                    "decoding at the VAE's own precision instead.")
+        return None
     _FP32_COPY.clear()
-    _FP32_COPY[id(vae)] = (vae, copy)
+    key = id(vae)
+    try:
+        ref = weakref.ref(vae, lambda _r, _k=key: _FP32_COPY.pop(_k, None))
+    except TypeError:                                   # not weak-referenceable: do not cache
+        return copy
+    _FP32_COPY[key] = (ref, copy)
     return copy
 
 
@@ -121,9 +160,14 @@ def unclamped_output(vae) -> Iterator[None]:
         vae.process_output = orig
 
 
-def _normalize_decoded(decoded: torch.Tensor) -> torch.Tensor:
-    """Return video decode as [B, T, H, W, C]. Image decode [B,H,W,C] -> T=1."""
+def _normalize_decoded(decoded: torch.Tensor, batch: int | None = None) -> torch.Tensor:
+    """Return video decode as [B, T, H, W, C]. Image decode [B,H,W,C] -> T=1.
+
+    `batch` = the latent's B for a 5-D video latent: a VAE that returns its frames flat ([B*T, H, W, C]) is folded
+    back to [B, T, H, W, C] (audit 2026-11-27: it was read as B*T clips of one frame and the tiler crashed)."""
     if decoded.ndim == 4:
+        if batch is not None and batch >= 1 and decoded.shape[0] % batch == 0 and decoded.shape[0] != batch:
+            return decoded.reshape(batch, decoded.shape[0] // batch, *decoded.shape[1:])
         return decoded.unsqueeze(1)
     if decoded.ndim == 5:
         return decoded
@@ -131,13 +175,14 @@ def _normalize_decoded(decoded: torch.Tensor) -> torch.Tensor:
 
 
 def _standard_decode(vae, latents: torch.Tensor) -> torch.Tensor:
-    """Decode latents; no dtype juggling or output clamp (caller owns both)."""
+    """Decode latents; no dtype juggling or output clamp (caller owns both). A 5-D (video) latent always comes back
+    as [B, T, H, W, C]."""
     decoded = vae.decode(latents)
     if isinstance(decoded, dict):
         decoded = decoded.get("samples", decoded.get("sample", next(iter(decoded.values()))))
     if not isinstance(decoded, torch.Tensor):
         raise TypeError(f"VAE decode returned {type(decoded).__name__}, expected a tensor.")
-    return _normalize_decoded(decoded.float())
+    return _normalize_decoded(decoded.float(), int(latents.shape[0]) if latents.ndim == 5 else None)
 
 
 def _plan_tile_spans(total: int, tile_size: int, overlap: int) -> list[tuple[int, int]]:

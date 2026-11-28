@@ -70,6 +70,10 @@ def _block_of(key: str) -> str:
     if not m:
         return "other"
     parts = key.split(".")
+    # audit 2026-11-27: encoder.down.0 / .1 / .2 (and up_blocks.N, Wan's downsamples.N...) were one bucket each
+    # ("encoder.down"), so a divergence in one resolution level hid among the others. Keep the level index.
+    if len(parts) >= 3 and parts[2].isdigit():
+        return ".".join(parts[:3])
     if len(parts) >= 2:
         return ".".join(parts[:2])
     return parts[0]

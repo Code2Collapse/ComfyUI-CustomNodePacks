@@ -112,15 +112,27 @@ def _to_pil_list(image_bhwc):
     return out
 
 
-def _gray_to_bhwc3(arr_or_t):
-    """A single-channel depth (numpy or tensor, any range) → [1,H,W,3] 0..1, normalised."""
+def _gray_to_bhwc3(arr_or_t, normalise=True):
+    """A single-channel depth (numpy or tensor, any range) → [1,H,W,3]; 0..1 normalised unless normalise=False."""
     t = torch.as_tensor(np.asarray(arr_or_t), dtype=torch.float32)
     while t.dim() > 2:
         t = t.squeeze(0) if t.shape[0] == 1 else t[..., 0]
+    if not normalise:
+        return t.unsqueeze(0).unsqueeze(-1).repeat(1, 1, 1, 3)
     mn, mx = float(t.min()), float(t.max())
     if mx - mn > 1e-6:
         t = (t - mn) / (mx - mn)
     return t.unsqueeze(0).unsqueeze(-1).repeat(1, 1, 1, 3).clamp(0, 1)
+
+
+def _clip_norm(frames):
+    """Concatenate raw per-frame depths and normalise with ONE min/max over the whole clip. Audit 2026-11-27: a
+    min/max per frame re-scaled static background whenever something nearer entered the shot (depth flicker)."""
+    t = torch.cat(frames, 0)
+    mn, mx = float(t.min()), float(t.max())
+    if mx - mn > 1e-6:
+        t = (t - mn) / (mx - mn)
+    return t.clamp(0, 1)
 
 
 def _comfy_models_dir(sub):
@@ -201,8 +213,8 @@ def run_hf_depth(image_bhwc, version, size, custom_model=""):
         frames = []
         for pil in _to_pil_list(image_bhwc):
             d = pipe(pil)["depth"]  # PIL grayscale
-            frames.append(_gray_to_bhwc3(np.array(d)))
-        return torch.cat(frames, 0), f"hf_depth ok [{model_id}]" + (f" ({size_note})" if size_note else "")
+            frames.append(_gray_to_bhwc3(np.array(d), normalise=False))
+        return _clip_norm(frames), f"hf_depth ok [{model_id}]" + (f" ({size_note})" if size_note else "")
     except Exception as e:  # missing weights / transformers issue
         return None, f"hf_depth err [{model_id}]: {type(e).__name__}: {e}"
 
@@ -244,8 +256,9 @@ def run_da3(image_bhwc, size="large", custom_model=""):
             depth = getattr(pred, "depth", None)
             if depth is None and isinstance(pred, dict):
                 depth = pred.get("depth")
-            frames.append(_gray_to_bhwc3(depth.detach().cpu().numpy() if torch.is_tensor(depth) else depth))
-        return torch.cat(frames, 0), f"da3 ok [{model_id}]"
+            frames.append(_gray_to_bhwc3(depth.detach().cpu().numpy() if torch.is_tensor(depth) else depth,
+                                         normalise=False))
+        return _clip_norm(frames), f"da3 ok [{model_id}]"
     except Exception as e:
         return None, f"da3 err [{model_id}]: {type(e).__name__}: {e}"
 
@@ -289,8 +302,8 @@ def run_depth_pro(image_bhwc, custom_model=""):
                     except Exception: pass
                 pred = model.infer(img)
                 depth = pred["depth"] if isinstance(pred, dict) else pred
-                frames.append(_gray_to_bhwc3(_inverse_depth(depth).numpy()))
-            return torch.cat(frames, 0), "depth_pro ok [depth_pro package]"
+                frames.append(_gray_to_bhwc3(_inverse_depth(depth).numpy(), normalise=False))
+            return _clip_norm(frames), "depth_pro ok [depth_pro package]"
         repo = custom_model.strip() or _DEPTH_PRO_HF
         key = "depth_pro_hf::" + repo
         if key not in _CACHE:
@@ -312,8 +325,8 @@ def run_depth_pro(image_bhwc, custom_model=""):
             with torch.no_grad():
                 out = model(**inputs)
             post = proc.post_process_depth_estimation(out, target_sizes=[(pil.height, pil.width)])[0]
-            frames.append(_gray_to_bhwc3(_inverse_depth(post["predicted_depth"]).numpy()))
-        return torch.cat(frames, 0), f"depth_pro ok [{repo}]"
+            frames.append(_gray_to_bhwc3(_inverse_depth(post["predicted_depth"]).numpy(), normalise=False))
+        return _clip_norm(frames), f"depth_pro ok [{repo}]"
     except Exception as e:
         return None, f"depth_pro err: {type(e).__name__}: {e}"
 
@@ -342,17 +355,31 @@ def run_depthcrafter(image_bhwc, num_inference_steps=5, guidance_scale=1.0,
                 pipe = pipe.to("cuda")
             _CACHE["depthcrafter"] = pipe
         pipe = _CACHE["depthcrafter"]
-        # pipeline __call__ expects video [b,c,h,w] in [-1,1]
-        vid = (image_bhwc[..., :3].permute(0, 3, 1, 2) * 2.0 - 1.0)
-        if torch.cuda.is_available():
-            vid = vid.to("cuda").half()
-        res = pipe(vid, num_inference_steps=int(num_inference_steps),
-                   guidance_scale=float(guidance_scale))
-        depth = res.frames if hasattr(res, "frames") else res
-        depth = torch.as_tensor(np.asarray(depth)).float()  # [B,H,W] or [B,H,W,C]
-        if depth.dim() == 3:
-            depth = depth.unsqueeze(-1).repeat(1, 1, 1, 3)
-        return depth.clamp(0, 1), "depthcrafter ok"
+        # Audit 2026-11-27: the vendored pipeline takes video [t,c,h,w] in [0,1] (it applies *2-1 itself: passing
+        # [-1,1] gave the model [-3,+1]); it prepares latents at height x width (default 576x1024, so any other
+        # size crashed) and returns PIL frames unless output_type="np" (that came back as a 5-D, near-white
+        # tensor). Now: resize to multiples of 64 (longest side <= 1024, as the upstream run script does), ask
+        # for numpy, average the channels, normalise once over the clip and resize back to the input size.
+        import torch.nn.functional as F
+        T, H, W = int(image_bhwc.shape[0]), int(image_bhwc.shape[1]), int(image_bhwc.shape[2])
+        scale = min(1.0, 1024.0 / max(H, W))
+        h64 = max(64, int(round(H * scale / 64)) * 64)
+        w64 = max(64, int(round(W * scale / 64)) * 64)
+        vid = image_bhwc[..., :3].permute(0, 3, 1, 2).float().clamp(0, 1)
+        if (h64, w64) != (H, W):
+            vid = F.interpolate(vid, size=(h64, w64), mode="bilinear", align_corners=False).clamp(0, 1)
+        res = pipe(vid, height=h64, width=w64, output_type="np",
+                   num_inference_steps=int(num_inference_steps), guidance_scale=float(guidance_scale))
+        frames = res.frames if hasattr(res, "frames") else res
+        depth = torch.as_tensor(np.asarray(frames[0])).float()  # [T,h,w,C]
+        if depth.dim() == 4:
+            depth = depth.mean(-1)
+        mn, mx = float(depth.min()), float(depth.max())
+        if mx - mn > 1e-6:
+            depth = (depth - mn) / (mx - mn)
+        if tuple(depth.shape[-2:]) != (H, W):
+            depth = F.interpolate(depth.unsqueeze(1), size=(H, W), mode="bilinear", align_corners=False)[:, 0]
+        return depth.unsqueeze(-1).repeat(1, 1, 1, 3).clamp(0, 1).contiguous(), "depthcrafter ok"
     except Exception as e:
         return None, f"depthcrafter err: {type(e).__name__}: {e}"
 
@@ -480,11 +507,15 @@ def run_normalcrafter(image_bhwc, unet_path="Yanrui95/NormalCrafter",
                 pipe = pipe.to("cuda")
             _CACHE["normalcrafter"] = pipe
         pipe = _CACHE["normalcrafter"]
-        frames = image_bhwc[..., :3].detach().cpu().numpy()  # [B,H,W,3] 0..1
-        res = pipe.infer(frames, window_size=14, time_step_size=10)
-        normals = torch.as_tensor(np.asarray(res)).float()   # [B,H,W,3] in [-1,1] or 0..1
-        if normals.min() < -0.01:
-            normals = (normals + 1.0) * 0.5
+        # Audit 2026-11-27: NormalCrafterPipeline has no infer() (every run failed with AttributeError). Its
+        # __call__ takes a list of PIL frames and returns .frames = [B,T,H,W,3] numpy in [-1,1]; its window logic
+        # needs window_size <= frame count.
+        T = int(image_bhwc.shape[0])
+        window = min(14, T)
+        res = pipe(_to_pil_list(image_bhwc), decode_chunk_size=7, time_step_size=min(10, window), window_size=window)
+        frames = res.frames if hasattr(res, "frames") else res
+        normals = torch.as_tensor(np.asarray(frames[0])).float()   # [T,H,W,3] in [-1,1]
+        normals = (normals + 1.0) * 0.5
         return normals.clamp(0, 1), "normalcrafter ok"
     except Exception as e:
         return None, f"normalcrafter err: {type(e).__name__}: {e}"

@@ -200,12 +200,29 @@ class CoreSAM3:
             return np.zeros((H, W), np.float32), 0.0
         return np.asarray(objs[0]["mask"], np.float32), float(objs[0]["score"])
 
+    def _carve(self, frame_hwc, o, pos, neg, H, W) -> Dict[str, Any]:
+        """One word match with negative clicks inside it: the SAM decoder on the match's box + those clicks, kept
+        inside the match. The clicked pixels are background whatever the decoder returns."""
+        bx = o.get("box")
+        if not bx:
+            ys, xs = np.nonzero(np.asarray(o["mask"]) > 0.5)
+            bx = [int(xs.min()), int(ys.min()), int(xs.max()) + 1, int(ys.max()) + 1] if len(xs) else None
+        dec = self.detect(frame_hwc, "", list(pos), list(neg), [tuple(bx)] if bx else [])
+        m = np.asarray(o["mask"], np.float32)
+        if dec:
+            m = np.minimum(m, np.max(np.stack([np.asarray(d["mask"], np.float32) for d in dec]), axis=0))
+        else:
+            m = m.copy()
+        for x, y in neg:
+            m[int(min(H - 1, max(0, y))), int(min(W - 1, max(0, x)))] = 0.0
+        return {**o, "mask": m, "carved": len(neg)}
+
     def segment_union(self, frame_hwc: np.ndarray, pos, neg, bbox, neg_bbox, text) -> Tuple[np.ndarray, float]:
         """The cascade segmenter's per-frame contract (sam31_backend._seg_one): one HxW mask + a score.
         Words: every match; clicks / a box, when given with words, choose among the matches (a match holding a
-        positive click or centred in the box; a match holding a negative click is dropped), all matches when none is
-        chosen. No words: the SAM decoder on the clicks and the box. neg_bbox has no counterpart in core's decoder:
-        with words it drops the matches centred in it, without words its own mask is subtracted (as the sam3 package
+        positive click or centred in the box), all matches when none is chosen; a negative click carves its part out of
+        the chosen (or only) match and drops any other match it lands on. No words: the SAM decoder on the clicks and the box. neg_bbox has no counterpart in core's decoder:
+        with words it drops the matches centred in it; its own mask is subtracted in both cases (as the sam3 package
         backend does)."""
         H, W = int(frame_hwc.shape[0]), int(frame_hwc.shape[1])
         pos, neg = list(pos or []), list(neg or [])
@@ -223,15 +240,27 @@ class CoreSAM3:
                 cx, cy = (bx[0] + bx[2]) / 2, (bx[1] + bx[3]) / 2
                 return b[0] <= cx <= b[2] and b[1] <= cy <= b[3]
 
-            objs = [o for o in objs if not any(holds(o, p) for p in neg) and not centred(o, neg_bbox)]
+            objs = [o for o in objs if not centred(o, neg_bbox)]
             chosen = [o for o in objs if any(holds(o, p) for p in pos) or centred(o, bbox)] if (pos or bbox) else []
-            objs = chosen or objs
+            # Audit 2026-11-27 (masking.md M-02): a negative click inside the matched subject used to drop the WHOLE
+            # match ("person" + a click on the necklace = empty mask). Now a click on the selected subject (or on the
+            # only match) CARVES that part out through the SAM decoder; a click on any other match still drops it.
+            keep = chosen or objs
+            out_objs = []
+            for o in keep:
+                inside = [p for p in neg if holds(o, p)]
+                if not inside:
+                    out_objs.append(o)
+                elif chosen or len(objs) == 1:
+                    out_objs.append(self._carve(frame_hwc, o, [p for p in pos if holds(o, p)], inside, H, W))
+            objs = [o for o in out_objs if np.asarray(o["mask"]).max() > 0.5]
         else:
             objs = self.detect(frame_hwc, "", pos, neg, [tuple(bbox)] if bbox is not None else [])
         if not objs:
             return np.zeros((H, W), np.float32), 0.0
         m = np.max(np.stack([np.asarray(o["mask"], np.float32) for o in objs]), axis=0)
-        if neg_bbox is not None and not (text and str(text).strip()):
+        if neg_bbox is not None:
+            # with words too (M-02): matches centred in neg_bbox are dropped above; what it covers of the rest is cut
             neg_m, _ = self.mask_from_prompts(frame_hwc, [], [], neg_bbox)
             m = np.clip(m - neg_m, 0.0, 1.0)
         return m, max(float(o.get("score", 0.0)) for o in objs)

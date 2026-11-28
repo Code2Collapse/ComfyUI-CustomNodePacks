@@ -361,8 +361,10 @@ def inner_shadow_footprint(
     blur: int,
     notes: list[str],
 ) -> torch.Tensor:
-    """Layer mask intersected with the shifted/grown shadow band."""
-    shifted = shift_mask(mask, int(distance_x), int(distance_y))
+    """Inner shadow (LayerStyle / Photoshop): the INVERTED layer matte, shifted by the distance, grown / blurred and
+    intersected with the layer - the band inside the edge facing the light. (audit 2026-11-27: it shifted the matte
+    itself, which shaded almost the whole interior instead of the edge band.)"""
+    shifted = shift_mask(1.0 - mask, int(distance_x), int(distance_y))
     shadow = expand_mask(shifted, grow, blur, notes)
     return (mask * shadow).clamp(0.0, 1.0).clone()
 

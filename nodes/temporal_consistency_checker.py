@@ -44,11 +44,15 @@ def _to_uint8_gray(arr_hw3: np.ndarray) -> np.ndarray:
 
 
 def _flow_warp_diff(prev_rgb: np.ndarray, curr_rgb: np.ndarray) -> float:
-    """Forward-warp prev → curr via Farneback flow, return mean L1 diff."""
+    """Carry prev onto curr along the Farneback flow and return the mean L1 diff (same 0-1 scale as the frames).
+
+    Audit 2026-11-27 (c2c_backend_audit "flow_warp inverted warp sign", :50-60): the prev->curr flow was fed to a
+    backward cv2.remap, which moves prev AWAY from curr (moving-square repro: 0.0218 vs 0.0115 for no warp at all).
+    A backward warp samples prev with the flow from curr to prev."""
     prev_g = _to_uint8_gray(prev_rgb)
     curr_g = _to_uint8_gray(curr_rgb)
     flow = cv2.calcOpticalFlowFarneback(
-        prev_g, curr_g, None,
+        curr_g, prev_g, None,
         pyr_scale=0.5, levels=3, winsize=15,
         iterations=3, poly_n=5, poly_sigma=1.2, flags=0,
     )
@@ -252,8 +256,9 @@ class TemporalConsistencyCheckerMEC:
                 if a_np.ndim == 2:
                     a_np = np.stack([a_np] * 3, axis=-1)
                     b_np = np.stack([b_np] * 3, axis=-1)
-                # Already H,W,3 for IMAGE input
-                scores.append(_flow_warp_diff(a_np, b_np) / 255.0)
+                # Already H,W,3 for IMAGE input. The frames are 0-1 floats, so the diff already is 0-1 (audit
+                # 2026-11-27: a further / 255 put every flow_warp flicker score near 0)
+                scores.append(_flow_warp_diff(a_np, b_np))
 
         flicker = float(np.mean(scores)) if scores else 0.0
         report = {

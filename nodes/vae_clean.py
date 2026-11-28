@@ -112,15 +112,22 @@ def saturation(lin: torch.Tensor) -> float:
     return float(chroma / y.mean().clamp(min=1e-6))
 
 
+def _sample(y: torch.Tensor, n: int = 1_000_000) -> torch.Tensor:
+    """At most ~n values spread evenly over ALL of y (every frame, every row). audit 2026-11-27: y[:n] read only the
+    top ~45 % of frame 0 at 2K, and randperm(numel) allocated an index the size of the whole clip (8 bytes a pixel)."""
+    y = y.reshape(-1)                         # a view when y is contiguous (luma() returns a fresh tensor)
+    if y.numel() <= n:
+        return y
+    return y[:: -(-y.numel() // n)]
+
+
 def contrast(lin: torch.Tensor) -> tuple[float, float]:
     """(black point, white point) as robust percentiles of luma.
 
     Percentiles, not min/max: one hot pixel or one dead pixel would otherwise
     define the whole range and every correction would be driven by noise.
     """
-    y = luma(lin).flatten()
-    if y.numel() > 1_000_000:                 # a percentile does not need 8M samples
-        y = y[torch.randperm(y.numel(), device=y.device)[:1_000_000]]
+    y = _sample(luma(lin))                    # a percentile does not need 8M samples
     lo = float(torch.quantile(y, 0.001))
     hi = float(torch.quantile(y, 0.999))
     return lo, hi
@@ -179,7 +186,7 @@ def balance(lin: torch.Tensor, mode: str, *, reference: torch.Tensor | None,
         # Anchor on the BRIGHTEST neutral-ish region rather than the average,
         # which is what survives a scene that is genuinely one colour.
         y = luma(lin)
-        thr = torch.quantile(y.flatten()[:1_000_000], 0.99)
+        thr = torch.quantile(_sample(y), 0.99)
         m = (y >= thr).expand_as(lin)
         if m.any():
             # Measure the bright region's channels and drive them to their own
@@ -312,6 +319,13 @@ def write_back_unchanged(
     d = (img - ref).abs().mean(dim=-1)
     d_mean = _box_mean(d, radius)
     changed = d_mean > threshold
+    if changed.shape[0] > 2:
+        # audit 2026-11-27: a per-frame threshold alone let a pixel near it flip between "restored" and "kept" from
+        # frame to frame (boiling). A pixel counts as changed when it changed in this frame or either neighbour, so
+        # it is only restored when it is still across three frames. Never reverts more of an edit than before.
+        changed = F.max_pool1d(changed.float().permute(1, 2, 0).reshape(-1, 1, changed.shape[0]),
+                               kernel_size=3, stride=1, padding=1).reshape(
+            changed.shape[1], changed.shape[2], changed.shape[0]).permute(2, 0, 1) > 0.5
 
     k = 2 * radius + 1
     dilated = F.max_pool2d(
@@ -743,7 +757,14 @@ class VAECleanMEC:
                 f"{rinfo['psnr_unchanged_before']:.1f} -> "
                 f"{rinfo['psnr_unchanged_after']:.1f} dB.")
 
+        # audit 2026-11-27: an HDR decode (clamp_output off: values above 1) was clipped to 0..1 here. Values above
+        # 1 now go through the same linear corrections and are kept; an SDR image is clamped exactly as before.
+        # agy review: running values > 1 through the sRGB curve extension blew 10.0 up to ~225 in the linear maths, and
+        # negative values were never detected. The corrections now run on the 0..1 part only; whatever lies outside
+        # 0..1 (above 1 or below 0) is added back unchanged at the end.
         srgb = working.clamp(0.0, 1.0)
+        excess = working - srgb
+        hdr = bool(excess.abs().max() > 0)
         lin = srgb_to_linear(srgb)
 
         lin, why = balance(lin, balance_mode, reference=reference,
@@ -770,6 +791,10 @@ class VAECleanMEC:
                 "detail is unaffected.")
 
         out = linear_to_srgb(lin).clamp(0.0, 1.0)
+        if hdr:
+            out = out + excess.to(out.device, out.dtype)
+            actions.append("Values outside 0..1 (HDR or negative): kept as they were, not clipped. The corrections "
+                           "and measurements use the 0..1 part.")
         after = measure(out)
         cast = max(abs(c) for c in before["cast"])
         report_body = describe(before, after, actions)

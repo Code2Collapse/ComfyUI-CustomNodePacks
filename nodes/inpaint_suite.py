@@ -256,45 +256,25 @@ def _laplacian_pyramid_blend(img_a: torch.Tensor, img_b: torch.Tensor,
 
 def _frequency_blend(img_a: torch.Tensor, img_b: torch.Tensor,
                      blend_mask: torch.Tensor) -> torch.Tensor:
-    """FFT-based frequency domain blending of two (B, C, H, W) images.
+    """Two-band blend of two (B, C, H, W) images (Burt-Adelson style, in the spatial domain).
 
-    blend_mask: (B, 1, H, W) — 0.0 = use img_a, 1.0 = use img_b
+    blend_mask: (B, 1, H, W) — 0.0 = use img_a, 1.0 = use img_b.
+    Each image is split into a low band (Gaussian blur) and a detail band (image - low band). The low band (colour,
+    lighting) crosses over along the full soft blend mask; the detail band (texture, grain) crosses over along a
+    steeper ramp of the same mask (0 below 0.25, 1 above 0.75), so the feather does not show two ghosted textures.
+    Both weights are 0 where the mask is 0 and 1 where it is 1, so the result equals img_a / img_b there exactly.
+    (The previous version multiplied spatial masks onto rfft2 frequency bins - the DC term then took the weight of
+    the top-left mask pixel, so a mask touching that corner pulled the whole crop toward img_b; audit 2026-11-27.)
     """
-    # Compute FFT of both images
-    fft_a = torch.fft.rfft2(img_a)
-    fft_b = torch.fft.rfft2(img_b)
-
-    B, C, H, W = img_a.shape
-    freq_h, freq_w = fft_a.shape[2], fft_a.shape[3]
-
-    # Build low-pass and high-pass versions of the blend mask in spatial domain
-    low_mask = _gaussian_blur_2d(blend_mask, sigma=max(H, W) * 0.1)
-    high_mask = blend_mask
-
-    # Map spatial masks to frequency domain shape
-    low_mask_freq = F.interpolate(low_mask, size=(freq_h, freq_w), mode="bilinear", align_corners=False)
-    high_mask_freq = F.interpolate(high_mask, size=(freq_h, freq_w), mode="bilinear", align_corners=False)
-
-    # Create radial frequency coordinate
-    fy = torch.arange(freq_h, device=img_a.device, dtype=torch.float32) / max(freq_h, 1)
-    fx = torch.arange(freq_w, device=img_a.device, dtype=torch.float32) / max(freq_w, 1)
-    fy_grid, fx_grid = torch.meshgrid(fy, fx, indexing="ij")
-    freq_radius = (fy_grid.pow(2) + fx_grid.pow(2)).sqrt()
-    max_r = freq_radius.max()
-    if max_r > 0:
-        freq_radius = freq_radius / max_r
-    freq_radius = freq_radius.unsqueeze(0).unsqueeze(0)  # (1,1,fH,fW)
-
-    # Interpolate: at low freq use low_mask_freq, at high freq use high_mask_freq
-    freq_weight = freq_radius.clamp(0.0, 1.0)
-    final_freq_mask = (1.0 - freq_weight) * low_mask_freq + freq_weight * high_mask_freq
-
-    # Blend in frequency domain
-    fft_blended = (1.0 - final_freq_mask) * fft_a + final_freq_mask * fft_b
-
-    # Inverse FFT
-    result = torch.fft.irfft2(fft_blended, s=(H, W))
-    return result.clamp(0.0, 1.0)
+    H, W = img_a.shape[2], img_a.shape[3]
+    sigma = max(2.0, max(H, W) / 256.0)
+    low_a = _gaussian_blur_2d(img_a, sigma)
+    low_b = _gaussian_blur_2d(img_b, sigma)
+    m_low = blend_mask.clamp(0.0, 1.0)
+    m_high = ((m_low - 0.25) * 2.0).clamp(0.0, 1.0)
+    low = (1.0 - m_low) * low_a + m_low * low_b
+    high = (1.0 - m_high) * (img_a - low_a) + m_high * (img_b - low_b)
+    return (low + high).clamp(0.0, 1.0)
 
 
 # ══════════════════════════════════════════════════════════════════════
@@ -1205,7 +1185,11 @@ class InpaintCropProMEC:
                 "mask_invert":       ("BOOLEAN", {"default": False,
                     "tooltip": "Invert mask (anything masked is kept)."}),
                 "mask_blend_pixels": ("INT", {"default": 32, "min": 0, "max": 64, "step": 1,
-                    "tooltip": "Pixels of feather for stitch blending (lquesada default 32)."}),
+                    "tooltip": "Grow the mask by this many pixels, then feather it (lquesada default 32). NOTE: this "
+                               "also grows the model-facing inpaint_mask by the same number of pixels (measured: a "
+                               "40 px square comes out 104 px wide at 32), so the model repaints that ring of plate "
+                               "too. Set 0 to keep inpaint_mask exactly on your mask and feather the stitch with "
+                               "blend_radius instead."}),
                 "mask_hipass_filter":("FLOAT", {"default": 0.1, "min": 0.0, "max": 1.0, "step": 0.01,
                     "tooltip": "Zero out mask values below this threshold."}),
 
@@ -2747,7 +2731,8 @@ class InpaintStitchProMEC:
                 device = mm.get_torch_device()
             except Exception:
                 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-            inpainted_image = inpainted_image.to(device)
+            # audit 2026-11-27: frames go to the device one at a time (below) and come back to the CPU as soon as
+            # they are stitched - the whole clip and every finished canvas used to sit on the GPU (5-9 GB at 2K).
         else:
             device = torch.device("cpu")
             inpainted_image = inpainted_image.cpu()
@@ -2849,7 +2834,7 @@ class InpaintStitchProMEC:
             canvas = stitcher["canvas_image"][j].to(device).unsqueeze(0).clone()
             f_out = region_frame[i] if region_frame is not None else i
             if f_out not in originals and (seam_qc or region_frame is not None):
-                originals[f_out] = canvas[0, cto_y:cto_y + cto_h, cto_x:cto_x + cto_w, :].clone()
+                originals[f_out] = canvas[0, cto_y:cto_y + cto_h, cto_x:cto_x + cto_w, :].cpu().clone()
             if region_frame is not None and f_out in running:   # earlier regions of this frame are already in
                 canvas[:, cto_y:cto_y + cto_h, cto_x:cto_x + cto_w, :] = running[f_out].unsqueeze(0)
             if stabilized_masks is not None:
@@ -2861,7 +2846,7 @@ class InpaintStitchProMEC:
             # i.e. lquesada-canonical. No per-frame inversion needed at stitch time
             # because crop already inverted polarity up-front.
 
-            sub_inp = inpainted_image[i:i+1]
+            sub_inp = inpainted_image[i:i+1].to(device)
 
             # Resize inpainted result + blend mask to canvas crop dims
             inp_h, inp_w = sub_inp.shape[1], sub_inp.shape[2]
@@ -2934,7 +2919,7 @@ class InpaintStitchProMEC:
             if region_frame is not None:
                 running[f_out] = output.squeeze(0).clone()
             else:
-                results.append(output.squeeze(0))
+                results.append(output.squeeze(0).cpu())
 
             # Build a full-res blend mask in original-image coords for output
             full_mask = torch.zeros((1, cto_h, cto_w), device=device, dtype=resized_msk.dtype)
@@ -2956,7 +2941,7 @@ class InpaintStitchProMEC:
                 prev = frame_masks.get(f_out)
                 frame_masks[f_out] = full_mask.squeeze(0) if prev is None else torch.maximum(prev, full_mask[0])
             else:
-                blend_masks_out.append(full_mask.squeeze(0))
+                blend_masks_out.append(full_mask.squeeze(0).cpu())
 
         if region_frame is not None:
             n_frames = int(stitcher["region_frames"])

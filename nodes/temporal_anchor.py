@@ -100,55 +100,52 @@ _EASING_MAP = {
 # ══════════════════════════════════════════════════════════════════════
 
 def _compute_sdf_single(mask: torch.Tensor, iterations: int = 64) -> torch.Tensor:
-    """Compute approximate signed distance field for a single (H, W) binary mask.
+    """Signed distance field (pixels) of a single (H, W) mask binarised at 0.5.
 
-    Method: iterative averaging with boundary enforcement.
-      1. Initialize distance field: -1 inside mask, +1 outside.
-      2. Detect boundary pixels (where mask transitions).
-      3. Iteratively smooth the field with a 3x3 averaging kernel.
-      4. After each iteration, re-enforce boundary pixels to 0.
-      5. The resulting field approximates the signed distance.
+    Negative inside, positive outside; the zero level sits on the pixel edge between an inside and an outside pixel
+    (every inside pixel <= -0.5, every outside pixel >= +0.5), so thresholding at 0 gives the anchor mask back exactly.
+    ``iterations`` is the distance range in pixels: the field saturates at +/- iterations.
 
-    Returns (H, W) float tensor: negative inside, positive outside, 0 at boundary.
-    Scale is in approximate pixel units after normalization.
+    Audit 2026-11-27 (c2c_backend_audit "anchor SDF is a fake 3x3 box blur"): this used to be 64 passes of a 3x3 mean
+    with the boundary pinned to 0, rescaled to half the diagonal - a field that is +/-max everywhere except a few
+    pixels from the edge. Interpolating two such fields is a hard cross-fade (two separated anchors gave an EMPTY mask
+    mid-way) and the 0-pinned boundary ring dropped one pixel off every anchor. Now an exact Euclidean distance (OpenCV)
+    or, without OpenCV, a chamfer distance grown one pixel per iteration.
     """
     device = _get_device(mask)
-    H, W = mask.shape
+    binary = mask.detach() > 0.5
+    r = float(max(1, int(iterations)))
+    if HAS_CV2:
+        b = binary.cpu().numpy().astype(np.uint8)
+        if not b.any():
+            return torch.full(b.shape, r, dtype=torch.float32, device=device)
+        if b.all():
+            return torch.full(b.shape, -r, dtype=torch.float32, device=device)
+        d_out = cv2.distanceTransform(1 - b, cv2.DIST_L2, cv2.DIST_MASK_PRECISE)   # outside px -> nearest inside px
+        d_in = cv2.distanceTransform(b, cv2.DIST_L2, cv2.DIST_MASK_PRECISE)        # inside px -> nearest outside px
+        sdf = np.where(b > 0, 0.5 - d_in, d_out - 0.5)
+        return torch.from_numpy(np.clip(sdf, -r, r).astype(np.float32)).to(device)
 
-    # Binarize
-    binary = (mask > 0.5).float()
+    # chamfer fallback: distance to the other side, grown one pixel per pass (3x3 neighbourhood)
+    def _grow(src: torch.Tensor) -> torch.Tensor:
+        big = r + 1.0
+        d = torch.where(src, torch.zeros((), device=device), torch.full((), big, device=device)).float()[None, None]
+        for _ in range(int(r)):
+            nb = -F.max_pool2d(-F.pad(d, (1, 1, 1, 1), mode="replicate"), 3, stride=1) + 1.0
+            nd = torch.minimum(d, nb)
+            if torch.equal(nd, d):
+                break
+            d = nd
+        return d[0, 0]
 
-    # Initialize: -1 inside, +1 outside
-    sdf = torch.where(binary > 0.5, torch.tensor(-1.0, device=device),
-                       torch.tensor(1.0, device=device))
-
-    # Detect boundary: pixels where dilated mask != eroded mask
-    binary_4d = binary.unsqueeze(0).unsqueeze(0)  # (1,1,H,W)
-    dilated = F.max_pool2d(binary_4d, kernel_size=3, stride=1, padding=1)
-    eroded = -F.max_pool2d(-binary_4d, kernel_size=3, stride=1, padding=1)
-    boundary = ((dilated - eroded) > 0.5).float().squeeze(0).squeeze(0)  # (H,W)
-
-    # Averaging kernel for diffusion
-    avg_kernel = torch.ones(1, 1, 3, 3, device=device, dtype=mask.dtype) / 9.0
-
-    # Iterative diffusion
-    for _ in _PB.track(range(iterations), iterations, "TempAnchor"):
-        sdf_4d = sdf.unsqueeze(0).unsqueeze(0)  # (1,1,H,W)
-        sdf_padded = F.pad(sdf_4d, (1, 1, 1, 1), mode="replicate")
-        smoothed = F.conv2d(sdf_padded, avg_kernel, padding=0)
-        sdf = smoothed.squeeze(0).squeeze(0)
-
-        # Re-enforce boundary to 0
-        sdf = sdf * (1.0 - boundary)
-
-    # Normalize so that the range is approximately [-max_dist, +max_dist]
-    # The max meaningful distance is half the diagonal
-    max_dist = math.sqrt(H * H + W * W) / 2.0
-    abs_max = sdf.abs().max().item()
-    if abs_max > 1e-6:
-        sdf = sdf * (max_dist / abs_max)
-
-    return sdf
+    if not binary.any():
+        return torch.full(binary.shape, r, dtype=torch.float32, device=device)
+    if binary.all():
+        return torch.full(binary.shape, -r, dtype=torch.float32, device=device)
+    d_out = _grow(binary)          # 0 inside, distance to the mask outside
+    d_in = _grow(~binary)          # 0 outside, distance to the background inside
+    sdf = torch.where(binary, 0.5 - d_in, d_out - 0.5)
+    return sdf.clamp(-r, r)
 
 
 def _compute_sdf_batch(masks: torch.Tensor, iterations: int = 64) -> torch.Tensor:
@@ -325,16 +322,19 @@ def _estimate_flow_torch(frame_a: torch.Tensor, frame_b: torch.Tensor,
 
 def _warp_sdf_with_flow(sdf: torch.Tensor, flow: torch.Tensor,
                          strength: float = 1.0) -> torch.Tensor:
-    """Warp a (H, W) SDF field using a (H, W, 2) flow field.
+    """Backward-warp a (H, W) SDF field with a (H, W, 2) flow field: out(p) = sdf(p + strength * flow(p)).
 
-    Uses grid_sample for differentiable warping.
+    ``flow`` must point from the OUTPUT frame to the frame the SDF belongs to (target -> source), the convention of a
+    backward warp. Audit 2026-11-27: the identity grid was linspace(-1, 1), which is the align_corners=True pixel grid
+    sampled with align_corners=False, so even a zero flow resampled (and shifted) the field; it is now the
+    pixel-centre grid of align_corners=False.
     """
     device = _get_device(sdf)
     H, W = sdf.shape
 
-    # Build identity grid: (1, H, W, 2) with values in [-1, 1]
-    grid_y = torch.linspace(-1.0, 1.0, H, device=device)
-    grid_x = torch.linspace(-1.0, 1.0, W, device=device)
+    # Identity grid of pixel centres for align_corners=False: (2i + 1) / n - 1
+    grid_y = (torch.arange(H, device=device, dtype=torch.float32) * 2.0 + 1.0) / H - 1.0
+    grid_x = (torch.arange(W, device=device, dtype=torch.float32) * 2.0 + 1.0) / W - 1.0
     grid_yy, grid_xx = torch.meshgrid(grid_y, grid_x, indexing="ij")
     grid = torch.stack([grid_xx, grid_yy], dim=-1).unsqueeze(0)  # (1, H, W, 2)
 
@@ -625,59 +625,55 @@ class TemporalAnchorMEC:
                 img_H, img_W = images.shape[1], images.shape[2]
                 need_resize_flow = (img_H != target_H or img_W != target_W)
 
+                def _flow_to(t_img: int, a_img: int):
+                    """Flow from frame t to anchor frame a (backward-warp convention), at mask size; None on failure."""
+                    fa, fb = images[t_img], images[a_img]
+                    try:
+                        fl = _estimate_flow_cv2(fa, fb) if HAS_CV2 else _estimate_flow_torch(fa, fb)
+                    except Exception:
+                        return None
+                    if need_resize_flow:
+                        fl = F.interpolate(
+                            fl.permute(2, 0, 1).unsqueeze(0),
+                            size=(target_H, target_W), mode="bilinear", align_corners=False,
+                        ).squeeze(0).permute(1, 2, 0)
+                        fl[:, :, 0] *= target_W / img_W
+                        fl[:, :, 1] *= target_H / img_H
+                    return fl
+
+                # Audit 2026-11-27 (c2c_backend_audit "inverted warp sign", temporal_anchor.py:347): the anchor->t flow
+                # (forward) was used to backward-sample, scaled by distance/span and applied to the already blended
+                # SDF, so the mask moved AGAINST the subject (moving-square repro: mean IoU 0.335 -> 0.277 with the
+                # refinement on). Now each neighbouring anchor's SDF is carried to frame t along the t->anchor flow
+                # (a proper backward warp), and the carried fields are blended with the easing weights.
                 for t in _PB.track(range(total_frames), total_frames, "TempAnchor"):
                     # Skip anchor frames — they're already exact
                     if t in anchor_frames_list:
                         continue
-
-                    # Find nearest anchor frame for flow reference
-                    nearest_anchor = min(anchor_frames_list, key=lambda af: abs(af - t))
-                    anchor_img_idx = min(nearest_anchor, B_img - 1)
                     frame_img_idx = min(t, B_img - 1)
-
-                    if anchor_img_idx == frame_img_idx:
-                        continue
-
-                    frame_a = images[anchor_img_idx]  # (H, W, C)
-                    frame_b = images[frame_img_idx]    # (H, W, C)
-
-                    # Compute flow
-                    try:
-                        if HAS_CV2:
-                            flow_field = _estimate_flow_cv2(frame_a, frame_b)
-                        else:
-                            flow_field = _estimate_flow_torch(frame_a, frame_b)
-                    except Exception:
-                        continue
-
-                    # Resize flow if image size differs from mask size
-                    if need_resize_flow:
-                        flow_resized = F.interpolate(
-                            flow_field.permute(2, 0, 1).unsqueeze(0),
-                            size=(target_H, target_W), mode="bilinear", align_corners=False,
-                        ).squeeze(0).permute(1, 2, 0)
-                        flow_resized[:, :, 0] *= target_W / img_W
-                        flow_resized[:, :, 1] *= target_H / img_H
-                        flow_field = flow_resized
-
-                    # Proportional strength based on distance from anchor
-                    nearest_dist = abs(t - nearest_anchor)
-                    # Find the span this frame is in
-                    max_span = 1
-                    for ai in range(len(anchor_frames_list) - 1):
-                        if anchor_frames_list[ai] <= t <= anchor_frames_list[ai + 1]:
-                            max_span = anchor_frames_list[ai + 1] - anchor_frames_list[ai]
-                            break
-                    strength = nearest_dist / max(1, max_span)
-
-                    # Warp the interpolated SDF
-                    warped = _warp_sdf_with_flow(sdf_interp[t], flow_field, strength=strength)
-                    sdf_interp[t] = warped
-
-                    # Track flow magnitude
-                    flow_mag = flow_field.norm(dim=-1).mean().item()
-                    total_flow_mag += flow_mag
-                    flow_count += 1
+                    if t < anchor_frames_list[0] or t > anchor_frames_list[-1]:
+                        ai = 0 if t < anchor_frames_list[0] else len(anchor_frames_list) - 1
+                        pairs = [(ai, 1.0)]
+                    else:
+                        li = max(i for i, af in enumerate(anchor_frames_list) if af <= t)
+                        t_a, t_b = anchor_frames_list[li], anchor_frames_list[li + 1]
+                        alpha = easing_fn((t - t_a) / max(1, t_b - t_a))
+                        pairs = [(li, 1.0 - alpha), (li + 1, alpha)]
+                    acc = None
+                    for ai, wgt in pairs:
+                        anchor_img_idx = min(anchor_frames_list[ai], B_img - 1)
+                        src = sdf_batch[ai]
+                        if anchor_img_idx != frame_img_idx:
+                            flow_field = _flow_to(frame_img_idx, anchor_img_idx)
+                            if flow_field is None:
+                                acc = None
+                                break
+                            src = _warp_sdf_with_flow(src, flow_field, strength=1.0)
+                            total_flow_mag += flow_field.norm(dim=-1).mean().item()
+                            flow_count += 1
+                        acc = src * wgt if acc is None else acc + src * wgt
+                    if acc is not None:
+                        sdf_interp[t] = acc
 
                 if flow_count > 0:
                     flow_mag_mean = total_flow_mag / flow_count

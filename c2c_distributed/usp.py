@@ -23,6 +23,7 @@ Supported model classes are listed in ADAPTERS; anything else is refused with th
 from __future__ import annotations
 
 import dataclasses
+import sys
 import logging
 import threading
 from typing import Any, Callable, List, Optional, Sequence, Tuple
@@ -705,6 +706,12 @@ def apply_processes(model, gpus: int = 0, prefer: str = "auto", min_tokens_per_g
         # L9.251: count the GPUs ComfyUI itself uses (its device list), not every device torch can see
         visible = len(procrun.comfy_cuda_devices())
         world = visible if int(gpus) <= 0 else min(int(gpus), visible)
+        if world >= 2 and device_kind is None and sys.platform == "win32":
+            # Audit 2026-11-27: Windows torch wheels have no NCCL, so the worker processes fell back to gloo on CPU
+            # ranks (the whole model on the CPU) - or failed with "unsupported gloo device".
+            raise ValueError("C2C Multi-GPU Split: rank_backend 'processes' needs NCCL, which Windows builds of "
+                             "PyTorch do not have. On Windows choose rank_backend 'threads' (it uses every GPU "
+                             "from this process); 'processes' is for Linux.")
     report = [f"model: {type(dm).__name__} ({ad.name}), heads {ad.heads(dm)}", "rank backend: processes"]
     state = UspState(prefer, min_tokens_per_gpu, fast_domain, None)
     state.backend = "processes"
@@ -744,6 +751,7 @@ def apply(model, gpus: int = 0, prefer: str = "auto", min_tokens_per_gpu: int = 
                   f"{'; '.join(supported_models())}."]
     else:
         report = [f"model: {type(dm).__name__} ({ad.name}), heads {ad.heads(dm)}"]
+    passthrough = False
     m = model.clone()
     if make_clones:
         import comfy.model_management as mm
@@ -776,6 +784,10 @@ def apply(model, gpus: int = 0, prefer: str = "auto", min_tokens_per_gpu: int = 
             n = sim
         elif n < 2:
             report.append(f"GPUs: 1 of {available} visible - nothing to split, the model runs as before")
+            # Audit 2026-11-27 + agy review: with one GPU the node promises a pass-through, but it still replaced
+            # every block and so refused models that carry other block patches (e.g. a MiniMax H3 ControlNet) on
+            # 1-GPU rigs. The plan and state are still built; the blocks are left alone.
+            passthrough = True
         if n >= 2 and not sim_copies:
             report.append(f"GPUs: {n} of {available} visible")
         if ad.sequence:
@@ -786,7 +798,7 @@ def apply(model, gpus: int = 0, prefer: str = "auto", min_tokens_per_gpu: int = 
             report.append(f"plan: batch items over up to {n} GPUs (the largest divisor of {n} that divides the batch)")
         report = layout_report(m, ad, n, sim, bool(sim_copies)) + report
     to = m.model_options.setdefault("transformer_options", {})
-    if ad.sequence:
+    if ad.sequence and not passthrough:
         clash = existing_block_patches(to)
         if clash:
             raise ValueError(
@@ -804,7 +816,7 @@ def apply(model, gpus: int = 0, prefer: str = "auto", min_tokens_per_gpu: int = 
     to[STATE_KEY] = state
     # documented marker other packs read (A26 4.5): one parallel layout per model call
     to["parallel_layout"] = "sequence" if ad.sequence else "batch"
-    if ad.sequence:
+    if ad.sequence and not passthrough:
         to["optimized_attention_override"] = attention_override
         for i in range(len(dm.blocks)):
             m.set_model_patch_replace(block_patch, "dit", "double_block", i)

@@ -34,12 +34,36 @@ def _bias(mask: Optional[torch.Tensor], dtype) -> Optional[torch.Tensor]:
     return mask.to(dtype)
 
 
+# Audit 2026-11-27: one Ring step materialised the whole [B, H, Lq, Lk] float32 score matrix (and its exp) at once -
+# tens of GB per block for a 2K video shard. Query rows are now processed in chunks so the two score buffers stay
+# under this many bytes. Exact: every row's softmax and log-sum-exp only depend on that row.
+_SCORE_BUDGET_BYTES = 512 * 1024 * 1024
+
+
 def block_attention(q, k, v, mask=None, scale=None) -> Tuple[torch.Tensor, torch.Tensor]:
     """softmax(q k^T * scale + mask) v for one K/V block, plus the per-row log-sum-exp.
 
     Returns (out [B,H,Lq,D] in q's dtype, lse [B,H,Lq] float32, float64 for float64 input). Rows whose keys are all masked get out 0, lse -inf,
-    so merging them is a no-op.
+    so merging them is a no-op. Query rows are processed in chunks (see _SCORE_BUDGET_BYTES).
     """
+    B, H, Lq = q.shape[0], q.shape[1], q.shape[2]
+    Lk = k.shape[2]
+    width = 16 if q.dtype == torch.float64 else 8          # score + exp buffers per element
+    rows = max(1, int(_SCORE_BUDGET_BYTES // max(1, B * H * Lk * width)))
+    if Lq <= rows:
+        return _block_attention(q, k, v, mask, scale)
+    outs, lses = [], []
+    for i in range(0, Lq, rows):
+        m = mask
+        if m is not None and m.dim() >= 2 and m.shape[-2] != 1:
+            m = m[..., i:i + rows, :]
+        o, l = _block_attention(q[:, :, i:i + rows], k, v, m, scale)
+        outs.append(o)
+        lses.append(l)
+    return torch.cat(outs, dim=2), torch.cat(lses, dim=2)
+
+
+def _block_attention(q, k, v, mask=None, scale=None) -> Tuple[torch.Tensor, torch.Tensor]:
     scale = (1.0 / math.sqrt(q.shape[-1])) if scale is None else float(scale)
     acc = torch.float64 if q.dtype == torch.float64 else torch.float32
     s = torch.matmul(q.to(acc), k.to(acc).transpose(-1, -2)) * scale

@@ -52,9 +52,27 @@ change" from a hope into something checkable.
 from __future__ import annotations
 
 import math
+from contextlib import contextmanager
 
 import torch
 import torch.nn.functional as F
+
+# audit 2026-11-27: one Identity Lock run blurred the same full clip ~12 times (the lock, drift, describe and the
+# drift report each re-blur the plate and the result). Inside low_pass_cache() a blur of the SAME tensor (same
+# storage, version, shape and radius) is computed once. The cache keeps the input alive, so its address cannot be
+# reused while the entry exists; it is dropped when the block ends.
+_LP_CACHE = None
+
+
+@contextmanager
+def low_pass_cache():
+    global _LP_CACHE
+    prev = _LP_CACHE
+    _LP_CACHE = {}
+    try:
+        yield
+    finally:
+        _LP_CACHE = prev
 
 
 class IdentityLockError(ValueError):
@@ -94,6 +112,20 @@ def low_pass(x: torch.Tensor, radius: float) -> torch.Tensor:
     """Separable Gaussian blur - the "structure" half of the split."""
     if radius <= 0:
         return x
+    cache = _LP_CACHE
+    if cache is not None:
+        key = (x.data_ptr(), x._version, tuple(x.shape), tuple(x.stride()), str(x.dtype), str(x.device),
+               float(radius))
+        hit = cache.get(key)
+        if hit is not None and hit[0] is x:
+            return hit[1]
+        out = _low_pass(x, radius)
+        cache[key] = (x, out)
+        return out
+    return _low_pass(x, radius)
+
+
+def _low_pass(x: torch.Tensor, radius: float) -> torch.Tensor:
     bchw, was_bhwc = _to_bchw(x)
     c = bchw.shape[1]
     k = gaussian_kernel(radius, dtype=torch.float32, device=bchw.device)

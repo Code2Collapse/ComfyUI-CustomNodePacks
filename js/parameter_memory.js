@@ -732,5 +732,5 @@ function _showModal(html, title) {
 function _esc(s) {
   if (typeof s !== "string") s = String(s ?? "");
   return s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;")
-          .replace(/"/g, "&quot;").replace(/'/g, "&var(--c2c-blueLink);");
+          .replace(/"/g, "&quot;").replace(/'/g, "&#39;");
 }

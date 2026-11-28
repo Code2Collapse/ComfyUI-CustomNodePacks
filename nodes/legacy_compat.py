@@ -94,6 +94,7 @@ class MaskPreviewOverlay:
                 bbox_color_r, bbox_color_g, bbox_color_b, bbox=None):
         _deprecation_notice("MaskPreviewOverlay")
 
+        image = image[..., :3]          # audit 2026-11-27: an RGBA image crashed 4 of the 5 modes; the preview is RGB
         B, H, W, C = image.shape
         m = mask.clone().to(image.device)
         if m.dim() == 2:
@@ -190,7 +191,10 @@ class MaskPreviewOverlay:
     @staticmethod
     def _get_bbox(mask, external_bbox):
         if external_bbox is not None:
-            return external_bbox
+            # audit 2026-11-27: a SAM / kijai box ([[[x1,y1,x2,y2]]]) or a per-frame list crashed the unpack; read it
+            # the way the other BBOX nodes do (utils.normalize_bbox -> x, y, w, h)
+            x, y, bw, bh = _norm_bbox(external_bbox)
+            return [int(x), int(y), int(bw), int(bh)]
         coords = torch.nonzero(mask > 0.5, as_tuple=False)
         if coords.shape[0] == 0:
             return None
@@ -264,6 +268,7 @@ class MaskCompositeAdvanced:
             if b.shape[0] < target_b:
                 b = b.expand(target_b, -1, -1).clone()
 
+        b = b.to(device=a.device, dtype=a.dtype)    # audit 2026-11-27: masks from two devices crashed torch.max
         if a.shape[1:] != b.shape[1:]:
             b = F.interpolate(b.unsqueeze(1), size=a.shape[1:],
                               mode="bilinear", align_corners=False).squeeze(1)
@@ -350,6 +355,12 @@ class MaskMath:
         elif operation == "quantize":
             levels = max(2, int(value_a))
             m = (m * (levels - 1)).round() / (levels - 1)
+        elif operation == "threshold_hysteresis" and _hysteresis_cc is not None:
+            # value_a = low threshold, value_b = high threshold: keep every 8-connected region above the low threshold
+            # that holds a pixel above the high one. Audit 2026-11-27 (c2c_backend_audit "threshold_hysteresis 2K
+            # hang"): the 3x3 dilation loop below ran up to 204 full-frame passes at 2K (8.2 s per 4 frames, 4.3 min
+            # for 124) and still stopped ~204 px from the seed (kept 174,724 of 1,280,000 connected pixels).
+            m = _hysteresis_cc(m, value_a, value_b)
         elif operation == "threshold_hysteresis":
             # value_a = low threshold, value_b = high threshold
             high_mask = (m >= value_b).float()
@@ -387,6 +398,29 @@ class MaskMath:
         return (m.clamp(0, 1),)
 
 
+def _hysteresis_cc_impl(m, low, high):
+    """[H,W] or [B,H,W] -> float mask of the low-threshold 8-connected regions that contain a high pixel."""
+    import numpy as np
+    flat = m.reshape(-1, m.shape[-2], m.shape[-1])
+    out = torch.zeros_like(flat)
+    for i in range(flat.shape[0]):
+        f = flat[i].detach().cpu().numpy()
+        lo = (f >= low).astype(np.uint8)
+        n, lab = _cv2.connectedComponents(lo, connectivity=8)
+        keep = np.zeros(n, bool)
+        keep[np.unique(lab[f >= high])] = True
+        keep[0] = False
+        out[i] = torch.from_numpy(keep[lab].astype(np.float32)).to(m.device)
+    return out.reshape(m.shape)
+
+
+try:
+    import cv2 as _cv2
+    _hysteresis_cc = _hysteresis_cc_impl
+except ImportError:  # pragma: no cover - the dilation loop stays as the fallback
+    _hysteresis_cc = None
+
+
 class BBoxFromMask:
     """Extract the tight bounding box of non-zero pixels in a mask."""
 
@@ -417,7 +451,9 @@ class BBoxFromMask:
         _deprecation_notice("BBoxFromMask")
         m = mask
         if m.dim() == 3:
-            m = m[0]
+            # audit 2026-11-27 (c2c_backend_audit "BBoxFromMask drops frames 1..B-1"): the box of a batch is the box
+            # that holds the subject on EVERY frame (the union); frame 0 alone was used before. One frame: unchanged.
+            m = (m >= threshold).any(dim=0).float() if m.shape[0] > 1 else m[0]
         binary = (m >= threshold).float()
         coords = torch.nonzero(binary, as_tuple=False)
 

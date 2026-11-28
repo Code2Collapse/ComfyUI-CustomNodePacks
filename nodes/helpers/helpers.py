@@ -4,6 +4,7 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
+import math
 import time
 from typing import Any
 
@@ -197,7 +198,9 @@ class MaskBatchCombineMEC:
     RETURN_NAMES = ("mask",)
     DESCRIPTION = (
         "Combine two MASK batches with one of: union (max), intersect (min), "
-        "diff (A - B), xor, add (clamp), subtract (clamp). Sizes must match."
+        "diff (A - B), xor, add (clamp), subtract (clamp), subtract (soft, A*(1-B)). Sizes must match. diff and "
+        "subtract are both clamp(A - B) (0.5 - 0.5 = 0); subtract (soft) is A x (1 - B), the soft cut Mask Combine "
+        "uses (0.5, 0.5 -> 0.25)."
     )
 
     @classmethod
@@ -205,7 +208,8 @@ class MaskBatchCombineMEC:
         return {"required": {
             "mask_a": ("MASK",),
             "mask_b": ("MASK",),
-            "op":     (["union", "intersect", "diff", "xor", "add", "subtract"],
+            # audit 2026-11-27 (masking M-12): the soft subtract is APPENDED, so saved values keep their meaning
+            "op":     (["union", "intersect", "diff", "xor", "add", "subtract", "subtract (soft, A*(1-B))"],
                        {"default": "union"}),
         }}
 
@@ -220,6 +224,7 @@ class MaskBatchCombineMEC:
         elif op == "xor":     out = torch.clamp(torch.abs(a - b), 0.0, 1.0)
         elif op == "add":     out = torch.clamp(a + b, 0.0, 1.0)
         elif op == "subtract": out = torch.clamp(a - b, 0.0, 1.0)
+        elif op == "subtract (soft, A*(1-B))": out = torch.clamp(a * (1.0 - b), 0.0, 1.0)
         else: out = a
         return (out.contiguous(),)
 
@@ -655,11 +660,32 @@ class AspectPresetMEC:
 
 # ─────────────────────────── 8. Probe ────────────────────────────────────
 def _image_stats(t: torch.Tensor) -> tuple[str, float, float, float]:
-    mean   = float(t.mean().item())
-    std    = float(t.std().item())
-    mn, mx = float(t.min().item()), float(t.max().item())
+    # audit 2026-11-27: t.std() and (t > 0.95).float() each made a full-size float copy (+4 GB on a 124-frame 2K
+    # clip). Same numbers, 8 frames at a time with float64 sums.
+    # agy review: the one-pass (s2 - n*mean^2) variance cancels catastrophically on bright constant HDR plates (it
+    # went negative / NaN); chunks are now merged with Chan et al.'s parallel update (per-chunk mean and M2).
+    n, mean, m2, n_bright = 0, 0.0, 0.0, 0
+    mn, mx = float("inf"), float("-inf")
+    t = t.reshape(1, -1) if t.ndim == 0 else t
+    for i in range(0, int(t.shape[0]), 8):
+        c = t[i:i + 8].double()
+        nb = c.numel()
+        if nb == 0:
+            continue
+        mb = float(c.mean())
+        m2b = float(((c - mb) ** 2).sum())
+        delta = mb - mean
+        tot = n + nb
+        mean += delta * nb / tot
+        m2 += m2b + delta * delta * n * nb / tot
+        n = tot
+        mn, mx = min(mn, float(c.min())), max(mx, float(c.max()))
+        n_bright += int(torch.count_nonzero(c > 0.95))
+    if n == 0:
+        raise ValueError("Probe: the image is empty (0 values); connect an image with at least one pixel.")
+    std = math.sqrt(max(0.0, m2 / (n - 1))) if n > 1 else float("nan")
     # Fraction of pixels brighter than 0.95.
-    bright = float((t > 0.95).float().mean().item()) * 100.0
+    bright = n_bright / n * 100.0
     report = (f"shape={tuple(t.shape)} dtype={t.dtype} "
               f"mean={mean:.4f} std={std:.4f} "
               f"min={mn:.4f} max={mx:.4f} bright>{0.95:.2f}={bright:.1f}%")
@@ -722,7 +748,7 @@ class ImageStatsProbeMEC:
         "temporal_check on: how many frames were flagged (0 when off).",
         "Width of the image (or mask) in pixels; 0 when only a latent is wired.",
         "Height of the image (or mask) in pixels; 0 when only a latent is wired.",
-        "Frames in the image batch (else the mask, else the latent batch).",
+        "Frames in the image batch (else the mask, else the latent: batch x latent frames for a 5-D video latent).",
     )
     DESCRIPTION = (
         "Pass-through probe for debugging: wire an image, a mask and/or a latent and read their statistics - "
@@ -805,6 +831,8 @@ class ImageStatsProbeMEC:
         else:
             s = latent.get("samples") if isinstance(latent, dict) else None
             fh, fw, fc = 0, 0, int(s.shape[0]) if isinstance(s, torch.Tensor) and s.ndim >= 1 else 0
+            if isinstance(s, torch.Tensor) and s.ndim == 5:       # audit 2026-11-27: [B,C,T,H,W] reported 1
+                fc = int(s.shape[0]) * int(s.shape[2])
         return (images, "\n".join(lines), mean, std, bright, mask, cmean, cmin, cmax,
                 latent, info_json, verdict, nan_count, inf_count,
                 scope_img, stats_json, anomaly_count, fw, fh, fc)
@@ -866,6 +894,13 @@ class ExecutionTimerMEC:
         return self.tick_all(passthrough, label, reset, **kw)[:3]
 
     def tick_all(self, passthrough, label, reset, since_label="", history_size=50):
+        # audit 2026-11-27: GPU kernels of the previous node run asynchronously - wait for them, or the time of a GPU
+        # stage is booked to whatever stage happens to synchronise next.
+        try:
+            if torch.cuda.is_available() and torch.cuda.is_initialized():
+                torch.cuda.synchronize()
+        except Exception:  # noqa: BLE001 - timing must never fail the run
+            pass
         now = time.perf_counter()
         key = str(label or "")
         src = str(since_label or "").strip() or key

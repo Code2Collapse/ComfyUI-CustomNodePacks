@@ -327,10 +327,14 @@ class SemanticSegmentMEC:
             probs = torch.softmax(upsampled[0], dim=0)  # (num_classes, H, W)
 
             # Combine selected class probabilities
+            # Audit 2026-11-27: the probability that a pixel is ANY selected class is the SUM of their softmax
+            # probabilities. The max used before split the seam between two selected classes (upper_clothes 0.4 +
+            # pants 0.4 = 0.8, max 0.4 < threshold) and cracked the mask along it.
             combined = torch.zeros(H, W, device=dev)
             for ci in target_indices:
                 if ci < probs.shape[0]:
-                    combined = torch.maximum(combined, probs[ci])
+                    combined = combined + probs[ci]
+            combined = combined.clamp(0.0, 1.0)
 
             if class_report:
                 arg = probs.argmax(dim=0)

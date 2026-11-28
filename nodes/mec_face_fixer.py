@@ -497,8 +497,13 @@ class MECFaceFixer:
                     s = F.interpolate(s, size=(crop_h + 1, crop_w + 1), mode="bicubic", align_corners=False)
                     sampled_np = s.permute(0, 2, 3, 1).clamp(0, 1)[0].cpu().numpy()
 
-                    # Build per-face mask (ellipse fit inside detection bbox).
-                    face_mask_2d = _ellipse_mask(crop_h + 1, crop_w + 1)
+                    # Build per-face mask: the wired matte's own shape when the box came from it (audit 2026-11-27:
+                    # only its bounding box was used and an ellipse painted inside it, so a non-elliptical matte was
+                    # partly left unfixed and pixels outside it were changed); else an ellipse in the detection box.
+                    if notes.get("source") == "mask" and fb_mask is not None:
+                        face_mask_2d = np.clip(np.asarray(fb_mask[ey0:ey1 + 1, ex0:ex1 + 1], dtype=np.float32), 0.0, 1.0)
+                    else:
+                        face_mask_2d = _ellipse_mask(crop_h + 1, crop_w + 1)
                     if int(mask_dilate) != 0:
                         face_mask_2d = _morph_2d(face_mask_2d, int(mask_dilate))
                     if float(blend_softness) > 0.0:

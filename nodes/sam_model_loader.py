@@ -20,6 +20,10 @@ import logging
 
 logger = logging.getLogger("MEC")
 
+
+class _ArchitectureMismatch(RuntimeError):
+    """The checkpoint was found but does not fit the architecture it is built on (never a model-free fallback)."""
+
 try:
     import folder_paths
     HAS_FOLDER_PATHS = True
@@ -179,6 +183,12 @@ class SAMModelLoaderMEC:
                         pass
             # Also scan common extra locations
             cls._scan_extra_paths(model_files)
+            # agy review 2026-11-28: the Hugging Face cache inside the models folder (.cache/huggingface/.gitignore,
+            # CACHEDIR.TAG, *.lock, *.incomplete) showed up as "models". Only weight files are listed.
+            _w = (".pt", ".pth", ".safetensors", ".bin", ".ckpt")
+            model_files = list(dict.fromkeys(
+                f for f in model_files
+                if str(f).lower().endswith(_w) and ".cache" not in str(f).replace("\\", "/").split("/")))
         if not model_files:
             model_files = ["(place model in models/sams/ or models/sam2/)"]
 
@@ -333,6 +343,11 @@ class SAMModelLoaderMEC:
             # Hand out the model-free stand-in instead: the SAM nodes downstream run GrabCut and label their result
             # approximate. C2C_MODEL_FALLBACK=off keeps the error.
             from .mask_matting import _classic
+            # Audit 2026-11-27: a checkpoint that IS on disk but does not fit (a SAM 3 file) is not a missing model.
+            # Its message says "weights missing", which the model-free policy read as "no model" and handed out
+            # GrabCut instead of the error.
+            if isinstance(exc, _ArchitectureMismatch):
+                raise
             if not (_classic.fallback_allowed() and _classic.is_missing_model_error(exc)):
                 raise
             stand_in = _classic.model_free_sam(clean_name, exc)
@@ -567,7 +582,7 @@ class SAMModelLoaderMEC:
         n_model = max(1, len(model.state_dict()))
         n_ckpt = max(1, len(state_dict))
         if len(missing) > 0.05 * n_model or len(unexpected) > 0.05 * n_ckpt:
-            raise RuntimeError(
+            raise _ArchitectureMismatch(
                 f"SAM Model Loader (MEC): {model_name} does not fit the SAM 2.1 architecture it is built on "
                 f"({config_name}): {len(missing)} of {n_model} weights missing, {len(unexpected)} of {n_ckpt} "
                 "checkpoint weights unused. SAM 3 checkpoints need ComfyUI core's SAM 3 nodes; for SAM 2.1 pick the "

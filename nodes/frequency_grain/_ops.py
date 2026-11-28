@@ -40,6 +40,8 @@ _GRAIN_COARSE_MULT = 2.6    # the coarse roughness field is this much lower-freq
 _GRAIN_ROUGH_MAX = 0.6      # roughness=100 blends in this much of the coarse field
 _GRAIN_CHANNEL_W = (2.0, 1.0, 3.0)  # per-channel emphasis for color grain (R, G, B)
 _GRAIN_FRAME_CHUNK = 8      # frames upscaled/composited at once (VRAM bound)
+_SEPARATE_FRAME_CHUNK = 8   # frames filtered at once by Frequency Separate (audit 2026-11-27: was the whole clip)
+_GRAIN_ROLLOFF = 0.1        # grain fades to 0 over the last 10 % toward pure black (and pure white on SDR)
 
 
 def luminance_rgb(x: torch.Tensor) -> torch.Tensor:
@@ -106,7 +108,7 @@ def box_blur_nchw(x: torch.Tensor, radius: int) -> torch.Tensor:
     kv = kh.transpose(2, 3)
     out = F.conv2d(F.pad(x, (r, r, 0, 0), mode="replicate"), kh, groups=c)
     out = F.conv2d(F.pad(out, (0, 0, r, r), mode="replicate"), kv, groups=c)
-    return out.clone()
+    return out
 
 
 def gaussian_blur_nchw(x: torch.Tensor, radius: int) -> torch.Tensor:
@@ -123,7 +125,7 @@ def gaussian_blur_nchw(x: torch.Tensor, radius: int) -> torch.Tensor:
     kv = kh.transpose(2, 3)
     out = F.conv2d(F.pad(x, (r, r, 0, 0), mode="replicate"), kh, groups=c)
     out = F.conv2d(F.pad(out, (0, 0, r, r), mode="replicate"), kv, groups=c)
-    return out.clone()
+    return out
 
 
 def median_blur_nchw(x: torch.Tensor, radius: int) -> torch.Tensor:
@@ -141,7 +143,7 @@ def median_blur_nchw(x: torch.Tensor, radius: int) -> torch.Tensor:
         patch = xp[:, :, y0:y1 + 2 * r, :].unfold(2, k, 1).unfold(3, k, 1)
         patch = patch.contiguous().view(b, c, y1 - y0, w, k * k)
         out[:, :, y0:y1, :] = patch.median(dim=-1).values
-    return out.clone()
+    return out
 
 
 def guided_filter_nchw(
@@ -159,7 +161,7 @@ def guided_filter_nchw(
     cov_gx = corr_gx - mean_g * mean_x
     a = cov_gx / (var_g + eps)
     b_coef = mean_x - a * mean_g
-    return (box_blur_nchw(a, r) * guide + box_blur_nchw(b_coef, r)).clone()
+    return box_blur_nchw(a, r) * guide + box_blur_nchw(b_coef, r)
 
 
 def rolling_guidance_nchw(
@@ -171,7 +173,7 @@ def rolling_guidance_nchw(
     g = gaussian_blur_nchw(x, radius)
     for _ in range(iters):
         g = guided_filter_nchw(x, g, radius, eps)
-    return g.clone()
+    return g
 
 
 def low_frequency_nchw(
@@ -221,14 +223,48 @@ def frequency_separate(
     linear: bool,
     mask: Optional[torch.Tensor] = None,
 ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, list[str]]:
-    """Split image into HF (WORK) and LF (DISPLAY when linear). Never mutates image."""
-    notes: list[str] = []
-    src = image_to_nchw(image)
-    work = work_device(src)
-    if linear:
-        work = srgb_to_linear(work)
+    """Split image into HF (WORK) and LF (DISPLAY when linear). Never mutates image.
 
-    lf_work, stats = low_frequency_nchw(work, method, radius, edge_threshold)
+    Filtered _SEPARATE_FRAME_CHUNK frames at a time (every filter is per frame, so the result is identical): the
+    whole clip at once took 20+ GB on the GPU for a 124-frame 2K Guided split (audit 2026-11-27)."""
+    notes: list[str] = []
+    stats = None
+    m_full = None
+    if mask is not None:
+        m_full = resize_mask(mask.to(image.device), image.shape[2], image.shape[1]).clamp(0.0, 1.0)
+    hf_parts, lf_parts, hfm_parts = [], [], []
+    for s0 in range(0, image.shape[0], _SEPARATE_FRAME_CHUNK):
+        s1 = min(image.shape[0], s0 + _SEPARATE_FRAME_CHUNK)
+        work = work_device(image_to_nchw(image[s0:s1]))
+        if linear:
+            work = srgb_to_linear(work)
+        lf_work, stats = low_frequency_nchw(work, method, radius, edge_threshold)
+
+        lw = torch.tensor(_LUMA_WEIGHTS, device=work.device, dtype=work.dtype).view(1, 3, 1, 1)
+        if detail == "Luminance":
+            luma_img = (work * lw).sum(1, keepdim=True)
+            luma_lf = (lf_work * lw).sum(1, keepdim=True)
+            if mode == "Divide":
+                hf = (luma_img / (luma_lf + _EPS)).repeat(1, 3, 1, 1)
+            else:
+                hf = (luma_img - luma_lf).repeat(1, 3, 1, 1)
+        else:
+            hf = work / (lf_work + _EPS) if mode == "Divide" else work - lf_work
+
+        if m_full is not None:
+            fidx = torch.arange(s0, s1).clamp(max=m_full.shape[0] - 1)
+            m = m_full[fidx].to(work.device).unsqueeze(1)
+            neutral = 1.0 if mode == "Divide" else 0.0
+            hf_masked = hf * m + neutral * (1.0 - m)
+        else:
+            hf_masked = hf
+
+        lf_disp = linear_to_srgb(lf_work) if linear else lf_work
+        hf_parts.append(nchw_to_image(hf).to(image.device))
+        lf_parts.append(nchw_to_image(lf_disp).to(image.device))
+        hfm_parts.append(nchw_to_image(hf_masked).to(image.device))
+        del work, lf_work, hf, hf_masked, lf_disp
+
     notes.append(
         f"filter {stats['method']} radius {stats['radius_requested']}"
         + (
@@ -239,43 +275,19 @@ def frequency_separate(
     )
     notes.append(f"linear light {'on' if linear else 'off'}")
     notes.append(f"mode {mode} detail {detail}")
-
-    lw = torch.tensor(_LUMA_WEIGHTS, device=work.device, dtype=work.dtype).view(1, 3, 1, 1)
-    if detail == "Luminance":
-        luma_img = (work * lw).sum(1, keepdim=True)
-        luma_lf = (lf_work * lw).sum(1, keepdim=True)
-        if mode == "Divide":
-            hf = (luma_img / (luma_lf + _EPS)).repeat(1, 3, 1, 1)
-        else:
-            hf = (luma_img - luma_lf).repeat(1, 3, 1, 1)
-    else:
-        hf = work / (lf_work + _EPS) if mode == "Divide" else work - lf_work
-
-    hf_masked = hf.clone()
-    if mask is not None:
-        m = resize_mask(mask.to(work.device), work.shape[3], work.shape[2])
-        m = m.clamp(0.0, 1.0)
-        notes.append(f"mask applied coverage {_mask_coverage(m):.1f}%")
-        if m.shape[0] < image.shape[0]:
+    if m_full is not None:
+        notes.append(f"mask applied coverage {_mask_coverage(m_full):.1f}%")
+        if m_full.shape[0] < image.shape[0]:
             notes.append(
-                f"mask batch {m.shape[0]} < image batch {image.shape[0]}; "
+                f"mask batch {m_full.shape[0]} < image batch {image.shape[0]}; "
                 "extra frames reuse the last mask"
             )
-        m = m.unsqueeze(1)
-        m = _batch_index_mask(m, work.shape[0], work.device)
-        neutral = 1.0 if mode == "Divide" else 0.0
-        hf_masked = hf * m + neutral * (1.0 - m)
     else:
         notes.append("no mask")
-
-    lf_disp = linear_to_srgb(lf_work) if linear else lf_work
-    hf_out = nchw_to_image(hf).to(image.device)
-    lf_out = nchw_to_image(lf_disp).to(image.device)
-    hf_masked_out = nchw_to_image(hf_masked).to(image.device)
     # nchw_to_image already returns a fresh tensor; cloning again would
     # double-copy three full-resolution batches (~490MB each on a
     # 124-frame 768x432 clip).
-    return hf_out, lf_out, hf_masked_out, notes
+    return torch.cat(hf_parts, 0), torch.cat(lf_parts, 0), torch.cat(hfm_parts, 0), notes
 
 
 def frequency_combine(
@@ -328,12 +340,17 @@ def frequency_combine(
         notes.append("no mask")
 
     out = linear_to_srgb(recombined) if linear else recombined
-    # IMAGE socket is 0..1 display range — scene-linear values above 1.0 are clipped here.
-    out = out.clamp(0.0, 1.0)
-    notes.append(
-        "output clamped to 0..1 — values above 1.0 are clipped; "
-        "this socket is an 8-bit-range IMAGE, not a scene-linear plate"
-    )
+    lf_rgb = low_frequency[..., :3]
+    if bool(lf_rgb.min() < 0.0) or bool(lf_rgb.max() > 1.0):
+        # audit 2026-11-27: an HDR / scene-linear plate (values outside 0..1 on low_frequency) is not clipped.
+        notes.append("HDR input (values outside 0..1): output not clamped")
+    else:
+        # IMAGE socket is 0..1 display range for an SDR plate - overshoot from the detail band is clipped here.
+        out = out.clamp(0.0, 1.0)
+        notes.append(
+            "output clamped to 0..1 — values above 1.0 are clipped; "
+            "this socket is an 8-bit-range IMAGE, not a scene-linear plate"
+        )
 
     out_hwc = nchw_to_image(out).to(low_frequency.device)
     if low_frequency.shape[-1] > 3:
@@ -394,8 +411,16 @@ def film_grain(
     fine = torch.randn(frames, 3, fine_h, fine_w, generator=gen, device=dev)
     coarse = torch.randn(frames, 3, coarse_h, coarse_w, generator=gen, device=dev)
 
-    weights = torch.tensor(_GRAIN_CHANNEL_W, device=dev).view(1, 1, 1, 3)
-    out = image.to(dev).clone()
+    # audit 2026-11-27: (2, 1, 3) unnormalised made colour grain up to 1.8x stronger than mono grain at the same
+    # amount; scaled to unit RMS it keeps the per-channel emphasis at the same overall strength.
+    cw = torch.tensor(_GRAIN_CHANNEL_W, device=dev, dtype=torch.float32)
+    weights = (cw / cw.pow(2).mean().sqrt()).view(1, 1, 1, 3)
+    hdr = bool(image[..., :3].min() < 0.0) or bool(image[..., :3].max() > 1.0)
+    notes.append("luminance rolloff: no grain at pure black" + ("" if hdr else " and pure white"))
+    if hdr:
+        notes.append("HDR input: not clamped")
+    # The batch stays where it is; only one chunk at a time goes to `dev` (it was all copied there first).
+    out = image.clone()
 
     for s in range(0, b, _GRAIN_FRAME_CHUNK):
         e = min(b, s + _GRAIN_FRAME_CHUNK)
@@ -415,12 +440,25 @@ def film_grain(
         if mask_full is not None:
             fidx = torch.arange(s, e, device=dev).clamp(max=mask_full.shape[0] - 1)
             grain = grain * mask_full[fidx].unsqueeze(-1)
-        out[s:e, :, :, :3] = (out[s:e, :, :, :3] + grain).clamp(0.0, 1.0)
+        chunk = out[s:e, :, :, :3].to(dev)
+        # Luminance rolloff (audit 2026-11-27): uniform additive grain on pure black is half clipped away, so black
+        # was lifted (mean 0 -> 0.044 at amount 50) and white pulled down. The grain fades out over the last 10 %.
+        y = luminance_rgb(chunk.clamp(0.0, 1.0)).unsqueeze(-1)
+        resp = _smoothstep(0.0, _GRAIN_ROLLOFF, y)
+        if not hdr:
+            resp = resp * _smoothstep(0.0, _GRAIN_ROLLOFF, 1.0 - y)
+        res = chunk + grain.to(chunk.dtype) * resp
+        if not hdr:
+            res = res.clamp(0.0, 1.0)
+        out[s:e, :, :, :3] = res.to(out.device)
 
-    # `out` was built by image.to(dev).clone() above, so it is already ours;
-    # .to() copies again when the device differs and is a no-op when it
-    # does not. Either way a further clone is a wasted full-batch copy.
+    # `out` is image.clone() on the input's device: already ours, no further copy.
     return out.to(src_device), notes
+
+
+def _smoothstep(e0: float, e1: float, x: torch.Tensor) -> torch.Tensor:
+    t = ((x - e0) / (e1 - e0)).clamp(0.0, 1.0)
+    return t * t * (3.0 - 2.0 * t)
 
 
 def build_report(node_name: str, batch: int, notes: list[str]) -> str:

@@ -185,6 +185,7 @@ MODEL_REGISTRY: dict[str, dict] = {
         "family": "matanyone2",
         "repo_id": "pq-yang/MatAnyone2",
         "filename": "matanyone2.pth",
+        "url": "https://github.com/pq-yang/MatAnyone2/releases/download/v1.0.0/matanyone2.pth",
         "config": None,
         "version": "2.0",
         "model_dir": "matanyone2",
@@ -286,6 +287,7 @@ MODEL_REGISTRY: dict[str, dict] = {
         "family": "rvm",
         "repo_id": "PeterL1n/RobustVideoMatting",
         "filename": "rvm_mobilenetv3.pth",
+        "url": "https://github.com/PeterL1n/RobustVideoMatting/releases/download/v1.0.0/rvm_mobilenetv3.pth",
         "config": None,
         "version": "mobilenetv3",
         "model_dir": "rvm",
@@ -294,6 +296,7 @@ MODEL_REGISTRY: dict[str, dict] = {
         "family": "rvm",
         "repo_id": "PeterL1n/RobustVideoMatting",
         "filename": "rvm_resnet50.pth",
+        "url": "https://github.com/PeterL1n/RobustVideoMatting/releases/download/v1.0.0/rvm_resnet50.pth",
         "config": None,
         "version": "resnet50",
         "model_dir": "rvm",
@@ -303,6 +306,7 @@ MODEL_REGISTRY: dict[str, dict] = {
         "family": "cutie",
         "repo_id": "hkchengrex/Cutie",
         "filename": "cutie-base-mega.pth",
+        "url": "https://github.com/hkchengrex/Cutie/releases/download/v1.0/cutie-base-mega.pth",
         "config": None,
         "version": "base-mega",
         "model_dir": "cutie",
@@ -549,6 +553,30 @@ def ensure_downloaded(name: str, dest_dir: Optional[str] = None) -> str:
         dest = os.path.join(dest_dir, name)
         if os.path.isdir(dest) and os.listdir(dest):
             return dest
+
+    if fname is not None and reg.get("url"):
+        # agy review 2026-11-28: these repos are GitHub releases, not Hugging Face models - hf_hub_download of a GitHub
+        # repo id is a 404. Fetched from the release URL (verified 200), written atomically.
+        import urllib.request
+        target = os.path.join(dest_dir, fname)
+        tmp = target + ".part"
+        logger.info("[MEC] Downloading %s from %s …", fname, reg["url"])
+        try:
+            with urllib.request.urlopen(reg["url"]) as resp, open(tmp, "wb") as f:
+                while True:
+                    chunk = resp.read(1 << 20)
+                    if not chunk:
+                        break
+                    f.write(chunk)
+            os.replace(tmp, target)
+        finally:
+            if os.path.exists(tmp):
+                try:
+                    os.remove(tmp)
+                except OSError:
+                    pass
+        logger.info("[MEC] Saved → %s", target)
+        return target
 
     try:
         from huggingface_hub import hf_hub_download, snapshot_download
