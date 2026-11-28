@@ -66,7 +66,7 @@ class RVMMatter(BaseMatter):
             require_hub_repo("PeterL1n/RobustVideoMatting", target_hint="models/rvm/", weights_missing=ckpt is None)
             model = torch.hub.load("PeterL1n/RobustVideoMatting", variant, pretrained=(ckpt is None))
             if ckpt is not None and os.path.isfile(ckpt):
-                state = torch.load(ckpt, map_location="cpu")
+                state = torch.load(ckpt, map_location="cpu", weights_only=True)
                 model.load_state_dict(state, strict=False)
         except Exception as exc:
             raise RuntimeError(

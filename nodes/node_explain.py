@@ -40,6 +40,19 @@ from collections import OrderedDict
 from dataclasses import dataclass
 from typing import Any, Dict, Optional
 
+
+def _c2c_refuse_remote(req, what: str = "This"):
+    """agy review 2026-11-28: 403 unless the request comes from the ComfyUI page on this machine
+    (nodes/_local_ui_guard.py) - this route reads / writes files, downloads, spends keys or changes server state."""
+    try:
+        from ._local_ui_guard import refuse_remote
+    except ImportError:
+        try:
+            from ..nodes._local_ui_guard import refuse_remote          # renderfarm/ (pack root sibling of nodes/)
+        except (ImportError, ValueError):
+            from _local_ui_guard import refuse_remote                  # loaded by file path (tests / tools)
+    return refuse_remote(req, what)
+
 log = logging.getLogger("MEC.node_explain")
 
 # ── HuggingFace GGUF constants ─────────────────────────────────────────────
@@ -58,11 +71,11 @@ try:
     _DEFAULT_N_CTX = min(8192, _DEFAULT_MODEL.context_window)
 except Exception:  # pragma: no cover - safety net only
     _GGUF_REG = None  # type: ignore
-    _HF_REPO = "bartowski/Qwen3-4B-Instruct-GGUF"
+    _HF_REPO = "Qwen/Qwen3-4B-GGUF"
     _QUANT_FILES = {
-        "Q4_K_M": "Qwen3-4B-Instruct-Q4_K_M.gguf",
-        "Q5_K_M": "Qwen3-4B-Instruct-Q5_K_M.gguf",
-        "Q8_0":   "Qwen3-4B-Instruct-Q8_0.gguf",
+        "Q4_K_M": "Qwen3-4B-Q4_K_M.gguf",
+        "Q5_K_M": "Qwen3-4B-Q5_K_M.gguf",
+        "Q8_0":   "Qwen3-4B-Q8_0.gguf",
     }
     _DEFAULT_QUANT = "Q4_K_M"
     _DEFAULT_CHAT_FORMAT = "chatml"
@@ -777,6 +790,9 @@ def register_routes(server: Any) -> None:
     # ------------------------------------------------------------------
     @routes.post("/mec/node_explain/download")
     async def _trigger_download(req: web.Request) -> web.Response:
+        _deny = _c2c_refuse_remote(req, "This action")
+        if _deny is not None:
+            return _deny
         try:
             body = await req.json()
             quant = str(body.get("quant", _DEFAULT_QUANT))

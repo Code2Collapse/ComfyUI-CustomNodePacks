@@ -63,6 +63,19 @@ import torch
 
 from . import _autobatch_adapters as _adapters
 
+
+def _c2c_refuse_remote(req, what: str = "This"):
+    """agy review 2026-11-28: 403 unless the request comes from the ComfyUI page on this machine
+    (nodes/_local_ui_guard.py) - this route reads / writes files, downloads, spends keys or changes server state."""
+    try:
+        from ._local_ui_guard import refuse_remote
+    except ImportError:
+        try:
+            from ..nodes._local_ui_guard import refuse_remote          # renderfarm/ (pack root sibling of nodes/)
+        except (ImportError, ValueError):
+            from _local_ui_guard import refuse_remote                  # loaded by file path (tests / tools)
+    return refuse_remote(req, what)
+
 log = logging.getLogger("C2C.autobatch")
 
 RAM_FRACTION = 0.35
@@ -2341,6 +2354,9 @@ def register_routes() -> bool:
 
     @routes.post("/c2c/autobatch/config")
     async def _autobatch_post_config(request):  # noqa: ANN001
+        _deny = _c2c_refuse_remote(request, "This action")
+        if _deny is not None:
+            return _deny
         try:
             patch = await request.json()
         except Exception as exc:

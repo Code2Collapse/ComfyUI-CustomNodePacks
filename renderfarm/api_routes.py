@@ -11,6 +11,19 @@ import json
 import logging
 import os
 
+
+def _c2c_refuse_remote(req, what: str = "This"):
+    """agy review 2026-11-28: 403 unless the request comes from the ComfyUI page on this machine
+    (nodes/_local_ui_guard.py) - this route reads / writes files, downloads, spends keys or changes server state."""
+    try:
+        from ._local_ui_guard import refuse_remote
+    except ImportError:
+        try:
+            from ..nodes._local_ui_guard import refuse_remote          # renderfarm/ (pack root sibling of nodes/)
+        except (ImportError, ValueError):
+            from _local_ui_guard import refuse_remote                  # loaded by file path (tests / tools)
+    return refuse_remote(req, what)
+
 log = logging.getLogger("C2C.Farm.api")
 _registered = False
 
@@ -115,18 +128,30 @@ def register_routes():
 
     @routes.post("/c2c/farm/cancel")
     async def farm_cancel(request):
+        _deny = _c2c_refuse_remote(request, "This action")
+        if _deny is not None:
+            return _deny
         return await _job_action(request, "cancel")
 
     @routes.post("/c2c/farm/pause")
     async def farm_pause(request):
+        _deny = _c2c_refuse_remote(request, "This action")
+        if _deny is not None:
+            return _deny
         return await _job_action(request, "pause")
 
     @routes.post("/c2c/farm/resume")
     async def farm_resume(request):
+        _deny = _c2c_refuse_remote(request, "This action")
+        if _deny is not None:
+            return _deny
         return await _job_action(request, "resume")
 
     @routes.post("/c2c/farm/bump")
     async def farm_bump(request):
+        _deny = _c2c_refuse_remote(request, "This action")
+        if _deny is not None:
+            return _deny
         return await _job_action(request, "bump")
 
     _registered = True

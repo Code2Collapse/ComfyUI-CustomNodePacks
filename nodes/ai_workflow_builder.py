@@ -32,6 +32,19 @@ import logging
 import re
 from typing import Any, Dict, List, Optional, Tuple
 
+
+def _c2c_refuse_remote(req, what: str = "This"):
+    """agy review 2026-11-28: 403 unless the request comes from the ComfyUI page on this machine
+    (nodes/_local_ui_guard.py) - this route reads / writes files, downloads, spends keys or changes server state."""
+    try:
+        from ._local_ui_guard import refuse_remote
+    except ImportError:
+        try:
+            from ..nodes._local_ui_guard import refuse_remote          # renderfarm/ (pack root sibling of nodes/)
+        except (ImportError, ValueError):
+            from _local_ui_guard import refuse_remote                  # loaded by file path (tests / tools)
+    return refuse_remote(req, what)
+
 log = logging.getLogger("MEC.ai_workflow_builder")
 
 # Always considered, whatever the request: the spine of most graphs.
@@ -448,6 +461,9 @@ def register_routes(server: Any) -> None:
 
     @server.routes.post("/c2c/ai/build_workflow")
     async def _build(request):  # noqa: ANN001
+        _deny = _c2c_refuse_remote(request, "This action")
+        if _deny is not None:
+            return _deny
         try:
             body = await request.json()
         except Exception:

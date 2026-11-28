@@ -43,6 +43,19 @@ import time
 import uuid
 from typing import Any, Dict, List, Optional
 
+
+def _c2c_refuse_remote(req, what: str = "This"):
+    """agy review 2026-11-28: 403 unless the request comes from the ComfyUI page on this machine
+    (nodes/_local_ui_guard.py) - this route reads / writes files, downloads, spends keys or changes server state."""
+    try:
+        from ._local_ui_guard import refuse_remote
+    except ImportError:
+        try:
+            from ..nodes._local_ui_guard import refuse_remote          # renderfarm/ (pack root sibling of nodes/)
+        except (ImportError, ValueError):
+            from _local_ui_guard import refuse_remote                  # loaded by file path (tests / tools)
+    return refuse_remote(req, what)
+
 log = logging.getLogger("C2C.style_presets")
 
 _DIR_LOCK = threading.Lock()
@@ -341,6 +354,9 @@ def register_routes(server: Any) -> None:
 
     @routes.post("/c2c/styles")
     async def _save(req: "web.Request") -> "web.Response":
+        _deny = _c2c_refuse_remote(req, "This action")
+        if _deny is not None:
+            return _deny
         try:
             body = await req.json()
         except Exception:

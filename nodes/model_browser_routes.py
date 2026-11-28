@@ -18,6 +18,19 @@ import urllib.parse
 from pathlib import Path
 from typing import Any
 
+
+def _c2c_refuse_remote(req, what: str = "This"):
+    """agy review 2026-11-28: 403 unless the request comes from the ComfyUI page on this machine
+    (nodes/_local_ui_guard.py) - this route reads / writes files, downloads, spends keys or changes server state."""
+    try:
+        from ._local_ui_guard import refuse_remote
+    except ImportError:
+        try:
+            from ..nodes._local_ui_guard import refuse_remote          # renderfarm/ (pack root sibling of nodes/)
+        except (ImportError, ValueError):
+            from _local_ui_guard import refuse_remote                  # loaded by file path (tests / tools)
+    return refuse_remote(req, what)
+
 log = logging.getLogger("C2C.ModelBrowser")
 
 # L5.02: overridable (a mirror or a corporate proxy); the defaults are the public endpoints, verified live earlier.
@@ -565,6 +578,9 @@ def register_routes(server) -> None:
 
     @server.routes.post("/c2c/models/download")
     async def model_download(request: web.Request) -> web.Response:
+        _deny = _c2c_refuse_remote(request, "This action")
+        if _deny is not None:
+            return _deny
         try:
             body    = await request.json()
             source  = body.get("source", "civitai")
@@ -589,6 +605,9 @@ def register_routes(server) -> None:
 
     @server.routes.post("/c2c/models/downloads/{job_id}/{action}")
     async def model_download_action(request: web.Request) -> web.Response:
+        _deny = _c2c_refuse_remote(request, "This action")
+        if _deny is not None:
+            return _deny
         from .model_download_manager import get_manager
         mgr, job_id, action = get_manager(), request.match_info["job_id"], request.match_info["action"]
         if action == "clear":
@@ -627,6 +646,9 @@ def register_routes(server) -> None:
 
     @server.routes.post("/c2c/models/installed")
     async def models_installed(request: web.Request) -> web.Response:
+        _deny = _c2c_refuse_remote(request, "This action")
+        if _deny is not None:
+            return _deny
         """L5.06: which of these SHA-256s are on disk (from the index; never a folder walk)."""
         from . import model_index
         body = await request.json()
@@ -635,6 +657,9 @@ def register_routes(server) -> None:
 
     @server.routes.post("/c2c/models/identify")
     async def models_identify(request: web.Request) -> web.Response:
+        _deny = _c2c_refuse_remote(request, "This action")
+        if _deny is not None:
+            return _deny
         """L5.06: hash ONE local model (cached), look it up on Civitai by hash, write its sidecar."""
         from . import model_index
         body = await request.json()

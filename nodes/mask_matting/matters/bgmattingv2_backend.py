@@ -102,7 +102,7 @@ class BGMattingV2Matter(BaseMatter):
                 trust_repo=True,
             )
             if ckpt and os.path.isfile(ckpt):
-                state = torch.load(ckpt, map_location="cpu")
+                state = torch.load(ckpt, map_location="cpu", weights_only=True)
                 model.load_state_dict(state, strict=False)
         except Exception as exc:
             raise RuntimeError(

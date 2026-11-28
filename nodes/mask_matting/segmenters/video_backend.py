@@ -156,7 +156,7 @@ class CutieSegmenter(BaseSegmenter):
             )
         cfg = get_config("eval_config.yaml") if get_config else None
         net = CUTIE(cfg).to(self.device).eval()
-        sd = torch.load(ckpt, map_location="cpu")
+        sd = torch.load(ckpt, map_location="cpu", weights_only=True)
         sd = sd.get("model", sd) if isinstance(sd, dict) else sd
         net.load_weights(sd) if hasattr(net, "load_weights") else net.load_state_dict(sd, strict=False)
         self._net = net

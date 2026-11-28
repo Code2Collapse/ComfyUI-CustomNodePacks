@@ -205,6 +205,41 @@ def _strip_module(state_dict):
     return out
 
 
+_RAFT_CACHED = None  # (device, module): RAFT alone, for the flow-only nodes
+
+
+def _load_raft_module(dev: torch.device) -> torch.nn.Module:
+    # ProPainter's RAFT wrapper takes a Namespace; mimic its `iters`-only init.
+    import argparse
+    raft_args = argparse.Namespace(
+        model=ensure_weight("raft-things.pth"),
+        small=False, mixed_precision=False, alternate_corr=False,
+    )
+    raft_net = torch.nn.DataParallel(RAFT(raft_args))
+    raft_state = torch.load(raft_args.model, map_location="cpu", weights_only=True)
+    raft_net.load_state_dict(raft_state, strict=False)
+    raft_module = raft_net.module
+    raft_module.to(dev).eval()
+    return raft_module
+
+
+def load_raft(device: Optional[torch.device] = None) -> torch.nn.Module:
+    """RAFT only (raft-things.pth), for flow nodes. Audit 2026-11-27: OpticalFlowMEC / FlowRefineMEC went through
+    load_models(), which also loads (and requires) the flow-completion and ProPainter inpaint weights they never use.
+    Reuses the full bundle's RAFT when that is already loaded on the same device."""
+    require_propainter()
+    global _RAFT_CACHED
+    dev = get_device(device)
+    with _LOAD_LOCK:
+        if _CACHED is not None and _CACHED.device == dev:
+            return _CACHED.raft
+        if _RAFT_CACHED is not None and _RAFT_CACHED[0] == dev:
+            return _RAFT_CACHED[1]
+        module = _load_raft_module(dev)
+        _RAFT_CACHED = (dev, module)
+        return module
+
+
 def load_models(device: Optional[torch.device] = None,
                 half: bool = True) -> ProPainterModels:
     """Load (or return cached) ProPainter model bundle on the given device."""
@@ -218,22 +253,12 @@ def load_models(device: Optional[torch.device] = None,
             return _CACHED
 
         # ---- RAFT (flow estimator) -------------------------------
-        # ProPainter's RAFT wrapper takes a Namespace; mimic its `iters`-only init.
-        import argparse
-        raft_args = argparse.Namespace(
-            model=ensure_weight("raft-things.pth"),
-            small=False, mixed_precision=False, alternate_corr=False,
-        )
-        raft_net = torch.nn.DataParallel(RAFT(raft_args))
-        raft_state = torch.load(raft_args.model, map_location="cpu")
-        raft_net.load_state_dict(raft_state, strict=False)
-        raft_module = raft_net.module
-        raft_module.to(dev).eval()
+        raft_module = _load_raft_module(dev)
 
         # ---- Recurrent Flow Completion ---------------------------
         fc_path = ensure_weight("recurrent_flow_completion.pth")
         fc_net = RecurrentFlowCompleteNet()
-        fc_state = torch.load(fc_path, map_location="cpu")
+        fc_state = torch.load(fc_path, map_location="cpu", weights_only=True)
         fc_net.load_state_dict(_strip_module(fc_state), strict=False)
         fc_net.to(dev).eval()
         for p in fc_net.parameters():
@@ -242,7 +267,7 @@ def load_models(device: Optional[torch.device] = None,
         # ---- InpaintGenerator -----------------------------------
         ip_path = ensure_weight("ProPainter.pth")
         ip_net = InpaintGenerator()
-        ip_state = torch.load(ip_path, map_location="cpu")
+        ip_state = torch.load(ip_path, map_location="cpu", weights_only=True)
         ip_net.load_state_dict(_strip_module(ip_state), strict=False)
         ip_net.to(dev).eval()
         for p in ip_net.parameters():
@@ -263,9 +288,10 @@ def load_models(device: Optional[torch.device] = None,
 
 def free_models() -> None:
     """Release the cached bundle and free VRAM."""
-    global _CACHED
+    global _CACHED, _RAFT_CACHED
     with _LOAD_LOCK:
         _CACHED = None
+        _RAFT_CACHED = None
     import gc
     gc.collect()
     if torch.cuda.is_available():
