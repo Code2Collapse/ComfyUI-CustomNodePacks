@@ -538,6 +538,8 @@ app.registerExtension({
                 getHeight: () => 28,
                 getMinHeight: () => 28,
             });
+            statusWidget.serialize = false;   // agy review: the option alone is not read by the serializer -> one
+                                              // saved slot per load shifted every Mask + Matting value
             statusWidget.computeSize = () => [node.size?.[0] || 340, 28];
             // Move it to the front of the widget list so it reads as a
             // header above the parameter rows, not a footer beneath them.

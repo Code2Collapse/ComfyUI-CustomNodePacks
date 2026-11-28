@@ -307,14 +307,16 @@ function installNodeUI(node) {
         thumb._statusEl = { set textContent(t) { sw.value = t; } };
     }
 
-    ui.push(node.addWidget("button", "✏️ Edit mask", null, () => {
+    const _editBtn = node.addWidget("button", "✏️ Edit mask", null, () => {
         if (!node.graph) return;
         const eid = ensureEditorId(node);
         openModal(node, eid, (digest) => {
             thumb.digest = digest || "";
             thumb.refresh();
         });
-    }, { serialize: false }));
+    }, { serialize: false });
+    _editBtn.serialize = false;   // agy review: the option alone did not stop it being saved (103 vs 102 values)
+    ui.push(_editBtn);
     for (const name of ["mode", "canvas_layer"]) {
         const w = node.widgets?.find((x) => x.name === name);
         if (!w) continue;

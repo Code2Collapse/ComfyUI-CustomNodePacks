@@ -215,6 +215,50 @@ app.registerExtension({
 
         const onConfigure = nodeType.prototype.onConfigure;
         nodeType.prototype.onConfigure = function (info) {
+            // agy review 2026-11-28, measured on the testbed (frontend 1.52.7): serialize() writes ONE value per widget
+            // - display widgets marked serialize:false too (as null) - while configure restores only the saveable
+            // widgets, by position. A node whose display widgets sit before its parameters (Mask + Matting: the
+            // viewer and status header) came back with every value shifted by one slot. When the saved array has a
+            // value per widget, drop the display widgets' slots and put the values back by NAME after the frontend's
+            // positional pass. Older saves that carry a leading null / "" placeholder are aligned the same way.
+            let byName = null;
+            try {
+                const wv0 = info?.widgets_values;
+                const all = this.widgets || [];
+                const ser = serializedWidgets(this);
+                const lead = all.findIndex((w) => w?.serialize !== false);         // display widgets in front
+                if (Array.isArray(wv0) && all.length > ser.length && lead > 0) {
+                    let vals = null;
+                    if (wv0.length === all.length) {
+                        vals = wv0.filter((_, i) => all[i]?.serialize !== false);
+                    } else {
+                        // an older save: leading placeholders (null / "") from display widgets that sat in front,
+                        // recognised because the first value does not fit the first real parameter
+                        let k = 0;
+                        while (k < lead && k < wv0.length && (wv0[k] === null || wv0[k] === "" || wv0[k] === undefined)) k++;
+                        const first = ser[0];
+                        if (k > 0 && first && !fits(specOf(nodeData, first.name), wv0[0])) {
+                            vals = wv0.slice(k);
+                            if (vals.length < ser.length) vals = vals.concat(ser.slice(vals.length).map((w) => w.value));
+                            if (vals.length > ser.length) vals = vals.slice(0, ser.length);
+                        }
+                    }
+                    if (vals && vals.length === ser.length) {
+                        byName = ser.map((w, i) => [w.name, vals[i]]);
+                        info.widgets_values = vals;
+                    }
+                }
+            } catch (e) { /* fall through to the old path */ }
+            if (byName) {
+                const node = this;
+                setTimeout(() => {
+                    for (const [name, v] of byName) {
+                        const w = node.widgets?.find((x) => x.name === name);
+                        if (w && v !== undefined) w.value = v;
+                    }
+                    node.setDirtyCanvas?.(true, true);
+                }, 0);
+            }
             try {
                 const wv = info?.widgets_values;
                 if (Array.isArray(wv) && wv.length < serializedWidgets(this).length) {
