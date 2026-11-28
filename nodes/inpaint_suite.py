@@ -2836,7 +2836,7 @@ class InpaintStitchProMEC:
             if f_out not in originals and (seam_qc or region_frame is not None):
                 originals[f_out] = canvas[0, cto_y:cto_y + cto_h, cto_x:cto_x + cto_w, :].cpu().clone()
             if region_frame is not None and f_out in running:   # earlier regions of this frame are already in
-                canvas[:, cto_y:cto_y + cto_h, cto_x:cto_x + cto_w, :] = running[f_out].unsqueeze(0)
+                canvas[:, cto_y:cto_y + cto_h, cto_x:cto_x + cto_w, :] = running[f_out].to(device).unsqueeze(0)
             if stabilized_masks is not None:
                 blend_mask = stabilized_masks[j].to(device).unsqueeze(0).clone()
             else:
@@ -2917,7 +2917,9 @@ class InpaintStitchProMEC:
 
             output = canvas[:, cto_y:cto_y + cto_h, cto_x:cto_x + cto_w, :]
             if region_frame is not None:
-                running[f_out] = output.squeeze(0).clone()
+                # agy review: held on the CPU (a full-res frame per output frame stayed on the GPU -> OOM on long
+                # 2K clips); copied back into the canvas only when another region of this frame comes in
+                running[f_out] = output.squeeze(0).cpu()
             else:
                 results.append(output.squeeze(0).cpu())
 
@@ -2939,7 +2941,8 @@ class InpaintStitchProMEC:
                 full_mask[:, y0:y1, x0:x1] = resized_msk[:, src_y0:src_y1, src_x0:src_x1]
             if region_frame is not None:
                 prev = frame_masks.get(f_out)
-                frame_masks[f_out] = full_mask.squeeze(0) if prev is None else torch.maximum(prev, full_mask[0])
+                fm = full_mask[0].cpu()
+                frame_masks[f_out] = fm if prev is None else torch.maximum(prev, fm)
             else:
                 blend_masks_out.append(full_mask.squeeze(0).cpu())
 
