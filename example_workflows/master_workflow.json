@@ -1,5 +1,5 @@
 {
-  "id": "00000000-0000-0000-0000-000000000000",
+  "id": "9f855a46-f93f-4e95-bdda-3a9348da7226",
   "revision": 0,
   "last_node_id": 7,
   "last_link_id": 9,
@@ -115,7 +115,7 @@
       ],
       "size": [
         352.609375,
-        223
+        141
       ],
       "flags": {},
       "order": 1,
@@ -250,7 +250,7 @@
         "Node name for S&R": "SAMModelLoaderMEC"
       },
       "widgets_values": [
-        "sam2.1_hiera_large.pt",
+        "[download] sam2.1_hiera_large.pt",
         "auto",
         "auto",
         false,
@@ -277,7 +277,7 @@
       ],
       "size": [
         600,
-        958
+        982
       ],
       "flags": {},
       "order": 2,
@@ -1979,6 +1979,57 @@
             "name": "video_outside_keys"
           },
           "link": null
+        },
+        {
+          "color_off": null,
+          "color_on": null,
+          "dir": null,
+          "label": null,
+          "localized_name": "layer_output",
+          "locked": null,
+          "name": "layer_output",
+          "nameLocked": null,
+          "removable": null,
+          "shape": 7,
+          "type": "STRING",
+          "widget": {
+            "name": "layer_output"
+          },
+          "link": null
+        },
+        {
+          "color_off": null,
+          "color_on": null,
+          "dir": null,
+          "label": null,
+          "localized_name": "spline_keyframes",
+          "locked": null,
+          "name": "spline_keyframes",
+          "nameLocked": null,
+          "removable": null,
+          "shape": 7,
+          "type": "STRING",
+          "widget": {
+            "name": "spline_keyframes"
+          },
+          "link": null
+        },
+        {
+          "color_off": null,
+          "color_on": null,
+          "dir": null,
+          "label": null,
+          "localized_name": "spline_keyframe_easing",
+          "locked": null,
+          "name": "spline_keyframe_easing",
+          "nameLocked": null,
+          "removable": null,
+          "shape": 7,
+          "type": "COMBO",
+          "widget": {
+            "name": "spline_keyframe_easing"
+          },
+          "link": null
         }
       ],
       "outputs": [
@@ -2205,8 +2256,8 @@
         0,
         1,
         "",
-        512,
-        512,
+        768,
+        768,
         "{\"points\":[],\"bboxes\":[]}",
         3,
         1,
@@ -2285,7 +2336,7 @@
         "empty",
         null,
         "",
-        null,
+        "linear",
         ""
       ],
       "widgets_values_named": {
@@ -2310,8 +2361,8 @@
         "canvas_mask_blur_radius": 0,
         "canvas_mask_blur_strength": 1,
         "canvas_data": "",
-        "points_width": 512,
-        "points_height": 512,
+        "points_width": 768,
+        "points_height": 768,
         "points_editor_data": "{\"points\":[],\"bboxes\":[]}",
         "points_default_radius": 3,
         "points_softness": 1,
@@ -2388,10 +2439,10 @@
         "video_feather": 0,
         "video_threshold": 0,
         "video_outside_keys": "empty",
-        "ime_preview": null,
-        "ime_status": "",
-        "✏️ Edit mask": null,
-        "points_editor": ""
+        "layer_output": null,
+        "spline_keyframes": "",
+        "spline_keyframe_easing": "linear",
+        "ime_preview": ""
       },
       "color": "#12132f",
       "bgcolor": "#0c0d23"
@@ -2405,7 +2456,7 @@
       ],
       "size": [
         600,
-        975
+        1077
       ],
       "flags": {},
       "order": 3,
@@ -2777,6 +2828,40 @@
             "name": "allow_download"
           },
           "link": null
+        },
+        {
+          "color_off": null,
+          "color_on": null,
+          "dir": null,
+          "label": null,
+          "localized_name": "candidate_select",
+          "locked": null,
+          "name": "candidate_select",
+          "nameLocked": null,
+          "removable": null,
+          "shape": 7,
+          "type": "COMBO",
+          "widget": {
+            "name": "candidate_select"
+          },
+          "link": null
+        },
+        {
+          "color_off": null,
+          "color_on": null,
+          "dir": null,
+          "label": null,
+          "localized_name": "objects_json",
+          "locked": null,
+          "name": "objects_json",
+          "nameLocked": null,
+          "removable": null,
+          "shape": 7,
+          "type": "STRING",
+          "widget": {
+            "name": "objects_json"
+          },
+          "link": null
         }
       ],
       "outputs": [
@@ -2861,6 +2946,38 @@
           "pos": null,
           "slot_index": null,
           "links": null
+        },
+        {
+          "color_off": null,
+          "color_on": null,
+          "dir": null,
+          "label": null,
+          "localized_name": "object_masks",
+          "locked": null,
+          "name": "object_masks",
+          "nameLocked": null,
+          "removable": null,
+          "shape": null,
+          "type": "MASK",
+          "pos": null,
+          "slot_index": null,
+          "links": null
+        },
+        {
+          "color_off": null,
+          "color_on": null,
+          "dir": null,
+          "label": null,
+          "localized_name": "quality",
+          "locked": null,
+          "name": "quality",
+          "nameLocked": null,
+          "removable": null,
+          "shape": null,
+          "type": "STRING",
+          "pos": null,
+          "slot_index": null,
+          "links": null
         }
       ],
       "title": "SAM Mask",
@@ -2886,6 +3003,7 @@
         "",
         "",
         false,
+        "mask_index (as before)",
         ""
       ],
       "widgets_values_named": {
@@ -2907,7 +3025,8 @@
         "bboxes_json": "",
         "spline_json": "",
         "allow_download": false,
-        "points_editor": ""
+        "candidate_select": "mask_index (as before)",
+        "objects_json": ""
       },
       "color": "#12132f",
       "bgcolor": "#0c0d23"
@@ -2921,7 +3040,7 @@
       ],
       "size": [
         473.234375,
-        643
+        389
       ],
       "flags": {},
       "order": 4,
@@ -2969,7 +3088,7 @@
           "nameLocked": null,
           "removable": null,
           "shape": 7,
-          "type": "STITCH_DATA",
+          "type": "STITCHER,STITCH_DATA",
           "pos": null,
           "link": null
         },
@@ -3334,6 +3453,23 @@
             "name": "flow_consistency_thr"
           },
           "link": null
+        },
+        {
+          "color_off": null,
+          "color_on": null,
+          "dir": null,
+          "label": null,
+          "localized_name": "backend",
+          "locked": null,
+          "name": "backend",
+          "nameLocked": null,
+          "removable": null,
+          "shape": 7,
+          "type": "COMBO",
+          "widget": {
+            "name": "backend"
+          },
+          "link": null
         }
       ],
       "outputs": [
@@ -3440,7 +3576,8 @@
         true,
         "lanczos",
         8,
-        1.5
+        1.5,
+        "propainter"
       ],
       "widgets_values_named": {
         "mode": "temporal",
@@ -3458,7 +3595,8 @@
         "preserve_inpaint_center": true,
         "upscale_method": "lanczos",
         "ring_pixels": 8,
-        "flow_consistency_thr": 1.5
+        "flow_consistency_thr": 1.5,
+        "backend": "propainter"
       },
       "color": "#12132f",
       "bgcolor": "#0c0d23"
@@ -3472,7 +3610,7 @@
       ],
       "size": [
         270,
-        190
+        269
       ],
       "flags": {},
       "order": 5,
@@ -3729,6 +3867,74 @@
             "name": "allow_download"
           },
           "link": null
+        },
+        {
+          "color_off": null,
+          "color_on": null,
+          "dir": null,
+          "label": null,
+          "localized_name": "horizon_lock",
+          "locked": null,
+          "name": "horizon_lock",
+          "nameLocked": null,
+          "removable": null,
+          "shape": 7,
+          "type": "BOOLEAN",
+          "widget": {
+            "name": "horizon_lock"
+          },
+          "link": null
+        },
+        {
+          "color_off": null,
+          "color_on": null,
+          "dir": null,
+          "label": null,
+          "localized_name": "horizon_angle",
+          "locked": null,
+          "name": "horizon_angle",
+          "nameLocked": null,
+          "removable": null,
+          "shape": 7,
+          "type": "FLOAT",
+          "widget": {
+            "name": "horizon_angle"
+          },
+          "link": null
+        },
+        {
+          "color_off": null,
+          "color_on": null,
+          "dir": null,
+          "label": null,
+          "localized_name": "path_correction",
+          "locked": null,
+          "name": "path_correction",
+          "nameLocked": null,
+          "removable": null,
+          "shape": 7,
+          "type": "STRING",
+          "widget": {
+            "name": "path_correction"
+          },
+          "link": null
+        },
+        {
+          "color_off": null,
+          "color_on": null,
+          "dir": null,
+          "label": null,
+          "localized_name": "rolling_shutter",
+          "locked": null,
+          "name": "rolling_shutter",
+          "nameLocked": null,
+          "removable": null,
+          "shape": 7,
+          "type": "FLOAT",
+          "widget": {
+            "name": "rolling_shutter"
+          },
+          "link": null
         }
       ],
       "outputs": [
@@ -3816,7 +4022,11 @@
         0.6,
         12,
         true,
-        false
+        false,
+        false,
+        0,
+        "",
+        0
       ],
       "widgets_values_named": {
         "method": "auto",
@@ -3831,7 +4041,11 @@
         "keep_fov": 0.6,
         "raft_iters": 12,
         "use_half": true,
-        "allow_download": false
+        "allow_download": false,
+        "horizon_lock": false,
+        "horizon_angle": 0,
+        "path_correction": "",
+        "rolling_shutter": 0
       },
       "color": "#12132f",
       "bgcolor": "#0c0d23"

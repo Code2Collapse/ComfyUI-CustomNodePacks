@@ -1,5 +1,5 @@
 {
-  "id": "00000000-0000-0000-0000-000000000000",
+  "id": "5cdef7d2-cfe5-4f39-b1bb-82af37f92708",
   "revision": 0,
   "last_node_id": 6,
   "last_link_id": 7,
@@ -114,7 +114,7 @@
       ],
       "size": [
         600,
-        990
+        1235
       ],
       "flags": {},
       "order": 2,
@@ -1816,6 +1816,57 @@
             "name": "video_outside_keys"
           },
           "link": null
+        },
+        {
+          "color_off": null,
+          "color_on": null,
+          "dir": null,
+          "label": null,
+          "localized_name": "layer_output",
+          "locked": null,
+          "name": "layer_output",
+          "nameLocked": null,
+          "removable": null,
+          "shape": 7,
+          "type": "STRING",
+          "widget": {
+            "name": "layer_output"
+          },
+          "link": null
+        },
+        {
+          "color_off": null,
+          "color_on": null,
+          "dir": null,
+          "label": null,
+          "localized_name": "spline_keyframes",
+          "locked": null,
+          "name": "spline_keyframes",
+          "nameLocked": null,
+          "removable": null,
+          "shape": 7,
+          "type": "STRING",
+          "widget": {
+            "name": "spline_keyframes"
+          },
+          "link": null
+        },
+        {
+          "color_off": null,
+          "color_on": null,
+          "dir": null,
+          "label": null,
+          "localized_name": "spline_keyframe_easing",
+          "locked": null,
+          "name": "spline_keyframe_easing",
+          "nameLocked": null,
+          "removable": null,
+          "shape": 7,
+          "type": "COMBO",
+          "widget": {
+            "name": "spline_keyframe_easing"
+          },
+          "link": null
         }
       ],
       "outputs": [
@@ -2088,8 +2139,8 @@
         false,
         true,
         0.5,
-        512,
-        512,
+        768,
+        768,
         "#ff00ff",
         0.4,
         "mask",
@@ -2123,7 +2174,7 @@
         "empty",
         null,
         "",
-        null,
+        "linear",
         ""
       ],
       "widgets_values_named": {
@@ -2193,8 +2244,8 @@
         "spline_invert": false,
         "spline_smoothing": true,
         "spline_centripetal_alpha": 0.5,
-        "spline_width": 512,
-        "spline_height": 512,
+        "spline_width": 768,
+        "spline_height": 768,
         "spline_mask_color": "#ff00ff",
         "spline_mask_opacity": 0.4,
         "spline_fill": "mask",
@@ -2226,10 +2277,10 @@
         "video_feather": 0,
         "video_threshold": 0,
         "video_outside_keys": "empty",
-        "ime_preview": null,
-        "ime_status": "",
-        "✏️ Edit mask": null,
-        "spline_editor": ""
+        "layer_output": null,
+        "spline_keyframes": "",
+        "spline_keyframe_easing": "linear",
+        "ime_preview": ""
       },
       "color": "#12132f",
       "bgcolor": "#0c0d23"
@@ -2524,7 +2575,7 @@
       ],
       "size": [
         600,
-        975
+        1066
       ],
       "flags": {},
       "order": 5,
@@ -2896,6 +2947,40 @@
             "name": "allow_download"
           },
           "link": null
+        },
+        {
+          "color_off": null,
+          "color_on": null,
+          "dir": null,
+          "label": null,
+          "localized_name": "candidate_select",
+          "locked": null,
+          "name": "candidate_select",
+          "nameLocked": null,
+          "removable": null,
+          "shape": 7,
+          "type": "COMBO",
+          "widget": {
+            "name": "candidate_select"
+          },
+          "link": null
+        },
+        {
+          "color_off": null,
+          "color_on": null,
+          "dir": null,
+          "label": null,
+          "localized_name": "objects_json",
+          "locked": null,
+          "name": "objects_json",
+          "nameLocked": null,
+          "removable": null,
+          "shape": 7,
+          "type": "STRING",
+          "widget": {
+            "name": "objects_json"
+          },
+          "link": null
         }
       ],
       "outputs": [
@@ -2978,6 +3063,38 @@
           "pos": null,
           "slot_index": null,
           "links": null
+        },
+        {
+          "color_off": null,
+          "color_on": null,
+          "dir": null,
+          "label": null,
+          "localized_name": "object_masks",
+          "locked": null,
+          "name": "object_masks",
+          "nameLocked": null,
+          "removable": null,
+          "shape": null,
+          "type": "MASK",
+          "pos": null,
+          "slot_index": null,
+          "links": null
+        },
+        {
+          "color_off": null,
+          "color_on": null,
+          "dir": null,
+          "label": null,
+          "localized_name": "quality",
+          "locked": null,
+          "name": "quality",
+          "nameLocked": null,
+          "removable": null,
+          "shape": null,
+          "type": "STRING",
+          "pos": null,
+          "slot_index": null,
+          "links": null
         }
       ],
       "title": "SAM (from spline coords)",
@@ -3003,6 +3120,7 @@
         "",
         "",
         false,
+        "mask_index (as before)",
         ""
       ],
       "widgets_values_named": {
@@ -3024,7 +3142,8 @@
         "bboxes_json": "",
         "spline_json": "",
         "allow_download": false,
-        "points_editor": ""
+        "candidate_select": "mask_index (as before)",
+        "objects_json": ""
       },
       "color": "#12132f",
       "bgcolor": "#0c0d23"
@@ -3156,7 +3275,7 @@
       ],
       "size": [
         352.609375,
-        223
+        141
       ],
       "flags": {},
       "order": 1,
@@ -3291,7 +3410,7 @@
         "Node name for S&R": "SAMModelLoaderMEC"
       },
       "widgets_values": [
-        "sam2.1_hiera_large.pt",
+        "[download] sam2.1_hiera_large.pt",
         "auto",
         "auto",
         false,

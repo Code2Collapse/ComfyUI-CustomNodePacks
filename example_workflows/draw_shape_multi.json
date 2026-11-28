@@ -1,5 +1,5 @@
 {
-  "id": "00000000-0000-0000-0000-000000000000",
+  "id": "267e3c8d-21ad-450c-97fe-7798eda6de4f",
   "revision": 0,
   "last_node_id": 5,
   "last_link_id": 5,
@@ -113,7 +113,7 @@
       ],
       "size": [
         420,
-        686
+        783
       ],
       "flags": {},
       "order": 2,
@@ -1815,6 +1815,57 @@
             "name": "video_outside_keys"
           },
           "link": null
+        },
+        {
+          "color_off": null,
+          "color_on": null,
+          "dir": null,
+          "label": null,
+          "localized_name": "layer_output",
+          "locked": null,
+          "name": "layer_output",
+          "nameLocked": null,
+          "removable": null,
+          "shape": 7,
+          "type": "STRING",
+          "widget": {
+            "name": "layer_output"
+          },
+          "link": null
+        },
+        {
+          "color_off": null,
+          "color_on": null,
+          "dir": null,
+          "label": null,
+          "localized_name": "spline_keyframes",
+          "locked": null,
+          "name": "spline_keyframes",
+          "nameLocked": null,
+          "removable": null,
+          "shape": 7,
+          "type": "STRING",
+          "widget": {
+            "name": "spline_keyframes"
+          },
+          "link": null
+        },
+        {
+          "color_off": null,
+          "color_on": null,
+          "dir": null,
+          "label": null,
+          "localized_name": "spline_keyframe_easing",
+          "locked": null,
+          "name": "spline_keyframe_easing",
+          "nameLocked": null,
+          "removable": null,
+          "shape": 7,
+          "type": "COMBO",
+          "widget": {
+            "name": "spline_keyframe_easing"
+          },
+          "link": null
         }
       ],
       "outputs": [
@@ -2120,6 +2171,7 @@
         "empty",
         null,
         "",
+        "linear",
         null
       ],
       "widgets_values_named": {
@@ -2222,9 +2274,10 @@
         "video_feather": 0,
         "video_threshold": 0,
         "video_outside_keys": "empty",
-        "ime_preview": null,
-        "ime_status": "",
-        "✏️ Edit mask": null
+        "layer_output": null,
+        "spline_keyframes": "",
+        "spline_keyframe_easing": "linear",
+        "ime_preview": null
       },
       "color": "#12132f",
       "bgcolor": "#0c0d23"
@@ -2690,7 +2743,7 @@
       ],
       "size": [
         420,
-        686
+        783
       ],
       "flags": {},
       "order": 1,
@@ -4392,6 +4445,57 @@
             "name": "video_outside_keys"
           },
           "link": null
+        },
+        {
+          "color_off": null,
+          "color_on": null,
+          "dir": null,
+          "label": null,
+          "localized_name": "layer_output",
+          "locked": null,
+          "name": "layer_output",
+          "nameLocked": null,
+          "removable": null,
+          "shape": 7,
+          "type": "STRING",
+          "widget": {
+            "name": "layer_output"
+          },
+          "link": null
+        },
+        {
+          "color_off": null,
+          "color_on": null,
+          "dir": null,
+          "label": null,
+          "localized_name": "spline_keyframes",
+          "locked": null,
+          "name": "spline_keyframes",
+          "nameLocked": null,
+          "removable": null,
+          "shape": 7,
+          "type": "STRING",
+          "widget": {
+            "name": "spline_keyframes"
+          },
+          "link": null
+        },
+        {
+          "color_off": null,
+          "color_on": null,
+          "dir": null,
+          "label": null,
+          "localized_name": "spline_keyframe_easing",
+          "locked": null,
+          "name": "spline_keyframe_easing",
+          "nameLocked": null,
+          "removable": null,
+          "shape": 7,
+          "type": "COMBO",
+          "widget": {
+            "name": "spline_keyframe_easing"
+          },
+          "link": null
         }
       ],
       "outputs": [
@@ -4696,6 +4800,7 @@
         "empty",
         null,
         "",
+        "linear",
         null
       ],
       "widgets_values_named": {
@@ -4798,9 +4903,10 @@
         "video_feather": 0,
         "video_threshold": 0,
         "video_outside_keys": "empty",
-        "ime_preview": null,
-        "ime_status": "",
-        "✏️ Edit mask": null
+        "layer_output": null,
+        "spline_keyframes": "",
+        "spline_keyframe_easing": "linear",
+        "ime_preview": null
       },
       "color": "#12132f",
       "bgcolor": "#0c0d23"

@@ -1,5 +1,5 @@
 {
-  "id": "00000000-0000-0000-0000-000000000000",
+  "id": "fd9264c1-75ea-4a5f-9ac2-3586d4468dea",
   "revision": 0,
   "last_node_id": 8,
   "last_link_id": 9,
@@ -527,11 +527,11 @@
         110
       ],
       "size": [
-        225,
+        226.578125,
         99
       ],
       "flags": {},
-      "order": 3,
+      "order": 4,
       "mode": 0,
       "showAdvanced": null,
       "inputs": [
@@ -652,7 +652,7 @@
         135
       ],
       "flags": {},
-      "order": 4,
+      "order": 3,
       "mode": 0,
       "showAdvanced": null,
       "inputs": [
@@ -768,7 +768,7 @@
         34
       ],
       "flags": {},
-      "order": 5,
+      "order": 6,
       "mode": 0,
       "showAdvanced": null,
       "inputs": [
@@ -823,7 +823,7 @@
         379
       ],
       "flags": {},
-      "order": 6,
+      "order": 5,
       "mode": 0,
       "showAdvanced": null,
       "inputs": [
@@ -1252,7 +1252,7 @@
     },
     {
       "id": 3,
-      "title": "2b. BBox → Mask",
+      "title": "2b. BBox \u2192 Mask",
       "bounding": [
         812.203125,
         189,
@@ -1267,9 +1267,17 @@
   "config": {},
   "extra": {
     "c2c": {
-      "bookmarks": {}
+      "bookmarks": {},
+      "linkedValues": {}
     },
-    "reroutes": null
+    "reroutes": null,
+    "ds": {
+      "scale": 0.6830909867148849,
+      "offset": [
+        271.0859375,
+        357.96691176470586
+      ]
+    }
   },
   "version": 0.4
 }

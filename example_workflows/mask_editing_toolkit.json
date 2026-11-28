@@ -1,5 +1,5 @@
 {
-  "id": "00000000-0000-0000-0000-000000000000",
+  "id": "741b1806-10b3-4eb4-b8cd-9e447a00a520",
   "revision": 0,
   "last_node_id": 10,
   "last_link_id": 12,
@@ -115,7 +115,7 @@
       ],
       "size": [
         420,
-        620
+        711
       ],
       "flags": {},
       "order": 1,
@@ -1817,6 +1817,57 @@
             "name": "video_outside_keys"
           },
           "link": null
+        },
+        {
+          "color_off": null,
+          "color_on": null,
+          "dir": null,
+          "label": null,
+          "localized_name": "layer_output",
+          "locked": null,
+          "name": "layer_output",
+          "nameLocked": null,
+          "removable": null,
+          "shape": 7,
+          "type": "STRING",
+          "widget": {
+            "name": "layer_output"
+          },
+          "link": null
+        },
+        {
+          "color_off": null,
+          "color_on": null,
+          "dir": null,
+          "label": null,
+          "localized_name": "spline_keyframes",
+          "locked": null,
+          "name": "spline_keyframes",
+          "nameLocked": null,
+          "removable": null,
+          "shape": 7,
+          "type": "STRING",
+          "widget": {
+            "name": "spline_keyframes"
+          },
+          "link": null
+        },
+        {
+          "color_off": null,
+          "color_on": null,
+          "dir": null,
+          "label": null,
+          "localized_name": "spline_keyframe_easing",
+          "locked": null,
+          "name": "spline_keyframe_easing",
+          "nameLocked": null,
+          "removable": null,
+          "shape": 7,
+          "type": "COMBO",
+          "widget": {
+            "name": "spline_keyframe_easing"
+          },
+          "link": null
         }
       ],
       "outputs": [
@@ -2121,6 +2172,7 @@
         "empty",
         null,
         "",
+        "linear",
         null
       ],
       "widgets_values_named": {
@@ -2223,9 +2275,10 @@
         "video_feather": 0,
         "video_threshold": 0,
         "video_outside_keys": "empty",
-        "ime_preview": null,
-        "ime_status": "",
-        "✏️ Edit mask": null
+        "layer_output": null,
+        "spline_keyframes": "",
+        "spline_keyframe_easing": "linear",
+        "ime_preview": null
       },
       "color": "#12132f",
       "bgcolor": "#0c0d23"
@@ -2239,7 +2292,7 @@
       ],
       "size": [
         420,
-        620
+        711
       ],
       "flags": {},
       "order": 2,
@@ -3941,6 +3994,57 @@
             "name": "video_outside_keys"
           },
           "link": null
+        },
+        {
+          "color_off": null,
+          "color_on": null,
+          "dir": null,
+          "label": null,
+          "localized_name": "layer_output",
+          "locked": null,
+          "name": "layer_output",
+          "nameLocked": null,
+          "removable": null,
+          "shape": 7,
+          "type": "STRING",
+          "widget": {
+            "name": "layer_output"
+          },
+          "link": null
+        },
+        {
+          "color_off": null,
+          "color_on": null,
+          "dir": null,
+          "label": null,
+          "localized_name": "spline_keyframes",
+          "locked": null,
+          "name": "spline_keyframes",
+          "nameLocked": null,
+          "removable": null,
+          "shape": 7,
+          "type": "STRING",
+          "widget": {
+            "name": "spline_keyframes"
+          },
+          "link": null
+        },
+        {
+          "color_off": null,
+          "color_on": null,
+          "dir": null,
+          "label": null,
+          "localized_name": "spline_keyframe_easing",
+          "locked": null,
+          "name": "spline_keyframe_easing",
+          "nameLocked": null,
+          "removable": null,
+          "shape": 7,
+          "type": "COMBO",
+          "widget": {
+            "name": "spline_keyframe_easing"
+          },
+          "link": null
         }
       ],
       "outputs": [
@@ -4245,6 +4349,7 @@
         "empty",
         null,
         "",
+        "linear",
         null
       ],
       "widgets_values_named": {
@@ -4347,9 +4452,10 @@
         "video_feather": 0,
         "video_threshold": 0,
         "video_outside_keys": "empty",
-        "ime_preview": null,
-        "ime_status": "",
-        "✏️ Edit mask": null
+        "layer_output": null,
+        "spline_keyframes": "",
+        "spline_keyframe_easing": "linear",
+        "ime_preview": null
       },
       "color": "#12132f",
       "bgcolor": "#0c0d23"
@@ -4362,8 +4468,8 @@
         110
       ],
       "size": [
-        233.28125,
-        366
+        295.65625,
+        449
       ],
       "flags": {},
       "order": 3,
@@ -4442,6 +4548,21 @@
           "removable": null,
           "shape": 7,
           "type": "IMAGE",
+          "pos": null,
+          "link": null
+        },
+        {
+          "color_off": null,
+          "color_on": null,
+          "dir": null,
+          "label": null,
+          "localized_name": "face_pose",
+          "locked": null,
+          "name": "face_pose",
+          "nameLocked": null,
+          "removable": null,
+          "shape": 7,
+          "type": "POSE_KEYPOINT",
           "pos": null,
           "link": null
         },
@@ -5464,6 +5585,363 @@
             "name": "transform_invert"
           },
           "link": null
+        },
+        {
+          "color_off": null,
+          "color_on": null,
+          "dir": null,
+          "label": null,
+          "localized_name": "grow_angle",
+          "locked": null,
+          "name": "grow_angle",
+          "nameLocked": null,
+          "removable": null,
+          "shape": 7,
+          "type": "FLOAT",
+          "widget": {
+            "name": "grow_angle"
+          },
+          "link": null
+        },
+        {
+          "color_off": null,
+          "color_on": null,
+          "dir": null,
+          "label": null,
+          "localized_name": "grow_units",
+          "locked": null,
+          "name": "grow_units",
+          "nameLocked": null,
+          "removable": null,
+          "shape": 7,
+          "type": "COMBO",
+          "widget": {
+            "name": "grow_units"
+          },
+          "link": null
+        },
+        {
+          "color_off": null,
+          "color_on": null,
+          "dir": null,
+          "label": null,
+          "localized_name": "grow_falloff",
+          "locked": null,
+          "name": "grow_falloff",
+          "nameLocked": null,
+          "removable": null,
+          "shape": 7,
+          "type": "FLOAT",
+          "widget": {
+            "name": "grow_falloff"
+          },
+          "link": null
+        },
+        {
+          "color_off": null,
+          "color_on": null,
+          "dir": null,
+          "label": null,
+          "localized_name": "grow_follow_face",
+          "locked": null,
+          "name": "grow_follow_face",
+          "nameLocked": null,
+          "removable": null,
+          "shape": 7,
+          "type": "BOOLEAN",
+          "widget": {
+            "name": "grow_follow_face"
+          },
+          "link": null
+        },
+        {
+          "color_off": null,
+          "color_on": null,
+          "dir": null,
+          "label": null,
+          "localized_name": "grade_blackpoint",
+          "locked": null,
+          "name": "grade_blackpoint",
+          "nameLocked": null,
+          "removable": null,
+          "shape": 7,
+          "type": "FLOAT",
+          "widget": {
+            "name": "grade_blackpoint"
+          },
+          "link": null
+        },
+        {
+          "color_off": null,
+          "color_on": null,
+          "dir": null,
+          "label": null,
+          "localized_name": "grade_whitepoint",
+          "locked": null,
+          "name": "grade_whitepoint",
+          "nameLocked": null,
+          "removable": null,
+          "shape": 7,
+          "type": "FLOAT",
+          "widget": {
+            "name": "grade_whitepoint"
+          },
+          "link": null
+        },
+        {
+          "color_off": null,
+          "color_on": null,
+          "dir": null,
+          "label": null,
+          "localized_name": "grade_lift",
+          "locked": null,
+          "name": "grade_lift",
+          "nameLocked": null,
+          "removable": null,
+          "shape": 7,
+          "type": "FLOAT",
+          "widget": {
+            "name": "grade_lift"
+          },
+          "link": null
+        },
+        {
+          "color_off": null,
+          "color_on": null,
+          "dir": null,
+          "label": null,
+          "localized_name": "grade_offset",
+          "locked": null,
+          "name": "grade_offset",
+          "nameLocked": null,
+          "removable": null,
+          "shape": 7,
+          "type": "FLOAT",
+          "widget": {
+            "name": "grade_offset"
+          },
+          "link": null
+        },
+        {
+          "color_off": null,
+          "color_on": null,
+          "dir": null,
+          "label": null,
+          "localized_name": "chroma_key_screen",
+          "locked": null,
+          "name": "chroma_key_screen",
+          "nameLocked": null,
+          "removable": null,
+          "shape": 7,
+          "type": "COMBO",
+          "widget": {
+            "name": "chroma_key_screen"
+          },
+          "link": null
+        },
+        {
+          "color_off": null,
+          "color_on": null,
+          "dir": null,
+          "label": null,
+          "localized_name": "chroma_key_color",
+          "locked": null,
+          "name": "chroma_key_color",
+          "nameLocked": null,
+          "removable": null,
+          "shape": 7,
+          "type": "STRING",
+          "widget": {
+            "name": "chroma_key_color"
+          },
+          "link": null
+        },
+        {
+          "color_off": null,
+          "color_on": null,
+          "dir": null,
+          "label": null,
+          "localized_name": "chroma_key_balance",
+          "locked": null,
+          "name": "chroma_key_balance",
+          "nameLocked": null,
+          "removable": null,
+          "shape": 7,
+          "type": "FLOAT",
+          "widget": {
+            "name": "chroma_key_balance"
+          },
+          "link": null
+        },
+        {
+          "color_off": null,
+          "color_on": null,
+          "dir": null,
+          "label": null,
+          "localized_name": "chroma_key_gain",
+          "locked": null,
+          "name": "chroma_key_gain",
+          "nameLocked": null,
+          "removable": null,
+          "shape": 7,
+          "type": "FLOAT",
+          "widget": {
+            "name": "chroma_key_gain"
+          },
+          "link": null
+        },
+        {
+          "color_off": null,
+          "color_on": null,
+          "dir": null,
+          "label": null,
+          "localized_name": "chroma_key_clip_black",
+          "locked": null,
+          "name": "chroma_key_clip_black",
+          "nameLocked": null,
+          "removable": null,
+          "shape": 7,
+          "type": "FLOAT",
+          "widget": {
+            "name": "chroma_key_clip_black"
+          },
+          "link": null
+        },
+        {
+          "color_off": null,
+          "color_on": null,
+          "dir": null,
+          "label": null,
+          "localized_name": "chroma_key_clip_white",
+          "locked": null,
+          "name": "chroma_key_clip_white",
+          "nameLocked": null,
+          "removable": null,
+          "shape": 7,
+          "type": "FLOAT",
+          "widget": {
+            "name": "chroma_key_clip_white"
+          },
+          "link": null
+        },
+        {
+          "color_off": null,
+          "color_on": null,
+          "dir": null,
+          "label": null,
+          "localized_name": "chroma_key_despill",
+          "locked": null,
+          "name": "chroma_key_despill",
+          "nameLocked": null,
+          "removable": null,
+          "shape": 7,
+          "type": "COMBO",
+          "widget": {
+            "name": "chroma_key_despill"
+          },
+          "link": null
+        },
+        {
+          "color_off": null,
+          "color_on": null,
+          "dir": null,
+          "label": null,
+          "localized_name": "chroma_key_despill_strength",
+          "locked": null,
+          "name": "chroma_key_despill_strength",
+          "nameLocked": null,
+          "removable": null,
+          "shape": 7,
+          "type": "FLOAT",
+          "widget": {
+            "name": "chroma_key_despill_strength"
+          },
+          "link": null
+        },
+        {
+          "color_off": null,
+          "color_on": null,
+          "dir": null,
+          "label": null,
+          "localized_name": "chroma_key_invert",
+          "locked": null,
+          "name": "chroma_key_invert",
+          "nameLocked": null,
+          "removable": null,
+          "shape": 7,
+          "type": "BOOLEAN",
+          "widget": {
+            "name": "chroma_key_invert"
+          },
+          "link": null
+        },
+        {
+          "color_off": null,
+          "color_on": null,
+          "dir": null,
+          "label": null,
+          "localized_name": "temporal_cleanup_window",
+          "locked": null,
+          "name": "temporal_cleanup_window",
+          "nameLocked": null,
+          "removable": null,
+          "shape": 7,
+          "type": "INT",
+          "widget": {
+            "name": "temporal_cleanup_window"
+          },
+          "link": null
+        },
+        {
+          "color_off": null,
+          "color_on": null,
+          "dir": null,
+          "label": null,
+          "localized_name": "temporal_cleanup_method",
+          "locked": null,
+          "name": "temporal_cleanup_method",
+          "nameLocked": null,
+          "removable": null,
+          "shape": 7,
+          "type": "COMBO",
+          "widget": {
+            "name": "temporal_cleanup_method"
+          },
+          "link": null
+        },
+        {
+          "color_off": null,
+          "color_on": null,
+          "dir": null,
+          "label": null,
+          "localized_name": "temporal_cleanup_hysteresis",
+          "locked": null,
+          "name": "temporal_cleanup_hysteresis",
+          "nameLocked": null,
+          "removable": null,
+          "shape": 7,
+          "type": "FLOAT",
+          "widget": {
+            "name": "temporal_cleanup_hysteresis"
+          },
+          "link": null
+        },
+        {
+          "color_off": null,
+          "color_on": null,
+          "dir": null,
+          "label": null,
+          "localized_name": "temporal_cleanup_protect_motion",
+          "locked": null,
+          "name": "temporal_cleanup_protect_motion",
+          "nameLocked": null,
+          "removable": null,
+          "shape": 7,
+          "type": "FLOAT",
+          "widget": {
+            "name": "temporal_cleanup_protect_motion"
+          },
+          "link": null
         }
       ],
       "outputs": [
@@ -5584,7 +6062,27 @@
         2,
         0.5,
         false,
-        ""
+        0,
+        "px",
+        0,
+        true,
+        0,
+        1,
+        0,
+        0,
+        "green",
+        "#00B140",
+        0.5,
+        1,
+        0,
+        1,
+        "average",
+        1,
+        false,
+        2,
+        "median",
+        0,
+        0
       ],
       "widgets_values_named": {
         "mode": "transform",
@@ -5648,7 +6146,27 @@
         "transform_feather": 2,
         "transform_threshold": 0.5,
         "transform_invert": false,
-        "_c2cMaskKit": ""
+        "grow_angle": 0,
+        "grow_units": "px",
+        "grow_falloff": 0,
+        "grow_follow_face": true,
+        "grade_blackpoint": 0,
+        "grade_whitepoint": 1,
+        "grade_lift": 0,
+        "grade_offset": 0,
+        "chroma_key_screen": "green",
+        "chroma_key_color": "#00B140",
+        "chroma_key_balance": 0.5,
+        "chroma_key_gain": 1,
+        "chroma_key_clip_black": 0,
+        "chroma_key_clip_white": 1,
+        "chroma_key_despill": "average",
+        "chroma_key_despill_strength": 1,
+        "chroma_key_invert": false,
+        "temporal_cleanup_window": 2,
+        "temporal_cleanup_method": "median",
+        "temporal_cleanup_hysteresis": 0,
+        "temporal_cleanup_protect_motion": 0
       },
       "color": "#12132f",
       "bgcolor": "#0c0d23"
@@ -5662,7 +6180,7 @@
       ],
       "size": [
         390.09375,
-        191
+        219
       ],
       "flags": {},
       "order": 4,

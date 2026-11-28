@@ -1,5 +1,5 @@
 {
-  "id": "00000000-0000-0000-0000-000000000000",
+  "id": "fef29fc9-e7aa-4c2a-8ddd-bf44673cc1a0",
   "revision": 0,
   "last_node_id": 5,
   "last_link_id": 5,
@@ -12,8 +12,8 @@
         110
       ],
       "size": [
-        270,
-        679.65625
+        413,
+        1041.671875
       ],
       "flags": {},
       "order": 0,
@@ -176,15 +176,525 @@
           "color_on": null,
           "dir": null,
           "label": null,
-          "localized_name": "upload",
+          "localized_name": "crop_x",
           "locked": null,
-          "name": "upload",
+          "name": "crop_x",
           "nameLocked": null,
           "removable": null,
-          "shape": null,
-          "type": "IMAGEUPLOAD",
+          "shape": 7,
+          "type": "FLOAT",
           "widget": {
-            "name": "upload"
+            "name": "crop_x"
+          },
+          "link": null
+        },
+        {
+          "color_off": null,
+          "color_on": null,
+          "dir": null,
+          "label": null,
+          "localized_name": "crop_y",
+          "locked": null,
+          "name": "crop_y",
+          "nameLocked": null,
+          "removable": null,
+          "shape": 7,
+          "type": "FLOAT",
+          "widget": {
+            "name": "crop_y"
+          },
+          "link": null
+        },
+        {
+          "color_off": null,
+          "color_on": null,
+          "dir": null,
+          "label": null,
+          "localized_name": "crop_w",
+          "locked": null,
+          "name": "crop_w",
+          "nameLocked": null,
+          "removable": null,
+          "shape": 7,
+          "type": "FLOAT",
+          "widget": {
+            "name": "crop_w"
+          },
+          "link": null
+        },
+        {
+          "color_off": null,
+          "color_on": null,
+          "dir": null,
+          "label": null,
+          "localized_name": "crop_h",
+          "locked": null,
+          "name": "crop_h",
+          "nameLocked": null,
+          "removable": null,
+          "shape": 7,
+          "type": "FLOAT",
+          "widget": {
+            "name": "crop_h"
+          },
+          "link": null
+        },
+        {
+          "color_off": null,
+          "color_on": null,
+          "dir": null,
+          "label": null,
+          "localized_name": "decoder",
+          "locked": null,
+          "name": "decoder",
+          "nameLocked": null,
+          "removable": null,
+          "shape": 7,
+          "type": "COMBO",
+          "widget": {
+            "name": "decoder"
+          },
+          "link": null
+        },
+        {
+          "color_off": null,
+          "color_on": null,
+          "dir": null,
+          "label": null,
+          "localized_name": "seconds_cap",
+          "locked": null,
+          "name": "seconds_cap",
+          "nameLocked": null,
+          "removable": null,
+          "shape": 7,
+          "type": "FLOAT",
+          "widget": {
+            "name": "seconds_cap"
+          },
+          "link": null
+        },
+        {
+          "color_off": null,
+          "color_on": null,
+          "dir": null,
+          "label": null,
+          "localized_name": "resolution",
+          "locked": null,
+          "name": "resolution",
+          "nameLocked": null,
+          "removable": null,
+          "shape": 7,
+          "type": "COMBO",
+          "widget": {
+            "name": "resolution"
+          },
+          "link": null
+        },
+        {
+          "color_off": null,
+          "color_on": null,
+          "dir": null,
+          "label": null,
+          "localized_name": "divisible_by",
+          "locked": null,
+          "name": "divisible_by",
+          "nameLocked": null,
+          "removable": null,
+          "shape": 7,
+          "type": "COMBO",
+          "widget": {
+            "name": "divisible_by"
+          },
+          "link": null
+        },
+        {
+          "color_off": null,
+          "color_on": null,
+          "dir": null,
+          "label": null,
+          "localized_name": "audio_when_missing",
+          "locked": null,
+          "name": "audio_when_missing",
+          "nameLocked": null,
+          "removable": null,
+          "shape": 7,
+          "type": "COMBO",
+          "widget": {
+            "name": "audio_when_missing"
+          },
+          "link": null
+        },
+        {
+          "color_off": null,
+          "color_on": null,
+          "dir": null,
+          "label": null,
+          "localized_name": "handles",
+          "locked": null,
+          "name": "handles",
+          "nameLocked": null,
+          "removable": null,
+          "shape": 7,
+          "type": "COMBO",
+          "widget": {
+            "name": "handles"
+          },
+          "link": null
+        },
+        {
+          "color_off": null,
+          "color_on": null,
+          "dir": null,
+          "label": null,
+          "localized_name": "handle_frames",
+          "locked": null,
+          "name": "handle_frames",
+          "nameLocked": null,
+          "removable": null,
+          "shape": 7,
+          "type": "INT",
+          "widget": {
+            "name": "handle_frames"
+          },
+          "link": null
+        },
+        {
+          "color_off": null,
+          "color_on": null,
+          "dir": null,
+          "label": null,
+          "localized_name": "handle_target",
+          "locked": null,
+          "name": "handle_target",
+          "nameLocked": null,
+          "removable": null,
+          "shape": 7,
+          "type": "INT",
+          "widget": {
+            "name": "handle_target"
+          },
+          "link": null
+        },
+        {
+          "color_off": null,
+          "color_on": null,
+          "dir": null,
+          "label": null,
+          "localized_name": "handle_side",
+          "locked": null,
+          "name": "handle_side",
+          "nameLocked": null,
+          "removable": null,
+          "shape": 7,
+          "type": "COMBO",
+          "widget": {
+            "name": "handle_side"
+          },
+          "link": null
+        },
+        {
+          "color_off": null,
+          "color_on": null,
+          "dir": null,
+          "label": null,
+          "localized_name": "handle_grid",
+          "locked": null,
+          "name": "handle_grid",
+          "nameLocked": null,
+          "removable": null,
+          "shape": 7,
+          "type": "COMBO",
+          "widget": {
+            "name": "handle_grid"
+          },
+          "link": null
+        },
+        {
+          "color_off": null,
+          "color_on": null,
+          "dir": null,
+          "label": null,
+          "localized_name": "handle_custom_step",
+          "locked": null,
+          "name": "handle_custom_step",
+          "nameLocked": null,
+          "removable": null,
+          "shape": 7,
+          "type": "INT",
+          "widget": {
+            "name": "handle_custom_step"
+          },
+          "link": null
+        },
+        {
+          "color_off": null,
+          "color_on": null,
+          "dir": null,
+          "label": null,
+          "localized_name": "handle_custom_plus",
+          "locked": null,
+          "name": "handle_custom_plus",
+          "nameLocked": null,
+          "removable": null,
+          "shape": 7,
+          "type": "INT",
+          "widget": {
+            "name": "handle_custom_plus"
+          },
+          "link": null
+        },
+        {
+          "color_off": null,
+          "color_on": null,
+          "dir": null,
+          "label": null,
+          "localized_name": "colorspace_in",
+          "locked": null,
+          "name": "colorspace_in",
+          "nameLocked": null,
+          "removable": null,
+          "shape": 7,
+          "type": "COMBO",
+          "widget": {
+            "name": "colorspace_in"
+          },
+          "link": null
+        },
+        {
+          "color_off": null,
+          "color_on": null,
+          "dir": null,
+          "label": null,
+          "localized_name": "working_space",
+          "locked": null,
+          "name": "working_space",
+          "nameLocked": null,
+          "removable": null,
+          "shape": 7,
+          "type": "COMBO",
+          "widget": {
+            "name": "working_space"
+          },
+          "link": null
+        },
+        {
+          "color_off": null,
+          "color_on": null,
+          "dir": null,
+          "label": null,
+          "localized_name": "name_prefix",
+          "locked": null,
+          "name": "name_prefix",
+          "nameLocked": null,
+          "removable": null,
+          "shape": 7,
+          "type": "STRING",
+          "widget": {
+            "name": "name_prefix"
+          },
+          "link": null
+        },
+        {
+          "color_off": null,
+          "color_on": null,
+          "dir": null,
+          "label": null,
+          "localized_name": "name_suffix",
+          "locked": null,
+          "name": "name_suffix",
+          "nameLocked": null,
+          "removable": null,
+          "shape": 7,
+          "type": "STRING",
+          "widget": {
+            "name": "name_suffix"
+          },
+          "link": null
+        },
+        {
+          "color_off": null,
+          "color_on": null,
+          "dir": null,
+          "label": null,
+          "localized_name": "extra_handles",
+          "locked": null,
+          "name": "extra_handles",
+          "nameLocked": null,
+          "removable": null,
+          "shape": 7,
+          "type": "INT",
+          "widget": {
+            "name": "extra_handles"
+          },
+          "link": null
+        },
+        {
+          "color_off": null,
+          "color_on": null,
+          "dir": null,
+          "label": null,
+          "localized_name": "location",
+          "locked": null,
+          "name": "location",
+          "nameLocked": null,
+          "removable": null,
+          "shape": 7,
+          "type": "COMBO",
+          "widget": {
+            "name": "location"
+          },
+          "link": null
+        },
+        {
+          "color_off": null,
+          "color_on": null,
+          "dir": null,
+          "label": null,
+          "localized_name": "path",
+          "locked": null,
+          "name": "path",
+          "nameLocked": null,
+          "removable": null,
+          "shape": 7,
+          "type": "STRING",
+          "widget": {
+            "name": "path"
+          },
+          "link": null
+        },
+        {
+          "color_off": null,
+          "color_on": null,
+          "dir": null,
+          "label": null,
+          "localized_name": "source_mode",
+          "locked": null,
+          "name": "source_mode",
+          "nameLocked": null,
+          "removable": null,
+          "shape": 7,
+          "type": "COMBO",
+          "widget": {
+            "name": "source_mode"
+          },
+          "link": null
+        },
+        {
+          "color_off": null,
+          "color_on": null,
+          "dir": null,
+          "label": null,
+          "localized_name": "sequence_fps",
+          "locked": null,
+          "name": "sequence_fps",
+          "nameLocked": null,
+          "removable": null,
+          "shape": 7,
+          "type": "FLOAT",
+          "widget": {
+            "name": "sequence_fps"
+          },
+          "link": null
+        },
+        {
+          "color_off": null,
+          "color_on": null,
+          "dir": null,
+          "label": null,
+          "localized_name": "frame_range",
+          "locked": null,
+          "name": "frame_range",
+          "nameLocked": null,
+          "removable": null,
+          "shape": 7,
+          "type": "STRING",
+          "widget": {
+            "name": "frame_range"
+          },
+          "link": null
+        },
+        {
+          "color_off": null,
+          "color_on": null,
+          "dir": null,
+          "label": null,
+          "localized_name": "reverse",
+          "locked": null,
+          "name": "reverse",
+          "nameLocked": null,
+          "removable": null,
+          "shape": 7,
+          "type": "BOOLEAN",
+          "widget": {
+            "name": "reverse"
+          },
+          "link": null
+        },
+        {
+          "color_off": null,
+          "color_on": null,
+          "dir": null,
+          "label": null,
+          "localized_name": "frame_offset",
+          "locked": null,
+          "name": "frame_offset",
+          "nameLocked": null,
+          "removable": null,
+          "shape": 7,
+          "type": "INT",
+          "widget": {
+            "name": "frame_offset"
+          },
+          "link": null
+        },
+        {
+          "color_off": null,
+          "color_on": null,
+          "dir": null,
+          "label": null,
+          "localized_name": "missing_frames",
+          "locked": null,
+          "name": "missing_frames",
+          "nameLocked": null,
+          "removable": null,
+          "shape": 7,
+          "type": "COMBO",
+          "widget": {
+            "name": "missing_frames"
+          },
+          "link": null
+        },
+        {
+          "color_off": null,
+          "color_on": null,
+          "dir": null,
+          "label": null,
+          "localized_name": "edge_policy",
+          "locked": null,
+          "name": "edge_policy",
+          "nameLocked": null,
+          "removable": null,
+          "shape": 7,
+          "type": "COMBO",
+          "widget": {
+            "name": "edge_policy"
+          },
+          "link": null
+        },
+        {
+          "color_off": null,
+          "color_on": null,
+          "dir": null,
+          "label": null,
+          "localized_name": "exr_layer",
+          "locked": null,
+          "name": "exr_layer",
+          "nameLocked": null,
+          "removable": null,
+          "shape": 7,
+          "type": "STRING",
+          "widget": {
+            "name": "exr_layer"
           },
           "link": null
         }
@@ -201,7 +711,7 @@
           "nameLocked": null,
           "removable": null,
           "shape": null,
-          "type": "IMAGE,LATENT",
+          "type": "IMAGE",
           "pos": null,
           "slot_index": null,
           "links": [
@@ -288,6 +798,86 @@
           "pos": null,
           "slot_index": null,
           "links": null
+        },
+        {
+          "color_off": null,
+          "color_on": null,
+          "dir": null,
+          "label": null,
+          "localized_name": "info",
+          "locked": null,
+          "name": "info",
+          "nameLocked": null,
+          "removable": null,
+          "shape": null,
+          "type": "STRING",
+          "pos": null,
+          "slot_index": null,
+          "links": null
+        },
+        {
+          "color_off": null,
+          "color_on": null,
+          "dir": null,
+          "label": null,
+          "localized_name": "frame_map",
+          "locked": null,
+          "name": "frame_map",
+          "nameLocked": null,
+          "removable": null,
+          "shape": null,
+          "type": "STRING",
+          "pos": null,
+          "slot_index": null,
+          "links": null
+        },
+        {
+          "color_off": null,
+          "color_on": null,
+          "dir": null,
+          "label": null,
+          "localized_name": "exr_passes",
+          "locked": null,
+          "name": "exr_passes",
+          "nameLocked": null,
+          "removable": null,
+          "shape": null,
+          "type": "C2C_EXR_PASSES",
+          "pos": null,
+          "slot_index": null,
+          "links": null
+        },
+        {
+          "color_off": null,
+          "color_on": null,
+          "dir": null,
+          "label": null,
+          "localized_name": "metadata",
+          "locked": null,
+          "name": "metadata",
+          "nameLocked": null,
+          "removable": null,
+          "shape": null,
+          "type": "STRING",
+          "pos": null,
+          "slot_index": null,
+          "links": null
+        },
+        {
+          "color_off": null,
+          "color_on": null,
+          "dir": null,
+          "label": null,
+          "localized_name": "latent",
+          "locked": null,
+          "name": "latent",
+          "nameLocked": null,
+          "removable": null,
+          "shape": null,
+          "type": "LATENT",
+          "pos": null,
+          "slot_index": null,
+          "links": null
         }
       ],
       "properties": {
@@ -302,8 +892,37 @@
         0,
         1,
         "None",
-        "image",
-        ""
+        0,
+        0,
+        1,
+        1,
+        "auto",
+        0,
+        "custom",
+        1,
+        "silence",
+        "off",
+        8,
+        0,
+        "head",
+        "from format",
+        4,
+        1,
+        "off (as before)",
+        "sRGB display (keep Rec.709 / sRGB)",
+        "",
+        "",
+        0,
+        "input folder",
+        "",
+        "auto",
+        0,
+        "",
+        false,
+        0,
+        "error",
+        "hold",
+        "auto"
       ],
       "widgets_values_named": {
         "video": "video.mp4",
@@ -314,8 +933,37 @@
         "skip_first_frames": 0,
         "select_every_nth": 1,
         "format": "None",
-        "upload": "image",
-        "c2c_preview": ""
+        "crop_x": 0,
+        "crop_y": 0,
+        "crop_w": 1,
+        "crop_h": 1,
+        "decoder": "auto",
+        "seconds_cap": 0,
+        "resolution": "custom",
+        "divisible_by": 1,
+        "audio_when_missing": "silence",
+        "handles": "off",
+        "handle_frames": 8,
+        "handle_target": 0,
+        "handle_side": "head",
+        "handle_grid": "from format",
+        "handle_custom_step": 4,
+        "handle_custom_plus": 1,
+        "colorspace_in": "off (as before)",
+        "working_space": "sRGB display (keep Rec.709 / sRGB)",
+        "name_prefix": "",
+        "name_suffix": "",
+        "extra_handles": 0,
+        "location": "input folder",
+        "path": "",
+        "source_mode": "auto",
+        "sequence_fps": 0,
+        "frame_range": "",
+        "reverse": false,
+        "frame_offset": 0,
+        "missing_frames": "error",
+        "edge_policy": "hold",
+        "exr_layer": "auto"
       },
       "color": "#12132f",
       "bgcolor": "#0c0d23"
@@ -328,8 +976,8 @@
         110
       ],
       "size": [
-        478.3125,
-        570
+        232.125,
+        445
       ],
       "flags": {},
       "order": 1,
@@ -941,6 +1589,312 @@
             "name": "points_json"
           },
           "link": null
+        },
+        {
+          "color_off": null,
+          "color_on": null,
+          "dir": null,
+          "label": null,
+          "localized_name": "stabilize_temporal_mode",
+          "locked": null,
+          "name": "stabilize_temporal_mode",
+          "nameLocked": null,
+          "removable": null,
+          "shape": 7,
+          "type": "COMBO",
+          "widget": {
+            "name": "stabilize_temporal_mode"
+          },
+          "link": null
+        },
+        {
+          "color_off": null,
+          "color_on": null,
+          "dir": null,
+          "label": null,
+          "localized_name": "stabilize_blend",
+          "locked": null,
+          "name": "stabilize_blend",
+          "nameLocked": null,
+          "removable": null,
+          "shape": 7,
+          "type": "FLOAT",
+          "widget": {
+            "name": "stabilize_blend"
+          },
+          "link": null
+        },
+        {
+          "color_off": null,
+          "color_on": null,
+          "dir": null,
+          "label": null,
+          "localized_name": "stabilize_sigma",
+          "locked": null,
+          "name": "stabilize_sigma",
+          "nameLocked": null,
+          "removable": null,
+          "shape": 7,
+          "type": "FLOAT",
+          "widget": {
+            "name": "stabilize_sigma"
+          },
+          "link": null
+        },
+        {
+          "color_off": null,
+          "color_on": null,
+          "dir": null,
+          "label": null,
+          "localized_name": "stabilize_device",
+          "locked": null,
+          "name": "stabilize_device",
+          "nameLocked": null,
+          "removable": null,
+          "shape": 7,
+          "type": "COMBO",
+          "widget": {
+            "name": "stabilize_device"
+          },
+          "link": null
+        },
+        {
+          "color_off": null,
+          "color_on": null,
+          "dir": null,
+          "label": null,
+          "localized_name": "stabilize_drop_threshold",
+          "locked": null,
+          "name": "stabilize_drop_threshold",
+          "nameLocked": null,
+          "removable": null,
+          "shape": 7,
+          "type": "FLOAT",
+          "widget": {
+            "name": "stabilize_drop_threshold"
+          },
+          "link": null
+        },
+        {
+          "color_off": null,
+          "color_on": null,
+          "dir": null,
+          "label": null,
+          "localized_name": "stabilize_jump_threshold",
+          "locked": null,
+          "name": "stabilize_jump_threshold",
+          "nameLocked": null,
+          "removable": null,
+          "shape": 7,
+          "type": "FLOAT",
+          "widget": {
+            "name": "stabilize_jump_threshold"
+          },
+          "link": null
+        },
+        {
+          "color_off": null,
+          "color_on": null,
+          "dir": null,
+          "label": null,
+          "localized_name": "spline_data",
+          "locked": null,
+          "name": "spline_data",
+          "nameLocked": null,
+          "removable": null,
+          "shape": 7,
+          "type": "STRING",
+          "widget": {
+            "name": "spline_data"
+          },
+          "link": null
+        },
+        {
+          "color_off": null,
+          "color_on": null,
+          "dir": null,
+          "label": null,
+          "localized_name": "spline_closed",
+          "locked": null,
+          "name": "spline_closed",
+          "nameLocked": null,
+          "removable": null,
+          "shape": 7,
+          "type": "BOOLEAN",
+          "widget": {
+            "name": "spline_closed"
+          },
+          "link": null
+        },
+        {
+          "color_off": null,
+          "color_on": null,
+          "dir": null,
+          "label": null,
+          "localized_name": "spline_samples_per_segment",
+          "locked": null,
+          "name": "spline_samples_per_segment",
+          "nameLocked": null,
+          "removable": null,
+          "shape": 7,
+          "type": "INT",
+          "widget": {
+            "name": "spline_samples_per_segment"
+          },
+          "link": null
+        },
+        {
+          "color_off": null,
+          "color_on": null,
+          "dir": null,
+          "label": null,
+          "localized_name": "spline_tracking_weight",
+          "locked": null,
+          "name": "spline_tracking_weight",
+          "nameLocked": null,
+          "removable": null,
+          "shape": 7,
+          "type": "FLOAT",
+          "widget": {
+            "name": "spline_tracking_weight"
+          },
+          "link": null
+        },
+        {
+          "color_off": null,
+          "color_on": null,
+          "dir": null,
+          "label": null,
+          "localized_name": "spline_klt_window",
+          "locked": null,
+          "name": "spline_klt_window",
+          "nameLocked": null,
+          "removable": null,
+          "shape": 7,
+          "type": "INT",
+          "widget": {
+            "name": "spline_klt_window"
+          },
+          "link": null
+        },
+        {
+          "color_off": null,
+          "color_on": null,
+          "dir": null,
+          "label": null,
+          "localized_name": "spline_feather_radius",
+          "locked": null,
+          "name": "spline_feather_radius",
+          "nameLocked": null,
+          "removable": null,
+          "shape": 7,
+          "type": "FLOAT",
+          "widget": {
+            "name": "spline_feather_radius"
+          },
+          "link": null
+        },
+        {
+          "color_off": null,
+          "color_on": null,
+          "dir": null,
+          "label": null,
+          "localized_name": "spline_stroke_width",
+          "locked": null,
+          "name": "spline_stroke_width",
+          "nameLocked": null,
+          "removable": null,
+          "shape": 7,
+          "type": "INT",
+          "widget": {
+            "name": "spline_stroke_width"
+          },
+          "link": null
+        },
+        {
+          "color_off": null,
+          "color_on": null,
+          "dir": null,
+          "label": null,
+          "localized_name": "bbox_json",
+          "locked": null,
+          "name": "bbox_json",
+          "nameLocked": null,
+          "removable": null,
+          "shape": 7,
+          "type": "STRING",
+          "widget": {
+            "name": "bbox_json"
+          },
+          "link": null
+        },
+        {
+          "color_off": null,
+          "color_on": null,
+          "dir": null,
+          "label": null,
+          "localized_name": "bbox_radius",
+          "locked": null,
+          "name": "bbox_radius",
+          "nameLocked": null,
+          "removable": null,
+          "shape": 7,
+          "type": "INT",
+          "widget": {
+            "name": "bbox_radius"
+          },
+          "link": null
+        },
+        {
+          "color_off": null,
+          "color_on": null,
+          "dir": null,
+          "label": null,
+          "localized_name": "bbox_method",
+          "locked": null,
+          "name": "bbox_method",
+          "nameLocked": null,
+          "removable": null,
+          "shape": 7,
+          "type": "COMBO",
+          "widget": {
+            "name": "bbox_method"
+          },
+          "link": null
+        },
+        {
+          "color_off": null,
+          "color_on": null,
+          "dir": null,
+          "label": null,
+          "localized_name": "bbox_alpha",
+          "locked": null,
+          "name": "bbox_alpha",
+          "nameLocked": null,
+          "removable": null,
+          "shape": 7,
+          "type": "FLOAT",
+          "widget": {
+            "name": "bbox_alpha"
+          },
+          "link": null
+        },
+        {
+          "color_off": null,
+          "color_on": null,
+          "dir": null,
+          "label": null,
+          "localized_name": "allow_download",
+          "locked": null,
+          "name": "allow_download",
+          "nameLocked": null,
+          "removable": null,
+          "shape": 7,
+          "type": "BOOLEAN",
+          "widget": {
+            "name": "allow_download"
+          },
+          "link": null
         }
       ],
       "outputs": [
@@ -1028,6 +1982,70 @@
           "pos": null,
           "slot_index": null,
           "links": null
+        },
+        {
+          "color_off": null,
+          "color_on": null,
+          "dir": null,
+          "label": null,
+          "localized_name": "warning",
+          "locked": null,
+          "name": "warning",
+          "nameLocked": null,
+          "removable": null,
+          "shape": null,
+          "type": "STRING",
+          "pos": null,
+          "slot_index": null,
+          "links": null
+        },
+        {
+          "color_off": null,
+          "color_on": null,
+          "dir": null,
+          "label": null,
+          "localized_name": "bboxes",
+          "locked": null,
+          "name": "bboxes",
+          "nameLocked": null,
+          "removable": null,
+          "shape": null,
+          "type": "BBOX",
+          "pos": null,
+          "slot_index": null,
+          "links": null
+        },
+        {
+          "color_off": null,
+          "color_on": null,
+          "dir": null,
+          "label": null,
+          "localized_name": "primary_bbox",
+          "locked": null,
+          "name": "primary_bbox",
+          "nameLocked": null,
+          "removable": null,
+          "shape": null,
+          "type": "BBOX",
+          "pos": null,
+          "slot_index": null,
+          "links": null
+        },
+        {
+          "color_off": null,
+          "color_on": null,
+          "dir": null,
+          "label": null,
+          "localized_name": "spline_data_out",
+          "locked": null,
+          "name": "spline_data_out",
+          "nameLocked": null,
+          "removable": null,
+          "shape": null,
+          "type": "SPLINE_DATA",
+          "pos": null,
+          "slot_index": null,
+          "links": null
         }
       ],
       "title": "Motion Mask Tracker (MEC)",
@@ -1067,7 +2085,25 @@
         false,
         "pixel_diff",
         0.5,
-        ""
+        "",
+        "none",
+        0.5,
+        1,
+        "cuda",
+        0.4,
+        0.15,
+        "[]",
+        true,
+        20,
+        0.7,
+        21,
+        0,
+        3,
+        "[]",
+        3,
+        "median_then_exponential",
+        0.3,
+        false
       ],
       "widgets_values_named": {
         "mode": "motion",
@@ -1102,7 +2138,25 @@
         "flow_refinement": false,
         "metric": "pixel_diff",
         "binarize_threshold": 0.5,
-        "points_json": ""
+        "points_json": "",
+        "stabilize_temporal_mode": "none",
+        "stabilize_blend": 0.5,
+        "stabilize_sigma": 1,
+        "stabilize_device": "cuda",
+        "stabilize_drop_threshold": 0.4,
+        "stabilize_jump_threshold": 0.15,
+        "spline_data": "[]",
+        "spline_closed": true,
+        "spline_samples_per_segment": 20,
+        "spline_tracking_weight": 0.7,
+        "spline_klt_window": 21,
+        "spline_feather_radius": 0,
+        "spline_stroke_width": 3,
+        "bbox_json": "[]",
+        "bbox_radius": 3,
+        "bbox_method": "median_then_exponential",
+        "bbox_alpha": 0.3,
+        "allow_download": false
       },
       "color": "#12132f",
       "bgcolor": "#0c0d23"
@@ -1397,7 +2451,7 @@
       ],
       "size": [
         317.203125,
-        247
+        271
       ],
       "flags": {},
       "order": 3,
@@ -1722,9 +2776,17 @@
   "config": {},
   "extra": {
     "c2c": {
-      "bookmarks": {}
+      "bookmarks": {},
+      "linkedValues": {}
     },
-    "reroutes": null
+    "reroutes": null,
+    "ds": {
+      "scale": 0.8620689655172413,
+      "offset": [
+        284.4765625000001,
+        75
+      ]
+    }
   },
   "version": 0.4
 }

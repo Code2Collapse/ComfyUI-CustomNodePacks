@@ -190,7 +190,13 @@ function sanitize(node, nodeData, expected) {
         const t = Array.isArray(spec) ? spec[0] : null;
         const v = w.value;
         let bad = false;
-        if (Array.isArray(t)) bad = !t.includes(v) && extraValues.has(v);
+        // a combo holding null / "" that is not one of its options = a save made before the widget existed (agy
+        // review: Image Mask Editor spline_keyframe_easing null, SAM Mask Generator candidate_select "")
+        if (Array.isArray(t)) bad = !t.includes(v) && (extraValues.has(v) || v === null || v === undefined || v === "");
+        else if (t === "COMBO") {
+            const opts = (Array.isArray(spec) && spec[1]?.options) || [];
+            bad = opts.length > 0 && !opts.includes(v) && (v === null || v === undefined || v === "");
+        }
         else if (t === "INT" || t === "FLOAT") {
             if (typeof v === "string" && v.trim() !== "" && Number.isFinite(Number(v))) { w.value = Number(v); continue; }
             bad = !(typeof v === "number" && Number.isFinite(v));
