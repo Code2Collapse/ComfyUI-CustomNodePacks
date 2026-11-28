@@ -79,8 +79,21 @@ def _to_float01(arr: np.ndarray) -> tuple[np.ndarray, int]:
 def _load_image_any(path: str) -> tuple[np.ndarray, int]:
     """Decode a single image (any common format incl. EXR/HDR)."""
     ext = os.path.splitext(path)[1].lower()
-    # HDR/EXR: prefer cv2 (preserves float32)
+    # HDR/EXR: OpenImageIO first (agy review / c2c_backend_audit: pip OpenCV builds have EXR switched off, so the
+    # cv2 path returned None on Windows and EXR fell through to readers that cannot open it). Full float, unclamped.
     if ext in _HDR_EXTS:
+        try:
+            import OpenImageIO as oiio  # type: ignore
+            inp = oiio.ImageInput.open(path)
+            if inp is not None:
+                try:
+                    data = inp.read_image(oiio.FLOAT)          # positional: the format= keyword is ignored
+                finally:
+                    inp.close()
+                if data is not None:
+                    return _to_float01(np.asarray(data, dtype=np.float32))
+        except Exception:
+            pass
         try:
             import cv2  # type: ignore
             arr = cv2.imread(path, cv2.IMREAD_UNCHANGED | cv2.IMREAD_ANYDEPTH | cv2.IMREAD_COLOR)
