@@ -586,9 +586,18 @@ class VideoComparerC2C:
                 image_a=None, image_b=None, audio_a=None, audio_b=None,
                 file_a="", file_b="", preview_fps=24.0, image_c=None, image_d=None, file_c="", file_d="",
                 label_c="C", label_d="D", b_offset=0, metrics=True):
+        # audit (c2c_backend_audit: b_offset ignored in _compute): the metrics and the change report paired A[i] with
+        # B[i - b_offset], but the comparison images paired A[i] with B[i]. With an offset and both clips wired, the
+        # composite now gets the same aligned pairs (offset 0: unchanged).
+        ca, cb, cfi = image_a, image_b, frame_index
+        if int(b_offset) and isinstance(image_a, torch.Tensor) and isinstance(image_b, torch.Tensor):
+            lo, hi = _pairs(image_a, image_b, int(b_offset))
+            if hi > lo:                                 # no overlap: the old pairing; the report says "no overlap"
+                ca, cb = image_a[lo:hi], image_b[lo - int(b_offset):hi - int(b_offset)]
+                cfi = min(max(int(frame_index) - lo, 0), hi - lo - 1)
         result = self._compute(mode, bit_depth, wipe_position, onion_alpha, diff_gain, diff_gamma,
-                               diff_threshold, diff_mode, false_color_lut, scope_intensity, frame_index,
-                               label_a, label_b, image_a, image_b, audio_a, audio_b, file_a, file_b)
+                               diff_threshold, diff_mode, false_color_lut, scope_intensity, cfi,
+                               label_a, label_b, ca, cb, audio_a, audio_b, file_a, file_b)
         # L9.173 (A25 spec 47 / AusBoss Compare 8): annotated difference report + multi-source summary, appended
         try:
             with torch.no_grad():
