@@ -21,7 +21,9 @@ const C2C_PACKS = [
     "ComfyUI-CustomNodePacks", "ComfyUI-WanNodeExperiments", "ComfyUI-NukeMaxNodes", "ComfyUI-MiniMaxSuite",
     "ComfyUI-WanAnimatePreprocessV2", "ComfyUI-LTX-Enhanced", "ComfyUI-OmniScale", "ComfyUI-GLM_Image",
     "ComfyUI-WanAnimalPreprocessor",
-];
+    // GitHub clone folder names (differ from the local names above); registry installs may be lowercase.
+    "ComfyUI-MiniMax-H3-Suite", "ComfyUI-NukeNodePack", "ComfyUI-WanAnimalPreprocess",
+].map((p) => p.toLowerCase());
 
 /**
  * Mark a DOM widget so a stale copy of it can be found and replaced. Also (L9.237): a DOM panel created with
@@ -38,7 +40,7 @@ export function tagDomWidget(widget) {
 }
 
 export function isC2CNode(node) {
-    const mod = String(node?.constructor?.nodeData?.python_module || "");
+    const mod = String(node?.constructor?.nodeData?.python_module || "").toLowerCase();
     return C2C_PACKS.some((p) => mod === `custom_nodes.${p}` || mod.startsWith(`custom_nodes.${p}.`));
 }
 
