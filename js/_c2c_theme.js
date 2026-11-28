@@ -32,19 +32,20 @@
  * License: Apache-2.0
  */
 
-import { app } from "../../scripts/app.js";
-// Side-effect import: installs ResizeObserver/MutationObserver that publish
-// --c2c-native-top / --c2c-native-left / --c2c-native-bottom on :root so every
-// C2C floating surface can anchor itself off ComfyUI's live native chrome
-// (workflow tabs, left rail, status strip) instead of guessing fixed pixel
-// offsets. Imported here so every consumer of the theme transitively gets it.
-import "./_c2c_native_offsets.js";
-// Side-effect import: mounts the P0.2 OmniBar (the single, theme-aware,
-// position-configurable command bar that hosts ALL future C2C surfaces via
-// its window.C2COmniBar.register() slot API). Theme.js is the universally-
-// imported entry point, so importing OmniBar here guarantees it boots
-// regardless of which C2C extension the user has enabled first.
-import "./c2c_omnibar.js";
+// L7.33: no import of /scripts/app.js. The copies are served at different depths (CNP js/, WAPV2 js/, WNE web/js/),
+// so no one relative path fits them all. /scripts/app.js is only a shim for this same object (frontend 1.x:
+// `export const app = window.comfyAPI.app.app`), so the module reads it directly.
+const app = window.comfyAPI?.app?.app;
+// L7.33: this file ships byte-identical in CNP, WNE and WAPV2 (tools/sync_vendored.py js-theme). Two side-effect
+// modules live in CustomNodePacks only: _c2c_native_offsets.js (publishes --c2c-native-top/-left/-bottom off the
+// live native chrome) and c2c_omnibar.js (the P0.2 OmniBar). A STATIC import of either from another pack 404s and
+// kills that pack's whole front-end, so they load dynamically, and only from the CNP copy (CNP's own copy mounts
+// them for every pack when it is installed).
+const _C2C_THEME_URL = String(import.meta?.url || "").toLowerCase();
+if (_C2C_THEME_URL.includes("customnodepacks")) {
+    import("./_c2c_native_offsets.js").catch((e) => console.warn("[C2C theme] native offsets not loaded:", e));
+    import("./c2c_omnibar.js").catch((e) => console.warn("[C2C theme] OmniBar not loaded:", e));
+}
 import { reportFailure as __c2cReport } from "./_c2c_report.js";
 
 // ── Palettes ───────────────────────────────────────────────────────────────
@@ -863,7 +864,9 @@ export function listVariants() { return Object.keys(PALETTES); }
 applyThemeVars();
 
 // Register a setting so the user can switch variants from ComfyUI's Settings.
-if (!window.__C2C_THEME_REG__) { window.__C2C_THEME_REG__ = true; try {
+// WAPV2 satellite mode (kept from its copy): that pack never registers the setting itself; CNP or WNE does.
+const _C2C_THEME_SATELLITE = _C2C_THEME_URL.includes("wananimatepreprocessv2");
+if (!_C2C_THEME_SATELLITE && !window.__C2C_THEME_REG__) { window.__C2C_THEME_REG__ = true; try {
     app.registerExtension({
         name: "C2C.Theme",
         settings: [

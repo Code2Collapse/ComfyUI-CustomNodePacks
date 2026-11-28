@@ -198,7 +198,9 @@ export const i18n = Object.freeze({
 });
 
 // ── ComfyUI setting registration ──────────────────────────────────────────
-if (!window.__C2C_I18N_REG__) { window.__C2C_I18N_REG__ = true; try {
+// WAPV2 satellite mode (L7.33, kept from its copy): that pack never registers the setting itself; CNP does.
+const _C2C_I18N_SATELLITE = String(import.meta?.url || "").toLowerCase().includes("wananimatepreprocessv2");
+if (!_C2C_I18N_SATELLITE && !window.__C2C_I18N_REG__) { window.__C2C_I18N_REG__ = true; try {
     app.registerExtension({
         name: "C2C.I18n",
         settings: [
